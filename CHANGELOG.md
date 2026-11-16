@@ -8,6 +8,9 @@ Generic recovery preserves historical inverses and conflicts without old-agent
 commands; current lifecycle requests require explicit migration for v1 receipts.
 Resource schema/CAS/native unknown-outcome safeguards and independent bootstrap
 receipt locations are retained. Integrated verification is queued, not claimed.
+Install/update checkpoints also derive mandatory shared consumers from the
+committed receipt: retained blockers cannot be filtered away, and incomplete
+shared recompositions cannot replace another selected feature's working values.
 
 Добавлен отдельный bootstrap-навык `iterm2-projects` для операций со списком
 проектов project-launcher; его receipt независим от receipts других skill/feature,

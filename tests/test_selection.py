@@ -157,6 +157,74 @@ class CurrentLifecycleTests(unittest.TestCase):
             self.assertEqual(state.load(context.paths.data/'receipt.json'),initial.receipt)
             self.assertEqual(result.receipt,initial.receipt)
 
+    def test_current_checkpoint_preserves_retained_shared_consumer_requirements(self):
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
+        from iterm2_utils import engine, lifecycle, state
+        from iterm2_utils.models import ChangeSet, FileEdit, Finding, Plan, Selection
+        for emit_shared in (True, False):
+            for report_blocker in (True, False):
+                with self.subTest(emit_shared=emit_shared, report_blocker=report_blocker), TemporaryDirectory() as root:
+                    context = self.context(root)
+                    shared, exclusive = context.paths.home/'shared', context.paths.home/'shell'
+                    selection = Selection(frozenset({'shell','status'}),frozenset(),'Default',context.omp_profile)
+                    initial_changes = ChangeSet([
+                        FileEdit(shared,None,b'shell and status',0o600,'shared:runtime'),
+                        FileEdit(exclusive,None,b'shell v1',0o600,'shell')],[],[],
+                        {'shared:runtime':frozenset({'shell','status'})})
+                    initial = engine.apply(Plan(selection,initial_changes,'initial'),context,None)
+                    self.assertFalse(initial.findings)
+                    receipt_path = context.paths.data/'receipt.json'
+                    committed = receipt_path.read_bytes()
+                    def incomplete(context, chosen):
+                        edits = [FileEdit(exclusive,b'shell v1',b'shell v2',0o600,'shell')]
+                        consumers = {}
+                        if emit_shared:
+                            edits.append(FileEdit(shared,b'shell and status',b'shell only',0o600,'shared:runtime'))
+                            consumers['shared:runtime'] = frozenset({'shell'})
+                        findings = ([Finding('status','omp','retained_status_blocker','conflict',
+                                             'The retained status consumer could not be rebuilt.')]
+                                    if report_blocker else [])
+                        return Plan(chosen,ChangeSet(edits,[],findings,consumers),'incomplete')
+                    requested = Selection(frozenset({'shell'}),frozenset(),'Default',context.omp_profile)
+                    with patch.object(lifecycle,'plan',side_effect=incomplete):
+                        result = lifecycle.install(context,requested,None)
+                    self.assertEqual(shared.read_bytes(),b'shell and status')
+                    self.assertEqual(exclusive.read_bytes(),b'shell v1')
+                    self.assertEqual(receipt_path.read_bytes(),committed)
+                    self.assertEqual(state.load(receipt_path),initial.receipt)
+                    self.assertEqual(result.receipt,initial.receipt)
+                    self.assertTrue(any(f.state=='conflict' for f in result.findings))
+                    self.assertTrue(any(f.code=='recomposition_unavailable' for f in result.findings))
+                    if report_blocker:
+                        self.assertTrue(any(f.code=='retained_status_blocker' for f in result.findings))
+
+    def test_current_checkpoint_accepts_complete_retained_shared_consumers(self):
+        from tempfile import TemporaryDirectory
+        from unittest.mock import patch
+        from iterm2_utils import engine, lifecycle, state
+        from iterm2_utils.models import ChangeSet, FileEdit, Plan, Selection
+        with TemporaryDirectory() as root:
+            context = self.context(root)
+            target = context.paths.home/'shared'
+            selection = Selection(frozenset({'shell','status'}),frozenset(),'Default',context.omp_profile)
+            consumers = {'shared:runtime':frozenset({'shell','status'})}
+            initial = engine.apply(Plan(selection,ChangeSet([
+                FileEdit(target,None,b'both v1',0o600,'shared:runtime')],[],[],consumers),'initial'),context,None)
+            self.assertFalse(initial.findings)
+            def complete(context, chosen):
+                return Plan(chosen,ChangeSet([
+                    FileEdit(target,b'both v1',b'both v2',0o600,'shared:runtime')],[],[],consumers),'complete')
+            requested = Selection(frozenset({'shell'}),frozenset(),'Default',context.omp_profile)
+            with patch.object(lifecycle,'plan',side_effect=complete):
+                result = lifecycle.install(context,requested,None)
+            self.assertFalse(any(f.state=='conflict' for f in result.findings))
+            self.assertEqual(target.read_bytes(),b'both v2')
+            self.assertEqual(result.receipt.resources[0]['before'],initial.receipt.resources[0]['before'])
+            self.assertEqual(set(result.receipt.resources[0]['owners']),{'shared:runtime','shell','status'})
+            self.assertEqual(result.receipt.selection.features,{'shell','status'})
+            self.assertEqual(state.load(context.paths.data/'receipt.json'),result.receipt)
+
     def test_bootstrap_receipt_path_is_not_recovered_by_feature_lifecycle(self):
         from tempfile import TemporaryDirectory
         from iterm2_utils import lifecycle, state

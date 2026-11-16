@@ -87,10 +87,26 @@ def install(context, selection, runner, *, dry_run=False):
         prepared.changes.edits = [edit for edit in prepared.changes.edits
             if edit.owner in {feature, 'omp:'+feature} or
             feature in prepared.changes.consumers.get(edit.owner, ())]
+        affected_shared = {edit.owner for edit in prepared.changes.edits if edit.owner.startswith('shared:')}
+        for resource in working.resources:
+            if set(resource['owners']) & {feature, 'omp:'+feature}:
+                affected_shared.update(owner for owner in resource['owners'] if owner.startswith('shared:'))
+        retained = {owner: set() for owner in affected_shared}
+        for resource in working.resources:
+            for owner in affected_shared & set(resource['owners']):
+                retained[owner].update(consumer.removeprefix('omp:') for consumer in resource['owners']
+                    if consumer.removeprefix('omp:') in working.selection.features)
         related = {feature, 'selection'}
         for edit in prepared.changes.edits:
             related.update(prepared.changes.consumers.get(edit.owner, ()))
+        for consumers in retained.values():
+            related.update(consumers)
         prepared.changes.findings = [f for f in prepared.changes.findings if f.feature in related]
+        emitted = {edit.owner for edit in prepared.changes.edits}
+        for owner, consumers in retained.items():
+            if consumers and (owner not in emitted or not consumers <= prepared.changes.consumers.get(owner, frozenset())):
+                prepared.changes.findings.append(Finding(feature, 'omp', 'recomposition_unavailable', 'conflict',
+                    'A shared recomposition omitted a committed consumer; previous ownership is preserved.'))
         prepared.changes.ui = [step for step in prepared.changes.ui if step.feature == feature]
         for step in working.pending_ui:
             if step not in prepared.changes.ui:
