@@ -27,11 +27,13 @@ python3 -m iterm2_utils bootstrap-skill --agent codex --dry-run --json
 python3 -m iterm2_utils bootstrap-skill --agent codex
 ```
 
-Выберите `--agent claude` или `--agent both`, если нужны соответствующие копии.
+Выберите `--agent claude`, `--agent omp` или `--agent both`, если нужны
+соответствующие копии. `both` по-прежнему означает только Codex + Claude.
 Bootstrap устанавливает **только skill**, не включает ни одной функции и не
 устанавливает второго агента. Codex получает `${CODEX_HOME:-~/.codex}/skills/iterm2-setup`,
-Claude — `~/.claude/skills/iterm2-setup`, вместе с публичными references. Пути
-берутся из выбранного HOME/CODEX_HOME, а не из фикстур разработчика. Чужая папка
+Claude — `~/.claude/skills/iterm2-setup`, omp — `~/.omp/agent/skills/iterm2-setup`,
+вместе с публичными references. Пути берутся из выбранного HOME/окружения,
+а не из фикстур разработчика. Чужая папка
 или изменённый файл вызывают conflict; собственная версия обновляется по отдельному
 receipt в data/bootstrap-skill. Для обновления skill повторите bootstrap после
 обновления checkout. Текущая сессия может потребовать обновления обнаружения skills.
@@ -41,13 +43,45 @@ receipt в data/bootstrap-skill. Для обновления skill повтор�
 общий каталог `~/.agents/skills` — это альтернативное размещение, не вторая копия
 поверх bootstrap. Для Claude используется его штатный `~/.claude/skills`.
 
+Для omp доступны все три навыка (`iterm2-setup`, `iterm2-projects`,
+`iterm2-launch`); без `--skill` устанавливается только `iterm2-setup`:
+
+```sh
+python3 -m iterm2_utils bootstrap-skill --agent omp --dry-run --json
+python3 -m iterm2_utils bootstrap-skill --agent omp
+OMP_PROFILE=work python3 -m iterm2_utils bootstrap-skill --skill iterm2-projects --agent omp --dry-run --json
+OMP_PROFILE=work python3 -m iterm2_utils bootstrap-skill --skill iterm2-projects --agent omp
+```
+
+Для именованного профиля путь — `~/.omp/profiles/work/agent/skills/<skill>`.
+Выбор соответствует native discovery omp 18.20.2 на macOS: `OMP_PROFILE`
+приоритетнее `PI_PROFILE`; явно пустой `OMP_PROFILE`, пробелы или `default`
+выбирают основной профиль. Недопустимое имя блокирует установку до записи.
+`PI_CONFIG_DIR` заменяет `.omp` относительно HOME (даже начальный `/` не
+отменяет префикс HOME, как в Node `path.join`); пустое значение означает `.omp`.
+В основном профиле `PI_CODING_AGENT_DIR` переопределяет каталог `agent`:
+относительный путь берётся от cwd команды, `~` не разворачивается.
+Именованный профиль игнорирует это переопределение, как сам omp.
+Флаг `--profile` другого процесса omp не обнаруживается: передайте
+`OMP_PROFILE` явно этой команде. Повторите bootstrap для обновления выбранного
+профиля; ранее установленные копии в других профилях не переносятся и не удаляются.
+
+omp здесь — **агент, исполняющий навык**, не новый потребитель терминальных
+интеграций: setup/projects по-прежнему настраивают Codex/Claude, а launch запускает
+Codex, не omp. Встроенные статусы и остальные настройки omp не изменяются.
+Обновление discovery в живой сессии omp и запуск Codex из неё требуют отдельной
+живой проверки; установка файлов сама по себе их не подтверждает.
+
 Для поручения задачи самостоятельному Codex в новой вкладке есть отдельный
-[iterm2-launch](skills/iterm2-launch/SKILL.md). Установка только для Codex:
+[iterm2-launch](skills/iterm2-launch/SKILL.md). Установка для Codex:
 
 ```sh
 python3 -m iterm2_utils bootstrap-skill --skill iterm2-launch --agent codex --dry-run --json
 python3 -m iterm2_utils bootstrap-skill --skill iterm2-launch --agent codex
 ```
+
+Чтобы исполнять этот навык из omp, замените `--agent codex` на `--agent omp`:
+целью запуска остаётся Codex. Claude и `both` для этого навыка не поддерживаются.
 
 Без `--skill` bootstrap по-прежнему копирует только `iterm2-setup`. Копии навыков
 и их receipts независимы; bootstrap не включает функции терминала. Для запуска
@@ -72,7 +106,7 @@ python3 -m iterm2_utils bootstrap-skill --skill iterm2-projects --agent codex --
 python3 -m iterm2_utils bootstrap-skill --skill iterm2-projects --agent codex
 ```
 
-Выберите `--agent claude` или `--agent both` для соответствующих копий.
+Выберите `--agent claude`, `--agent omp` или `--agent both` для соответствующих копий.
 
 В checkout или распакованном релизе один раз выберите доступный `python3`
 (либо явно выбранный пользователем Python), сохраните его абсолютный

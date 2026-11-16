@@ -24,6 +24,150 @@ class SkillInstallTests(unittest.TestCase):
             code = main(['bootstrap-skill', *args, '--json'])
         return code, json.loads(out.getvalue()) if out.getvalue() else None
 
+    def test_omp_bootstraps_all_bundles(self):
+        for skill, files in (
+                ('iterm2-setup', ('SKILL.md', 'references/features.md', 'references/ui.md', 'references/troubleshooting.md')),
+                ('iterm2-launch', ('SKILL.md', 'references/handoff.md', 'references/resume.md')),
+                ('iterm2-projects', ('SKILL.md', 'references/projects.md'))):
+            with self.subTest(skill=skill), Fixture() as f:
+                code, output = self.invoke('--skill', skill, '--agent', 'omp')
+                self.assertEqual(code, 0, output)
+                self.assertEqual(output['selection']['agents'], ['omp'])
+                self.assertEqual(output['selection']['features'], [])
+                target = f.home/'.omp/agent/skills'/skill
+                for name in files:
+                    self.assertEqual((target/name).read_bytes(),
+                                     (resolve_paths().repo/'skills'/skill/name).read_bytes())
+                self.assertFalse((f.home/'.codex').exists())
+                self.assertFalse((f.home/'.claude').exists())
+                self.assertFalse((resolve_paths().data/'receipt.json').exists())
+
+    def test_omp_dry_run_has_no_writes_or_probes(self):
+        with Fixture() as f:
+            before = f.snapshot()
+            with patch('iterm2_utils.cli.Runner', return_value=f.runner), \
+                    patch('iterm2_utils.cli.discover', side_effect=AssertionError('agent inspection')):
+                code, output = self.invoke('--agent', 'omp', '--dry-run')
+            self.assertEqual(code, 0, output)
+            self.assertEqual(f.snapshot(), before)
+            self.assertEqual(f.runner.calls, [])
+
+    def test_omp_profile_destination(self):
+        for env, relative in (
+                ({}, '.omp/agent'),
+                ({'OMP_PROFILE': 'work'}, '.omp/profiles/work/agent'),
+                ({'PI_PROFILE': 'legacy'}, '.omp/profiles/legacy/agent'),
+                ({'OMP_PROFILE': 'work', 'PI_PROFILE': 'legacy'}, '.omp/profiles/work/agent'),
+                ({'OMP_PROFILE': '', 'PI_PROFILE': 'legacy'}, '.omp/agent'),
+                ({'OMP_PROFILE': '  ', 'PI_PROFILE': 'legacy'}, '.omp/agent'),
+                ({'OMP_PROFILE': 'default'}, '.omp/agent'),
+                ({'OMP_PROFILE': ' work '}, '.omp/profiles/work/agent'),
+                ({'OMP_PROFILE': 'a'*64}, '.omp/profiles/'+'a'*64+'/agent'),
+                ({'OMP_PROFILE': 'a.b_c-0'}, '.omp/profiles/a.b_c-0/agent')):
+            with self.subTest(env=env), Fixture() as f, patch.dict('os.environ', env):
+                code, output = self.invoke('--agent', 'omp')
+                self.assertEqual(code, 0, output)
+                self.assertTrue((f.home/relative/'skills/iterm2-setup/SKILL.md').is_file())
+
+    def test_omp_invalid_profiles_fail_without_writes(self):
+        for profile in ('.', '..', '../escape', 'a/b', 'a\\b', 'Work', 'a'*65,
+                        'work.', 'con', 'prn.txt', 'aux', 'nul', 'com0', 'com9.txt', 'lpt0', 'lpt9'):
+            with self.subTest(profile=profile), Fixture() as f, \
+                    patch.dict('os.environ', {'OMP_PROFILE': profile}):
+                before = f.snapshot()
+                code, output = self.invoke('--agent', 'omp')
+                self.assertEqual(code, 2, output)
+                self.assertIsNotNone(output, 'Expected a structured conflict, not parser rejection')
+                self.assertTrue(any(x['state'] == 'conflict' for x in output['findings']))
+                self.assertEqual(f.snapshot(), before)
+
+    def test_omp_directory_overrides(self):
+        for env, relative in (
+                ({'PI_CONFIG_DIR': ''}, '.omp/agent'),
+                ({'PI_CONFIG_DIR': 'custom/config'}, 'custom/config/agent'),
+                ({'PI_CONFIG_DIR': '/custom/config'}, 'custom/config/agent'),
+                ({'PI_CONFIG_DIR': './custom/../config'}, 'config/agent'),
+                ({'PI_CONFIG_DIR': 'custom', 'OMP_PROFILE': 'work'}, 'custom/profiles/work/agent'),
+                ({'PI_CODING_AGENT_DIR': ''}, '.omp/agent'),
+                ({'PI_CODING_AGENT_DIR': 'relative/agent'}, 'relative/agent'),
+                ({'PI_CODING_AGENT_DIR': '~/agent'}, '~/agent'),
+                ({'PI_CODING_AGENT_DIR': 'elsewhere', 'OMP_PROFILE': 'work'}, '.omp/profiles/work/agent')):
+            with self.subTest(env=env), Fixture() as f, patch.dict('os.environ', env), \
+                    contextlib.chdir(f.home):
+                code, output = self.invoke('--agent', 'omp')
+                self.assertEqual(code, 0, output)
+                self.assertTrue((f.home/relative/'skills/iterm2-setup/SKILL.md').is_file())
+        with Fixture() as f, patch.dict('os.environ', {'PI_CODING_AGENT_DIR': str(f.home/'absolute-agent')}):
+            self.assertEqual(self.invoke('--agent', 'omp')[0], 0)
+            self.assertTrue((f.home/'absolute-agent/skills/iterm2-setup/SKILL.md').is_file())
+            self.assertFalse((f.home/'.omp').exists())
+
+    def test_omp_owned_updates_and_conflicts(self):
+        for case in ('modified', 'foreign', 'reference_symlink', 'corrupt_receipt'):
+            with self.subTest(case=case), Fixture() as f:
+                target = f.home/'.omp/agent/skills/iterm2-setup'
+                if case == 'foreign':
+                    target.mkdir(parents=True)
+                    (target/'mine').write_text('foreign')
+                else:
+                    self.assertEqual(self.invoke('--agent', 'omp')[0], 0)
+                    skill = target/'SKILL.md'
+                    stamp = skill.stat().st_mtime_ns
+                    self.assertEqual(self.invoke('--agent', 'omp')[0], 0)
+                    self.assertEqual(skill.stat().st_mtime_ns, stamp)
+                    if case == 'modified':
+                        skill.write_text('user edit')
+                    elif case == 'reference_symlink':
+                        reference = target/'references/features.md'
+                        reference.unlink()
+                        foreign = f.home/'foreign.md'
+                        foreign.write_text('foreign')
+                        reference.symlink_to(foreign)
+                    else:
+                        (resolve_paths().data/'bootstrap-skill/receipt.json').write_text('{BROKEN')
+                before = f.snapshot()
+                code, output = self.invoke('--agent', 'omp')
+                self.assertEqual(code, 2, output)
+                self.assertEqual(f.snapshot(), before)
+
+    def test_omp_cumulative_host_receipts(self):
+        with Fixture() as f:
+            context = self.context()
+            source = f.home/'source'
+            shutil.copytree(context.paths.repo/'skills/iterm2-setup', source/'skills/iterm2-setup')
+            context.paths = replace(context.paths, repo=source)
+            for host in ('codex', 'omp'):
+                findings = skill_install.install(context, frozenset({host}), f.runner)
+                self.assertFalse(any(x.state == 'conflict' for x in findings), findings)
+            codex = f.home/'.codex/skills/iterm2-setup/references/features.md'
+            omp = f.home/'.omp/agent/skills/iterm2-setup/references/features.md'
+            codex.write_text('user edit in unselected host')
+            (source/'skills/iterm2-setup/references/features.md').write_text('updated reference\n')
+            findings = skill_install.install(context, frozenset({'omp'}), f.runner)
+            self.assertFalse(any(x.state == 'conflict' for x in findings), findings)
+            self.assertEqual(omp.read_text(), 'updated reference\n')
+            self.assertEqual(codex.read_text(), 'user edit in unselected host')
+            receipt = json.loads((context.paths.data/'bootstrap-skill/receipt.json').read_text())
+            self.assertEqual(receipt['selection']['agents'], ['codex', 'omp'])
+            targets = {r['target'] for r in receipt['resources']}
+            self.assertIn(str(codex.resolve()), targets)
+            self.assertIn(str(omp.resolve()), targets)
+            self.assertFalse((context.paths.data/'receipt.json').exists())
+
+    def test_existing_bootstraps_ignore_omp_environment(self):
+        for agent in ('codex', 'claude', 'both'):
+            with self.subTest(agent=agent), Fixture() as f, \
+                    patch.dict('os.environ', {'OMP_PROFILE': '../invalid'}):
+                self.assertEqual(self.invoke('--agent', agent)[0], 0)
+                self.assertFalse((f.home/'.omp').exists())
+                for host in (('codex', 'claude') if agent == 'both' else (agent,)):
+                    self.assertTrue((f.home/('.'+host)/'skills/iterm2-setup/SKILL.md').is_file())
+                before = f.snapshot()
+                for command in ('plan', 'install'):
+                    with contextlib.redirect_stderr(io.StringIO()):
+                        self.assertEqual(main([command, '--agent', 'omp', '--features', 'shell']), 2)
+                self.assertEqual(f.snapshot(), before)
+
     def test_projects_bootstrap_selected_hosts(self):
         with Fixture() as f:
             code, out = self.invoke('--skill', 'iterm2-projects', '--agent', 'both')
@@ -75,7 +219,7 @@ class SkillInstallTests(unittest.TestCase):
                 self.assertFalse((f.home/agent/'skills/iterm2-launch').exists())
             self.assertFalse((resolve_paths().data/'bootstrap-skill-iterm2-launch').exists())
 
-    def test_launch_bootstrap_is_codex_only(self):
+    def test_launch_bootstrap_rejects_unsupported_hosts(self):
         with Fixture() as f:
             context = self.context()
             before = f.snapshot()

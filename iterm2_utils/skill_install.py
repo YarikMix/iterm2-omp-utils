@@ -4,11 +4,14 @@ A bootstrap never probes or installs an agent and never selects terminal feature
 The regular CAS transaction engine maintains its own bootstrap receipt.
 """
 import base64
+import os
+import re
 from dataclasses import replace
+from pathlib import Path
 from . import engine, state
 from .models import ChangeSet, Context, FileEdit, Finding, Plan, Selection
 
-AGENTS = frozenset({'codex', 'claude'})
+AGENTS = frozenset({'codex', 'claude', 'omp'})
 OWNER = 'bootstrap-skill'
 FILES = ('SKILL.md', 'references/features.md', 'references/ui.md', 'references/troubleshooting.md')
 BUNDLES = {
@@ -23,8 +26,33 @@ def _context(context, skill):
     return replace(context, paths=replace(context.paths, data=context.paths.data/receipt))
 
 
+def _omp_agent_dir(home: Path) -> Path:
+    """Match omp's macOS profile/env directories without inspecting its settings."""
+    profile = os.environ.get('OMP_PROFILE', os.environ.get('PI_PROFILE', '')).strip()
+    if profile == 'default':
+        profile = ''
+    if profile and (not re.fullmatch(r'[a-z0-9][a-z0-9._-]{0,63}', profile)
+                    or profile.endswith('.')
+                    or re.fullmatch(r'(?:con|prn|aux|nul|com[0-9]|lpt[0-9])(?:\..*)?', profile)):
+        raise ValueError('Invalid omp profile')
+    config = os.environ.get('PI_CONFIG_DIR') or '.omp'
+    # Node path.join(home, config) prefixes even an absolute-looking config value.
+    root = Path(os.path.normpath(str(home) + '/' + config))
+    if profile:
+        return root/'profiles'/profile/'agent'
+    override = os.environ.get('PI_CODING_AGENT_DIR')
+    return Path(os.path.abspath(override)) if override else root/'agent'
+
+
 def _destination(context, agent, skill):
-    root = context.paths.codex_home if agent == 'codex' else context.paths.home/'.claude'
+    if agent == 'codex':
+        root = context.paths.codex_home
+    elif agent == 'claude':
+        root = context.paths.home/'.claude'
+    elif agent == 'omp':
+        root = _omp_agent_dir(context.paths.home)
+    else:
+        raise ValueError('Invalid skill host')
     return root/'skills'/skill
 
 
@@ -39,10 +67,10 @@ def build(context: Context, agents: frozenset[str], *, skill='iterm2-setup') -> 
         changes.findings.append(_conflict(None, 'invalid_skill', 'Select iterm2-setup, iterm2-launch or iterm2-projects.'))
         return changes
     if not agents or agents - AGENTS:
-        changes.findings.append(_conflict(None, 'invalid_agents', 'Select codex, claude or both.'))
+        changes.findings.append(_conflict(None, 'invalid_agents', 'Select codex, claude, omp or both (codex and claude).'))
         return changes
-    if skill == 'iterm2-launch' and agents != frozenset({'codex'}):
-        changes.findings.append(_conflict(None, 'invalid_agents', 'Select only codex for iterm2-launch.'))
+    if skill == 'iterm2-launch' and agents not in (frozenset({'codex'}), frozenset({'omp'})):
+        changes.findings.append(_conflict(None, 'invalid_agents', 'Select codex or omp as host for the Codex launch skill.'))
         return changes
     try:
         receipt = state.load(_context(context, skill).paths.data/'receipt.json')

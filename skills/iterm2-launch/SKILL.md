@@ -8,6 +8,10 @@ description: Use when a user requests a separate Codex session or an exact exist
 Create at most one tab. Verify launch separately from task receipt or restored
 history. An internal-subagent or Claude Code request does not authorize a Codex tab.
 
+Codex and omp can host this skill (`bootstrap-skill --agent codex` or `--agent omp`).
+The launched/resumed agent is always Codex, never omp; an omp launch request does
+not authorize substituting Codex. Hosting the skill in omp changes no omp settings.
+
 **Codex sandbox:** When this skill runs inside Codex, pass
 `sandbox_permissions: "require_escalated"` on the tool call before the first
 iTerm2 socket/API operation. Apply it to the selected `it2` session/tab/window/
