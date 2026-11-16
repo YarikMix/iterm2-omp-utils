@@ -16,8 +16,12 @@ omp preflight inspects (never executes) the login-shell function/alias. A single
 `command omp [literal options] "$@"` passthrough is accepted; literal profile,
 model, provider, thinking and config options are preserved. Other wrappers,
 aliases, injected continue/resume/goal/approval/session-dir/mode/unknown options
-are refused. The actual child login shell rechecks the exact function, alias and
-executable before exec, retaining its normal environment (including endpoint and
+are refused, including unquoted tilde/glob/brace expansion; quoted literal
+characters remain literal. Preflight runs startup in the requested cwd.
+The actual child login shell rechecks function, alias and executable and invokes
+the same pure omp profile resolver against its current HOME/PI_CONFIG_DIR/
+PI_CODING_AGENT_DIR before exec; directory drift refuses launch. It retains its
+normal environment (including endpoint and
 credentials); no settings bodies are read. The selected absolute executable is
 used. An env-Bun shebang permits only that selected script's complete argv with
 the resolved Bun executable, never an arbitrary Bun job. Public selected source

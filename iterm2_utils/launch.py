@@ -4,6 +4,7 @@ from dataclasses import dataclass, asdict, replace
 import json
 import os
 from pathlib import Path
+import sys
 import shlex
 import stat
 import subprocess
@@ -101,6 +102,13 @@ def build_command(request, inspection, argv):
         identity=inspection.identity
         guard=('[[ ${commands[omp]-} == '+shlex.quote(str(identity.executable))+
                ' && -z ${aliases[omp]-} && ${functions[omp]-} == '+shlex.quote(identity.wrapper)+' ]] || exit 1; ')
+        profile_check=('import os,sys; from pathlib import Path; '
+                       'sys.path.insert(0,'+repr(str(Path(__file__).resolve().parent.parent))+'); '
+                       'from iterm2_utils.omp_profile import resolve_omp_profile; '
+                       'sys.exit(0 if resolve_omp_profile(Path.home(),dict(os.environ),sys.argv[1]).agent_dir'
+                       ' == Path(sys.argv[2]) else 1)')
+        guard+=shlex.join([sys.executable,'-c',profile_check,request.omp_profile.name or 'default',
+                           str(request.omp_profile.agent_dir)])+' || exit 1; '
         invocation=[str(inspection.zsh),'-ilc',guard+'exec '+shlex.join([
             '/usr/bin/env','OMP_PROFILE='+ (request.omp_profile.name or 'default'),
             'PI_CODING_AGENT_DIR='+str(request.omp_profile.agent_dir),*argv])]
@@ -121,7 +129,9 @@ def _observed_binding(terminal, sid):
 def _existing(request,terminal):
     """A live matching candidate with missing observations is NOT permission to duplicate."""
     for candidate in terminal.bindings():
-        if not matches_conversation(request.resume,candidate):continue
+        plausible=(candidate.session_id==request.resume.session_id and
+                   candidate.profile==request.resume.profile and candidate.cwd==request.resume.cwd)
+        if not plausible and not matches_conversation(request.resume,candidate):continue
         if terminal.process_start(candidate.pid)!=candidate.process_start:continue
         actual=_observed_binding(terminal,candidate.terminal_id)
         if actual and matches_conversation(request.resume,actual):return actual,False

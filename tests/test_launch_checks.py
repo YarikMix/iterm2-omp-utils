@@ -32,7 +32,10 @@ class LaunchChecksTests(unittest.TestCase):
                     self.assertEqual(argv,[str(omp),'--help'])
                     return SimpleNamespace(returncode=0,stdout='--cwd --profile --config --resume')
                 runner=SimpleNamespace(run=run)
-                with patch('iterm2_utils.launch_checks.platform.system',return_value='Darwin'),patch('iterm2_utils.launch_checks._iterm',return_value=(root,[])),patch('iterm2_utils.launch_checks.Terminal',return_value=terminal),patch('iterm2_utils.launch_checks.shutil.which',return_value='/bin/zsh'),patch('iterm2_utils.launch_checks._shell_identity',return_value=(omp,[],'',{'HOME':str(root)})):
+                def identity_probe(zsh, runner_arg, env, cwd, name):
+                    self.assertEqual((cwd,name),(request.cwd,'work'))
+                    return omp,[],'',{'HOME':str(root)},selected
+                with patch('iterm2_utils.launch_checks.platform.system',return_value='Darwin'),patch('iterm2_utils.launch_checks._iterm',return_value=(root,[])),patch('iterm2_utils.launch_checks.Terminal',return_value=terminal),patch('iterm2_utils.launch_checks.shutil.which',return_value='/bin/zsh'),patch('iterm2_utils.launch_checks._shell_identity',side_effect=identity_probe):
                     inspection,findings=inspect_launch(SimpleNamespace(home=root),request,runner)
                 self.assertEqual(findings,[])
                 self.assertIsNotNone(inspection)
@@ -47,6 +50,15 @@ class LaunchChecksTests(unittest.TestCase):
                 wrapper_arguments('command omp '+flag+' "$@"')
         for body in ('echo secret; command omp "$@"', 'omp "$@"', 'command omp "$@" extra', 'command omp $(evil) "$@"'):
             with self.subTest(body=body), self.assertRaises(ValueError): wrapper_arguments(body)
+
+    def test_expansion_bearing_wrapper_arguments_are_rejected_without_execution(self):
+        for value in ('~/.omp/custom.yml','/tmp/*.yml','/tmp/file?.yml','/tmp/[ab].yml','/tmp/a{b,c}.yml'):
+            with self.subTest(value=value),self.assertRaises(ValueError):
+                wrapper_arguments('command omp --config '+value+' "$@"')
+
+    def test_quoted_expansion_characters_remain_literal_wrapper_values(self):
+        self.assertEqual(wrapper_arguments('command omp --config "~/.omp/custom*.yml" --model \'literal?[ab]{x}\' "$@"'),
+                         ['--config','~/.omp/custom*.yml','--model','literal?[ab]{x}'])
 
     def test_bun_evidence_is_tied_to_exact_selected_script(self):
         with TemporaryDirectory() as tmp:

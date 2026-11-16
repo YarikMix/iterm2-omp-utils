@@ -12,7 +12,6 @@ import sys
 from .commands import Runner
 from .discovery import _iterm
 from .models import Finding, OmpProfile, Paths
-from .omp_profile import resolve_omp_profile
 from .omp_sessions import ResumeTarget, resolve_resume
 from .terminal import Terminal
 
@@ -72,7 +71,22 @@ def wrapper_arguments(body):
         return []
     # Only a single literal passthrough. Never evaluate a wrapper to learn its effects.
     match=re.fullmatch(r'\s*command\s+omp\s+(.*?)\s*"\$@"\s*',body,re.S)
-    if not match or any(c in match[1] for c in '$`\n;|&<>(){}\\'):
+    if not match:
+        raise ValueError('launch_wrapper_unverified')
+    quote=None
+    for char in match[1]:
+        if char in '\n\r':
+            raise ValueError('launch_wrapper_unverified')
+        if quote=="'":
+            if char=="'":quote=None
+        elif quote=='"':
+            if char=='"':quote=None
+            elif char in '$`\\':raise ValueError('launch_wrapper_unverified')
+        elif char in "'\"":
+            quote=char
+        elif not (char.isalnum() or char in ' \t_./:=+,%@-'):
+            raise ValueError('launch_wrapper_unverified')
+    if quote is not None:
         raise ValueError('launch_wrapper_unverified')
     args=shlex.split(match[1])
     allowed={'--profile','--model','--provider','--thinking','--config'}
@@ -107,16 +121,24 @@ def executable_prefixes(executable):
     return tuple(dict.fromkeys(prefixes))
 
 
-def _shell_identity(zsh,runner,env):
-    code=('import json,sys,os; raw=dict(zip(("executable","alias","function"),sys.argv[1:])); '
-          'raw["environment"]={k:os.environ[k] for k in ("HOME","PI_CONFIG_DIR","PI_CODING_AGENT_DIR") if k in os.environ}; print(json.dumps(raw))')
-    script=shlex.join([sys.executable,'-c',code])+' "${commands[omp]-}" "${aliases[omp]-}" "${functions[omp]-}"'
-    result=runner.run([str(zsh),'-ilc',script],timeout=10,env=env)
+def _shell_identity(zsh,runner,env,cwd,profile_name):
+    code=('import json,sys,os; from pathlib import Path; '
+          'sys.path.insert(0,'+repr(str(Path(__file__).resolve().parent.parent))+'); '
+          'from iterm2_utils.omp_profile import resolve_omp_profile; '
+          'raw=dict(zip(("executable","alias","function"),sys.argv[1:4])); '
+          'raw["environment"]={k:os.environ[k] for k in ("HOME","PI_CONFIG_DIR","PI_CODING_AGENT_DIR") if k in os.environ}; '
+          'profile=resolve_omp_profile(Path.home(),dict(os.environ),sys.argv[4]); '
+          'raw["profile"]={"name":profile.name,"agent_dir":str(profile.agent_dir)}; print(json.dumps(raw))')
+    script=(shlex.join([sys.executable,'-c',code])+
+            ' "${commands[omp]-}" "${aliases[omp]-}" "${functions[omp]-}" '+shlex.quote(profile_name))
+    command='cd -- '+shlex.quote(str(cwd))+' && exec '+shlex.join([str(zsh),'-ilc',script])
+    result=runner.run(['/bin/sh','-c',command],timeout=10,env=env)
     if result.returncode:raise ValueError('launch_wrapper_unverified')
     # Startup output stays private; require exactly one valid final identity frame.
     raw=json.loads(result.stdout.splitlines()[-1])
     if raw['alias']:raise ValueError('launch_wrapper_unverified')
-    return Path(raw['executable']),wrapper_arguments(raw['function']),raw['function'],raw['environment']
+    selected=OmpProfile(raw['profile']['name'],Path(raw['profile']['agent_dir']))
+    return Path(raw['executable']),wrapper_arguments(raw['function']),raw['function'],raw['environment'],selected
 
 
 def inspect_launch(paths: Paths, request: LaunchRequest, runner: Runner) -> tuple[LaunchInspection | None, list[Finding]]:
@@ -141,14 +163,14 @@ def inspect_launch(paths: Paths, request: LaunchRequest, runner: Runner) -> tupl
         if request.mode=='shell':return LaunchInspection(it2,Path(zsh),guid,window,None),[]
         env=dict(os.environ)
         for key in ('ITERM_SESSION_ID','TERM_SESSION_ID'):env.pop(key,None)
-        executable,args,wrapper,effective_env=_shell_identity(Path(zsh),runner,env)
+        explicit=request.omp_profile.name or 'default'
+        executable,args,wrapper,effective_env,selected=_shell_identity(Path(zsh),runner,env,request.cwd,explicit)
         if not executable.is_absolute():raise ValueError('launch_executable_unavailable')
         prefixes=executable_prefixes(executable)
-        explicit=request.omp_profile.name or 'default'
         for i,arg in enumerate(args):
             if arg=='--profile' and args[i+1]!=explicit or arg.startswith('--profile=') and arg.split('=',1)[1]!=explicit:
                 raise ValueError('launch_profile_mismatch')
-        if resolve_omp_profile(Path(effective_env.get('HOME',str(paths.home))),effective_env,explicit)!=request.omp_profile:
+        if selected!=request.omp_profile:
             raise ValueError('launch_profile_mismatch')
         help_result=runner.run([str(executable),'--help'],timeout=10,env=env)
         required=['--cwd','--profile']+(['--resume'] if request.mode=='resume' else ['--config'])

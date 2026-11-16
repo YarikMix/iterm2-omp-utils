@@ -42,14 +42,19 @@ class LaunchTests(unittest.TestCase):
             login=shlex.split(argv[2].split(' && exec ',1)[1])
             inner=shlex.split(login[2].split('; exec ',1)[1]); state['argv']=inner[3:]
             if '--resume' not in state['argv']:
-                auto_resume=True  # Fake native global/project selection defaults to the old dialog.
-                for index,value in enumerate(state['argv']):
-                    if value=='--config':
-                        content=Path(state['argv'][index+1]).read_text()
-                        auto_resume=json.loads(content)['autoResume'] if content.startswith('{') else content.startswith('autoResume: true')
+                settings={}
+                layers=[request.omp_profile.agent_dir/'config.yml',request.cwd/'.omp/config.yml']
+                layers.extend(Path(state['argv'][index+1]) for index,value in enumerate(state['argv']) if value=='--config')
+                state['selection_layers']=[]
+                for path in layers:
+                    if path.exists():
+                        settings.update(json.loads(path.read_text()))
+                        state['selection_layers'].append(path)
+                auto_resume=settings.get('autoResume',True)
+                state['selected_session_id']='old' if auto_resume else 'fresh'
                 binding=replace(binding,session_id='old' if auto_resume else 'fresh')
                 state['bindings']=[binding]
-                binding.session_file.write_text(json.dumps(dict(type='session',id=binding.session_id,cwd=str(root)))+'\\n')
+                binding.session_file.write_text(json.dumps(dict(type='session',id=binding.session_id,cwd=str(root)))+'\n')
             return state['creation'] or LaunchCreation('created_unverified','W','T','S',state['now']+30,())
         return request,inspection,binding,state,Transport,create
 
@@ -98,29 +103,40 @@ class LaunchTests(unittest.TestCase):
         for mode in ('new','handoff'):
             with self.subTest(mode=mode),TemporaryDirectory() as tmp:
                 root=Path(tmp); request,inspection,binding,state,transport,create=self.fixture(root)
-                global_config=root/'global.yml'; project_config=root/'project.yml'
-                for path in (global_config,project_config):path.write_text('autoResume: true\nmodel: unchanged\n')
-                before=[p.read_bytes() for p in (global_config,project_config)]
-                inspection=replace(inspection,identity=replace(inspection.identity,arguments=('--config',str(global_config))))
+                global_config=request.omp_profile.agent_dir/'config.yml'
+                project_config=request.cwd/'.omp/config.yml'
+                default_config=root/'.omp/agent/config.yml'
+                base_overlay=root/'preserved-config.json'
+                for path in (global_config,project_config,default_config,base_overlay):
+                    path.parent.mkdir(parents=True,exist_ok=True)
+                    path.write_text(json.dumps(dict(autoResume=path!=default_config,model='unchanged')))
+                persisted=(global_config,project_config,default_config,base_overlay)
+                before=[p.read_bytes() for p in persisted]
+                inspection=replace(inspection,identity=replace(inspection.identity,arguments=('--config',str(base_overlay))))
                 if mode=='handoff':
                     artifact=m.prepare_handoff(root,'Task to read'); request=replace(request,mode='handoff',handoff=artifact.path)
                     plain=create
                     async def create(w,p,g,c):
                         result=await plain(w,p,g,c)
-                        artifact.ack_path.write_text(json.dumps(dict(request_id=artifact.request_id,thread_id='fresh',cwd=str(artifact.cwd),accepted_task='Read task',first_step='Inspect materials')))
+                        artifact.ack_path.write_text(json.dumps(dict(request_id=artifact.request_id,thread_id=state['selected_session_id'],cwd=str(artifact.cwd),accepted_task='Read task',first_step='Inspect materials')))
                         artifact.ack_path.chmod(0o600)
                         return result
                 code,out=self.run_launch(root,request,inspection,state,transport,create)
                 self.assertEqual((code,out['status']),(0,'launched'),out)
                 argv=state['argv']; configs=[argv[i+1] for i,value in enumerate(argv) if value=='--config']
-                self.assertEqual(configs[0],str(global_config));self.assertEqual(len(configs),2)
-                overlay=Path(configs[-1])
-                effective=json.loads(overlay.read_text())['autoResume']
-                actual='old' if effective else binding.session_id
-                self.assertEqual(actual,'fresh');self.assertNotEqual(actual,'old')
-                self.assertEqual([p.read_bytes() for p in (global_config,project_config)],before)
+                self.assertEqual(configs[0],str(base_overlay));self.assertEqual(len(configs),2)
+                self.assertEqual(state['selection_layers'],[global_config,project_config,base_overlay,Path(configs[-1])])
+                actual=state['bindings'][0]
+                self.assertEqual(actual.session_id,'fresh')
+                self.assertEqual(state['selected_session_id'],actual.session_id)
+                self.assertEqual(json.loads(actual.session_file.read_text())['id'],actual.session_id)
+                self.assertEqual(out['identity'],'verified')
+                self.assertEqual([p.read_bytes() for p in persisted],before)
                 self.assertNotIn('--session-dir',argv)
-                if mode=='handoff':self.assertEqual(out['ack'],'received')
+                if mode=='handoff':
+                    self.assertEqual(out['ack'],'received')
+                    ack=json.loads(artifact.ack_path.read_text())
+                    self.assertEqual(ack['thread_id'],actual.session_id)
 
     def test_timeout_after_creation_does_not_create_second_tab(self):
         with TemporaryDirectory() as tmp:
@@ -147,6 +163,57 @@ class LaunchTests(unittest.TestCase):
                 code,out=self.run_launch(root,request,inspection,state,transport,create)
                 self.assertEqual(state['creates'],0)
                 self.assertEqual(out['status'],'already_open' if observation=='moved' else 'blocked')
+
+    def test_live_matching_id_without_session_file_never_creates_duplicate(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+            target=resolve_resume(binding.session_file,binding.session_id,binding.profile)
+            request=replace(request,mode='resume',resume=target)
+            incomplete=replace(binding,session_file=None)
+            state['bindings']=[incomplete]
+            transport.observe=lambda self,sid:binding_record(incomplete)
+            code,out=self.run_launch(root,request,inspection,state,transport,create)
+            self.assertEqual(state['creates'],0)
+            self.assertEqual((code,out['status']),(2,'blocked'))
+
+    def test_target_startup_profile_inputs_are_rechecked_before_exec(self):
+        import subprocess
+        from iterm2_utils.commands import Runner
+        from iterm2_utils.launch_checks import _shell_identity
+        for changed in ('HOME','PI_CONFIG_DIR','PI_CODING_AGENT_DIR'):
+            with self.subTest(changed=changed),TemporaryDirectory() as tmp:
+                root=Path(tmp).resolve();target=root/'target';target.mkdir()
+                caller=root/'caller';caller.mkdir()
+                binary=root/'bin';binary.mkdir();omp=binary/'omp'
+                marker=root/'executed'
+                omp.write_text('#!/bin/sh\nprintf launched > '+shlex.quote(str(marker))+'\n')
+                omp.chmod(0o700)
+                (root/'.zshenv').write_text('unsetopt GLOBAL_RCS\n')
+                startup=('export PATH='+shlex.quote(str(binary))+':/usr/bin:/bin\n'+
+                         'if [[ $PWD == '+shlex.quote(str(target))+' ]]; then export PI_CONFIG_DIR=target-config; else export PI_CONFIG_DIR=caller-config; fi\n')
+                name=None if changed=='PI_CODING_AGENT_DIR' else 'work'
+                if name is None:startup+='export PI_CODING_AGENT_DIR=relative-agent\n'
+                (root/'.zshrc').write_text(startup)
+                env={'HOME':str(root),'ZDOTDIR':str(root),'PATH':'/usr/bin:/bin'}
+                executable,args,wrapper,effective,selected=_shell_identity(Path('/bin/zsh'),Runner(),env,target,name or 'default')
+                self.assertEqual(effective['PI_CONFIG_DIR'],'target-config')
+                # The caller directory would resolve another named-profile storage root.
+                _,_,_,caller_env,_=_shell_identity(Path('/bin/zsh'),Runner(),env,caller,name or 'default')
+                self.assertEqual(caller_env['PI_CONFIG_DIR'],'caller-config')
+                expected=target/'relative-agent' if name is None else root/'target-config/profiles/work/agent'
+                self.assertEqual(selected,OmpProfile(name,expected))
+                request=LaunchRequest('W','Omp',target,selected,'new')
+                identity=LaunchIdentity(executable,tuple(args),((str(executable),),),'',wrapper)
+                inspection=LaunchInspection(root/'it2',Path('/bin/zsh'),'G','W',identity)
+                command=m.build_command(request,inspection,[str(omp)])
+                result=subprocess.run(shlex.split(command),env=env,cwd=caller,capture_output=True,timeout=10)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertTrue(marker.exists())
+                marker.unlink()
+                (root/'.zshrc').write_text(startup+'export '+changed+'='+shlex.quote(str(root/'drift'))+'\n')
+                result=subprocess.run(shlex.split(command),env=env,cwd=caller,capture_output=True,timeout=10)
+                self.assertNotEqual(result.returncode,0)
+                self.assertFalse(marker.exists(),'profile-directory drift must stop before exec')
 
     def test_exact_resume_command_no_prompt_restore_or_fallback(self):
         with TemporaryDirectory() as tmp:
