@@ -78,6 +78,11 @@ def install(context, selection, runner, *, dry_run=False):
     for feature in ORDER:
         if feature not in selection.features:
             continue
+        from .migration import legacy_blockers
+        blocked = legacy_blockers(working, feature, context)
+        if blocked:
+            findings.extend(blocked)
+            continue
         chosen = replace(selection, features=working.selection.features | {feature},
                          shortcuts=(working.selection.shortcuts | selection.shortcuts
                                     if feature == 'shortcuts' else working.selection.shortcuts))

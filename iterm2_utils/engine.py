@@ -15,7 +15,7 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from . import state, legacy_state
-from .config import jsonfile, tomlfile, zshrc, preferences, omp, iterm
+from .config import jsonfile, tomlfile, zshrc, preferences, omp, iterm, legacy_mcp
 from .models import SymlinkEdit, FileEdit, PreferenceEdit, RegistrationEdit, ProfileBarEdit, StatusBarPositionEdit, Receipt, Outcome, Finding, Plan, Context, Selection, OmpProfile, OmpEdit
 from .commands import Runner
 
@@ -307,10 +307,13 @@ def _set(r,value,runner,context, *, expected):
             result = zshrc.restore(raw or b'',loc['name'],value['value'],loc['placement'])
         else:
             result = zshrc.block(raw or b'',loc['name'],value['value'] if value['exists'] else None)
+    elif legacy_mcp.is_address(r):
+        result = legacy_mcp.patch_storage(r, raw, value)
     else:
         patcher = jsonfile.patch if kind=='json' else tomlfile.patch
         result = patcher(raw or (b'{}' if kind=='json' else b''),tuple(loc['pointer']),value['value'],remove=not value['exists'])
-    if kind == 'file' and path == (context.paths.profiles/'iterm2-utils-project-launcher.json').resolve():
+    if kind == 'file' and path in {(context.paths.profiles/name).resolve()
+            for name in ('iterm2-utils.json','iterm2-utils-project-launcher.json')}:
         old_guids = _project_guids(raw)
         removed = old_guids - _project_guids(result)
         if removed:
@@ -340,7 +343,8 @@ def _project_guids(raw):
 
 
 def _deletes_projects(r, context):
-    if r['kind'] != 'file' or r['target'] != str((context.paths.profiles/'iterm2-utils-project-launcher.json').resolve()):
+    if r['kind'] != 'file' or r['target'] not in {str((context.paths.profiles/name).resolve())
+            for name in ('iterm2-utils.json','iterm2-utils-project-launcher.json')}:
         return False
     def decode(value):
         return base64.b64decode(value['value'],validate=True) if value['exists'] else None
@@ -363,9 +367,10 @@ def _inverse(records,runner,context):
     inverses.sort(key=lambda r: _deletes_projects(r,context))
     for inverse in inverses:
         r = dict(inverse,before=inverse['installed'],installed=inverse['before'])
+        original = r
         try:
-            if r['kind'] == 'registration' and r['target'] in {'codex', 'claude'}:
-                raise ValueError('Historical registrations require receipt-authorized migration')
+            if r['kind'] == 'registration':
+                r = legacy_mcp.storage_resource(r, records)
             current = _read(r,runner,context)
             if _same(current,r['before']):
                 continue
@@ -375,7 +380,7 @@ def _inverse(records,runner,context):
             if not _same(_read(r,runner,context),r['before']):
                 raise ValueError('Unverified inverse')
         except Exception:
-            unresolved.append(r)
+            unresolved.append(original)
             findings.append(_finding('rollback_unresolved','Owned launcher resource could not be restored safely; retained for recovery.' if 'shared:project-launcher' in r['owners'] else 'Resource could not be restored safely; retained for recovery: ' + r['target'],r['owners'][0]))
     return list(reversed(unresolved)),findings
 
@@ -418,10 +423,11 @@ def _recover(context,runner):
     return []
 
 
-def _transaction(changes,result,context,runner):
+def _transaction(changes,result,context,runner, *, intent_receipt=None):
     journal = context.paths.data/'journal'
     state.private_dir(journal)
-    intent = _empty(result.selection)
+    intent = copy.deepcopy(intent_receipt) if intent_receipt is not None else _empty(result.selection)
+    intent.resources = []
     findings = []
     try:
         changes = sorted(changes,key=lambda r: _deletes_projects(r,context))
@@ -430,7 +436,7 @@ def _transaction(changes,result,context,runner):
                 raise ValueError('Concurrent change')
             _backup(r,context)
             intent.resources.append(r)
-            state.save(journal/'intent.json',intent)
+            state.save_recovery(journal/'intent.json',intent)
             # Recheck after durable intent/backup, immediately before mutation.
             if not _same(_read(r,runner,context),r['before']):
                 raise ValueError('Concurrent change')
@@ -454,7 +460,7 @@ def _transaction(changes,result,context,runner):
             findings.append(_finding('legacy_placement_conflict','Legacy shell placement changed. Review the surrounding shell lines before retrying; the feature step was rolled back.','migration'))
         if unresolved:
             intent.resources = unresolved
-            state.save(journal/'intent.json',intent)
+            state.save_recovery(journal/'intent.json',intent)
         else:
             shutil.rmtree(journal)
         return False,findings
@@ -512,6 +518,13 @@ def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozens
             previous = copy.deepcopy(previous)
             if isinstance(persisted, legacy_state.LegacyReceipt):
                 return Outcome(persisted,findings+[_finding('migration_required','Historical ownership must be migrated before installation.')])
+            from .migration import legacy_blockers
+            affected = {owner.removeprefix('omp:') for resource in compiled
+                        for owner in resource['owners'] if not owner.startswith('shared:')}
+            blocked = [finding for feature in sorted(affected)
+                       for finding in legacy_blockers(previous, feature, context)]
+            if blocked:
+                return Outcome(previous, findings+blocked)
             resources = copy.deepcopy(previous.resources)
             # A regenerated builder may describe an implemented no-op. Reuse only
             # addresses already owned by this exact feature/shared marker, never

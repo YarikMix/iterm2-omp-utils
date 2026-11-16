@@ -227,7 +227,7 @@ def save(path: Path, receipt: Receipt) -> None:
 
 
 def save_recovery(path: Path, receipt) -> None:
-    """Preserve a v1 journal/commit as v1; never silently adopt its ownership."""
+    """Preserve journal identity, including v1 migration intent with a v2 result."""
     from .legacy_state import LegacyReceipt, encode
     if isinstance(receipt, LegacyReceipt):
         data = encode(receipt)

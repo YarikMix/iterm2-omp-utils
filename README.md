@@ -306,8 +306,36 @@ python3 -m iterm2_utils uninstall --features clipboard --json
 восстанавливает только неизменённые собственные значения, сохраняет общие ресурсы
 нужные оставшимся функциям и чужие/изменённые записи. Полный backup поверх конфига
 не восстанавливается. Без валидного receipt удаление/обновление не разрешено.
-Распознанный legacy можно принять только явным `--adopt-legacy`; конфликт не
-даёт разрешения переписать произвольную настройку. См. [troubleshooting](skills/iterm2-setup/references/troubleshooting.md).
+### Явный переход исторической установки на omp
+
+API миграции: `preview_omp_migration(context, runner, restore_external=False)` и
+`migrate_to_omp(context, runner, dry_run=True, restore_external=False)`.
+Preview не восстанавливает journal, не создаёт lock и не меняет файлы. Apply
+сначала восстанавливает journals feature receipt и **всех трёх** независимых skill
+receipts, затем повторно проверяет fingerprint receipts и затронутых адресов под
+transaction locks. Codex/Claude для этого не нужны и не запускаются.
+
+Удаляются/возвращаются только точные owned settings, отдельные hooks, zsh-блоки,
+MCP server addresses и файлы навыков при совпадении с installed. Foreign neighbours,
+изменённые значения и неоднозначные hooks сохраняются. Нормализованная историческая
+MCP registration без receipted storage address — **conflict**, не разрешение угадать
+CODEX_HOME или удалить похожую запись. Общие пригодные appearance/launcher/shell
+ресурсы передаются с прежними GUID и исходными inverses, без пересоздания.
+
+Ранее отключённые внешние writers по умолчанию **остаются отключёнными**:
+исходное значение сохраняется в historical cleanup, а не в обычном uninstall.
+Только `restore_external=True` явно восстанавливает записанное внешнее значение;
+это не разрешает одновременно включить конфликтующий native writer omp.
+
+`legacy_cleanup` сохраняет полные строгие v1 envelopes с нерешёнными ресурсами
+и исходным выбором функций независимо от новой active selection. Старый выбор —
+намерение: функция отмечается установленной в omp только после настоящего
+lifecycle checkpoint. Успешная часть очистки не маскирует deferred/conflicting
+остатки в feature или skill receipts. Старый immutable runtime сохраняется,
+пока есть live/buried sessions либо inventory неполон; безопасная очистка требует
+повторного явного вызова миграции после выхода из старых shells. Существующие
+вкладки не закрываются и не перезапускаются. Новые skill bundles копируются только
+в выбранный профиль omp; чужие и изменённые копии не присваиваются.
 
 Пути учитывают абсолютные `ZDOTDIR`, `CODEX_HOME`, `XDG_CONFIG_HOME`,
 `XDG_DATA_HOME`, `XDG_CACHE_HOME`; относительные overrides игнорируются. Claude

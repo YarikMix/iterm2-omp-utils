@@ -2,10 +2,9 @@
 import hashlib
 import json
 import re
-from dataclasses import replace
 
-from .models import ChangeSet, Context, Finding, Plan, Selection, UiStep
-from .legacy_state import LegacySelection, resource_pairs
+from .models import ChangeSet, Context, Finding, Plan, Selection
+from .legacy_state import LegacySelection
 
 AGENTS = frozenset({'codex', 'claude'})
 FEATURES = frozenset({'clipboard', 'status', 'notifications', 'restore', 'mcp', 'shell', 'shortcuts', 'appearance', 'project-launcher'})
@@ -79,70 +78,10 @@ def validate(selection: LegacySelection, context: Context) -> list[Finding]:
     return findings
 
 
-def plan(context: Context, selection: LegacySelection) -> Plan:
-    if isinstance(selection, Selection):
-        return _omp_plan(context, selection)
-    findings = validate(selection, context)
-    from .features import profiles, shell, status, notifications, restore, mcp, appearance, project_launcher
-    from . import migration
-    supported = selection.features - CODEX_ONLY if 'codex' not in selection.agents else selection.features
-    selected = replace(selection, features=frozenset(supported))
-    payload = {'agents': sorted(selected.agents), 'features': sorted(selected.features),
-               'shortcuts': sorted(selected.shortcuts), 'parent_profile': selected.parent_profile,
-               'adopt_legacy': selected.adopt_legacy, 'agent_features': selected.agent_features,
-               'agent_shortcuts': selected.agent_shortcuts, 'coexist_notifications': selected.coexist_notifications,
-               'notification_coexist_agents': selected.notification_coexist_agents, 'versions': context.versions,
-               'capabilities': sorted(context.capabilities)}
-    fingerprint = hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
-    changes = ChangeSet([], [], findings)
-    # Legacy reuse keeps its shell path; native reuse still needs --no-daemon.
-    reused = (context.installed.get('codex-status',{}).get('enabled')
-              and not context.installed.get('codex-native-status') and not selected.adopt_legacy)
-    runtime_selection = selected.without({'status'}, {'codex'}) if reused else selected
-    for builder, choice in ((migration.build,selected),(restore.build,selected),(profiles.build,selected),
-                            (shell.runtime_payload,runtime_selection),(shell.build,runtime_selection),
-                            (status.build,selected),(notifications.build,selected),(mcp.build,selected),
-                            (appearance.build,selected),(project_launcher.build,selected)):
-        try:
-            built = builder(context, choice)
-            if selected.agent_features is not None:
-                for edit in built.edits:
-                    target = getattr(edit, 'path', getattr(edit, 'agent', ''))
-                    if edit.owner.startswith('shared:'):
-                        consumers = built.consumers[edit.owner]
-                        if not any(':' in f for f in consumers):
-                            built.consumers[edit.owner] = frozenset().union(*(
-                                resource_pairs(selected, f, target, context, edit.owner) for f in consumers))
-                    else:
-                        pairs = resource_pairs(selected, edit.owner, target, context)
-                        if len(pairs) != 1:
-                            raise ValueError('Exclusive owner requires one consumer')
-                        edit.owner = next(iter(pairs))
-            changes.edits.extend(built.edits)
-            changes.ui.extend(built.ui)
-            changes.findings.extend(built.findings)
-            changes.consumers.update(built.consumers)
-        except (ValueError, OSError, KeyError, TypeError):
-            affected = ({'shell','status','notifications','restore','appearance'} if builder in {shell.build,shell.runtime_payload} else
-                        {'clipboard','shortcuts'} if builder == profiles.build else
-                        {'status','notifications','restore'} if builder == status.build else
-                        {'status','restore'} if builder == migration.build else
-                        {'notifications'} if builder == notifications.build else
-                        {'restore'} if builder == restore.build else
-                        {'appearance'} if builder == appearance.build else
-                        {'project-launcher'} if builder == project_launcher.build else {'mcp'})
-            for feature in sorted(choice.features & affected):
-                changes.findings.append(Finding(feature,None,'builder_conflict','conflict','A selected resource could not be safely prepared.'))
-    if not selected.features & {'appearance','project-launcher'}:
-        return Plan(selected, changes, fingerprint)
-    from .models import FileEdit, ProfileBarEdit, StatusBarPositionEdit
-    digest = hashlib.sha256(fingerprint.encode())
-    for edit in changes.edits:
-        if isinstance(edit, FileEdit):
-            digest.update(str(edit.path).encode()+b'\0'+(edit.after or b'')+b'\0')
-        elif isinstance(edit, (ProfileBarEdit, StatusBarPositionEdit)):
-            digest.update(json.dumps(edit.__dict__,sort_keys=True).encode())
-    return Plan(selected, changes, digest.hexdigest())
+def plan(context: Context, selection: Selection) -> Plan:
+    if not isinstance(selection, Selection):
+        raise ValueError('Historical feature selections require explicit owned-resource migration')
+    return _omp_plan(context, selection)
 
 
 def _omp_validate(selection, context):

@@ -335,3 +335,38 @@ class LifecycleTests(LifecycleFixture):
                 self.assertEqual([(s.code,s.agent) for s in result.receipt.pending_ui],[('claude-native-status','claude')])
                 self.assertIn('claude-native-status',result.receipt.ui_snapshots)
                 self.assertEqual({path:path.read_bytes() if path.exists() else None for path in paths},before)
+
+
+from tests.test_migration import MigrationFixture
+
+
+class MigrationLifecycleTests(MigrationFixture):
+    def test_unresolved_writer_does_not_block_independent_checkpoint(self):
+        from iterm2_utils import migration
+        from iterm2_utils.models import ChangeSet, FileEdit, Finding, Plan
+        path = self.home/'legacy.json'; path.write_text('{"ours":2,"foreign":7}')
+        resource = self.json_resource(path)
+        self.save(self.historical([resource]))
+        migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        target = self.home/'clipboard-state'
+        chosen = Selection(frozenset({'status','clipboard'}), frozenset(), 'Default', self.profile)
+        def planned(context, selection):
+            return Plan(selection, ChangeSet([FileEdit(target, None, b'clipboard', 0o600, 'clipboard')], [],
+                [Finding('clipboard','omp','prepared','ready','Prepared independent clipboard fixture.')]), 'fixture')
+        with patch.object(lifecycle, 'validate', return_value=[]), patch.object(lifecycle, 'plan', side_effect=planned):
+            outcome = lifecycle.install(self.context, chosen, self.runner)
+        self.assertEqual(target.read_bytes(), b'clipboard')
+        self.assertEqual(outcome.receipt.selection.features, {'clipboard'})
+        self.assertEqual(outcome.receipt.legacy_cleanup[0]['resources'], [resource])
+        self.assertEqual(json.loads(path.read_bytes()), {'ours':2,'foreign':7})
+        self.assertTrue(any(f.code == 'legacy_writer_conflict' for f in outcome.findings))
+
+    def test_ordinary_uninstall_preserves_deferred_cleanup_and_original_inverse(self):
+        from iterm2_utils.models import Receipt
+        legacy = self.historical([self.json_resource(self.home/'legacy.json')])
+        from iterm2_utils import legacy_state
+        receipt = Receipt('2', Selection(frozenset(), frozenset(), 'Default', self.profile),
+                          [], [], [legacy_state.encode(legacy)])
+        self.save(receipt)
+        result = lifecycle.uninstall(self.context, frozenset({'status'}), self.runner)
+        self.assertEqual(result.receipt.legacy_cleanup, receipt.legacy_cleanup)

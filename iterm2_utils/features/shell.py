@@ -103,8 +103,9 @@ def build(context: Context, selection: LegacySelection) -> ChangeSet:
     path = context.paths.zshrc
     before = path.read_bytes() if path.exists() else None
     try:
-        from .. import migration
-        base = migration.shell_before(context,selection,before) if dispatch else (before or b'')
+        if dispatch:
+            raise ValueError('Historical shell dispatch requires explicit owned-resource migration')
+        base = before or b''
         managed = zshrc.blocks(base)
         foreign = base
         for name in managed:

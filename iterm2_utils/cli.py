@@ -1,6 +1,7 @@
 """Public diagnostics serialize an allowlist, never settings or subprocess output."""
 import argparse
 import json
+import os
 from pathlib import Path
 from dataclasses import asdict
 from runtime.codex_restore.codexlib.transcripts import normalize_uuid
@@ -89,7 +90,7 @@ def main(argv=None):
     launch_parser.add_argument('--json', action='store_true')
     bootstrap = sub.add_parser('bootstrap-skill', help='Copy one public skill; select no terminal features.')
     bootstrap.add_argument('--skill', choices=['iterm2-setup','iterm2-launch','iterm2-projects'], default='iterm2-setup')
-    bootstrap.add_argument('--agent', choices=['codex','claude','both'], required=True)
+    bootstrap.add_argument('--omp-profile')
     bootstrap.add_argument('--dry-run', action='store_true')
     bootstrap.add_argument('--json', action='store_true')
     try:
@@ -123,12 +124,18 @@ def main(argv=None):
         status, output = launch(request, paths, runner)
     elif args.command == 'bootstrap-skill':
         from . import skill_install
-        agents = AGENTS if args.agent == 'both' else frozenset({args.agent})
-        # Bootstrap reads only its own bundle/receipt, never agent settings or binaries.
-        context = Context(paths, {}, {}, frozenset(), {}, {})
-        findings = skill_install.install(context, agents, runner, dry_run=args.dry_run, skill=args.skill)
+        from .omp_profile import resolve_omp_profile
+        # Bootstrap resolves paths only, never agent settings or executables.
+        try:
+            profile = resolve_omp_profile(paths.home, dict(os.environ), args.omp_profile)
+        except ValueError:
+            print('Invalid omp profile.')
+            return 2
+        context = Context(paths, {}, {}, frozenset(), {}, {}, omp_profile=profile)
+        findings = skill_install.install(context, runner, dry_run=args.dry_run, skill=args.skill)
         output = dict(mode='bootstrap_preview' if args.dry_run else 'bootstrap_skill',
-                      selection=dict(agents=sorted(agents), features=[], shortcuts=[], parent_profile='Default'),
+                      selection=dict(omp_profile=dict(name=profile.name, agent_dir=str(profile.agent_dir)),
+                                     features=[], shortcuts=[], parent_profile='Default'),
                       findings=[asdict(f) for f in findings])
         status = _exit(findings)
     elif args.command in {'plan','install'}:
@@ -187,7 +194,7 @@ def main(argv=None):
         agents = receipt.selection.agents if receipt else AGENTS
         context = discover(paths,runner,agents=agents)
         if args.command == 'doctor':
-            findings = migration.inspect(context)
+            findings = migration.preview_omp_migration(context, runner).changes.findings
             if receipt_error:
                 findings.append(Finding('selection',None,'ownership_unavailable','conflict',
                     'The ownership receipt is unreadable or invalid; repair it before updating or uninstalling.'))

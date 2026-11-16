@@ -26,6 +26,17 @@ diagnostics and retain block-scalar line boundaries/header comments. The private
 helper uses only bounded `{op, raw, pointer, expected?, next?}` read/patch messages;
 native setting/action validation stays in the Python adapter.
 
+Added explicit receipt-authorized omp migration with pure preview, locked
+receipt/address fingerprints, journal-first apply and independent checkpoints
+for all three bootstrap receipts. Exact hook/settings/MCP/skill cleanup preserves
+foreign neighbours, retryable conflicts and original inverses. Compatible shared
+GUIDs transfer unchanged; historical feature intent is not credited as installed
+until the actual lifecycle builder commits it. Disabled external writers stay
+disabled by default, outside ordinary uninstall ownership; explicit restoration
+cannot activate a duplicate writer. Existing shells retain their old immutable
+runtime until a safe explicit retry. Bootstrap now copies only to the selected
+omp profile and recovers its own journal before planning an actual update.
+
 Добавлен отдельный bootstrap-навык `iterm2-projects` для операций со списком
 проектов project-launcher; его receipt независим от receipts других skill/feature,
 а при `both` один receipt описывает оба выбранных host.

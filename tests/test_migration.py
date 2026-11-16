@@ -1,251 +1,333 @@
-from tests.test_lifecycle import LifecycleFixture
-from iterm2_utils import lifecycle, migration
+"""Receipt-authorized omp cutover; all storage belongs to a temporary HOME."""
+import base64
+import json
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
 
-class MigrationTests(LifecycleFixture):
-    def test_legacy_status_reused_without_duplicate_hooks(self):
-        self.context.paths.codex_home.mkdir()
-        config=self.context.paths.codex_home/'config.toml'
-        config.write_text('[plugins."iterm2-status@local"]\nenabled = true\n')
-        self.context.installed={'codex-status':{'enabled':True}}
-        before=config.read_bytes()
-        result=self.install('status')
-        self.assertSuccess(result)
-        self.assertEqual(config.read_bytes(),before)
-        self.assertFalse((self.context.paths.codex_home/'hooks.json').exists())
-        self.assertFalse(self.context.paths.zshrc.exists())
-        self.assertEqual(result.receipt.selection.features,{'status'})
+from iterm2_utils import engine, legacy_state, lifecycle, migration, state
+from iterm2_utils.models import Context, OmpProfile, Paths, Receipt, Selection
 
-    def test_adopt_legacy_is_required_for_transfer(self):
-        self.context.paths.codex_home.mkdir()
-        config=self.context.paths.codex_home/'config.toml'
-        config.write_text('[plugins."iterm2-status@local"]\nenabled = true\n')
-        self.context.installed={'codex-status':{'enabled':True}}
-        self.assertEqual(migration.build(self.context,self.selection('status')).edits,[])
-        selection=self.selection('status');selection.adopt_legacy=True
-        result=lifecycle.install(self.context,selection,self.runner)
-        self.assertSuccess(result)
-        self.assertIn('enabled = false',config.read_text())
-        lifecycle.uninstall(self.context,frozenset({'status'}),self.runner)
-        self.assertIn('enabled = true',config.read_text())
 
-    def test_exact_legacy_wrapper_migrates_and_restores_reversibly(self):
-        p=self.context.paths.zshrc
-        original='# foreign\n# >>> codex-iterm2-status >>>\n'+migration.STATUS_BODY+'\n# <<< codex-iterm2-status <<<\n'
-        p.write_text(original)
-        selection=self.selection('status');selection.adopt_legacy=True
-        result=lifecycle.install(self.context,selection,self.runner)
-        self.assertSuccess(result);self.assertNotIn('function codex {',p.read_text())
-        self.assertSuccess(lifecycle.update(self.context,self.runner))
-        self.assertSuccess(lifecycle.uninstall(self.context,frozenset({'status'}),self.runner))
-        self.assertEqual(p.read_text(),original)
+class NoAgentRunner:
+    def __init__(self):
+        self.calls = []
 
-    def test_unknown_legacy_block_is_not_adopted(self):
-        p=self.context.paths.zshrc
-        p.write_text('# >>> codex-iterm2-status >>>\nfunction codex { arbitrary; }\n# <<< codex-iterm2-status <<<\n')
-        before=p.read_bytes();selection=self.selection('status');selection.adopt_legacy=True
-        result=lifecycle.install(self.context,selection,self.runner)
-        self.assertTrue(any(f.state=='conflict' for f in result.findings));self.assertEqual(p.read_bytes(),before)
-        self.assertNotIn('status',result.receipt.selection.features)
+    def run(self, argv, **kwargs):
+        self.calls.append(argv)
+        raise AssertionError('Unexpected external process: ' + str(argv[0]))
 
-    def test_restore_source_requires_exact_content_not_matching_basename(self):
-        import shlex
-        p=self.context.paths.zshrc;source=self.context.paths.home/'foreign/codex-resume.zsh';source.parent.mkdir();source.write_text('arbitrary')
-        p.write_text('# >>> codex-resume >>>\nsource '+shlex.quote(str(source))+'\n# <<< codex-resume <<<\n')
-        before=p.read_bytes();selection=self.selection('restore');selection.adopt_legacy=True
-        result=lifecycle.install(self.context,selection,self.runner)
-        self.assertTrue(any(f.state=='conflict' for f in result.findings));self.assertEqual(p.read_bytes(),before)
-        source.write_bytes((self.context.paths.repo/'runtime/codex_restore/codex-resume.zsh').read_bytes())
-        self.assertSuccess(lifecycle.install(self.context,selection,self.runner))
-        self.assertSuccess(lifecycle.uninstall(self.context,frozenset({'restore'}),self.runner))
-        self.assertEqual(p.read_bytes(),before);self.assertTrue(source.exists())
 
-    def test_two_legacy_blocks_are_adopted_as_one_dispatcher_checkpoint(self):
-        import shlex
-        source=self.context.paths.home/'legacy source/codex-resume.zsh';source.parent.mkdir()
-        source.write_bytes((self.context.paths.repo/'runtime/codex_restore/codex-resume.zsh').read_bytes())
-        old='# >>> codex-iterm2-status >>>\n'+migration.STATUS_BODY+'\n# <<< codex-iterm2-status <<<\n'
-        old+='# >>> codex-resume >>>\nsource '+shlex.quote(str(source))+'\n# <<< codex-resume <<<\n'
-        self.context.paths.zshrc.write_text(old)
-        selection=self.selection('status','restore');selection.adopt_legacy=True
-        result=lifecycle.install(self.context,selection,self.runner)
-        self.assertSuccess(result);self.assertEqual(result.receipt.selection.features,{'status','restore'})
-        self.assertEqual(self.context.paths.zshrc.read_text().count('source '),2)
-        self.assertSuccess(lifecycle.uninstall(self.context,frozenset({'status','restore'}),self.runner))
-        self.assertEqual(self.context.paths.zshrc.read_text(),old)
+class MigrationFixture(unittest.TestCase):
+    def setUp(self):
+        temporary = TemporaryDirectory()
+        self.addCleanup(temporary.cleanup)
+        self.home = Path(temporary.name).resolve()
+        p = self.home
+        self.profile = OmpProfile(None, p/'.omp/agent')
+        self.context = Context(Paths(p, p/'.zshrc', p/'config', p/'cache', p/'data', p/'profiles',
+                                     Path(__file__).resolve().parents[1]), {}, {}, frozenset(), {}, {},
+                               omp_profile=self.profile)
+        self.runner = NoAgentRunner()
 
-    def test_legacy_order_and_placement_preserved_across_foreign_lines(self):
-        import shlex
-        source=self.context.paths.home/'legacy/codex-resume.zsh';source.parent.mkdir()
-        source.write_bytes((self.context.paths.repo/'runtime/codex_restore/codex-resume.zsh').read_bytes())
-        status='# >>> codex-iterm2-status >>>\n'+migration.STATUS_BODY+'\n# <<< codex-iterm2-status <<<\n'
-        restore='# >>> codex-resume >>>\nsource '+shlex.quote(str(source))+'\n# <<< codex-resume <<<\n'
-        for middle in ('','export BETWEEN=1\n'):
-            with self.subTest(middle=bool(middle)):
-                old='export BEFORE=1\n'+restore+middle+status+'export AFTER=1\n'
-                self.context.paths.zshrc.write_text(old)
-                selection=self.selection('status','restore');selection.adopt_legacy=True
-                self.assertSuccess(lifecycle.install(self.context,selection,self.runner))
-                self.assertSuccess(lifecycle.update(self.context,self.runner))
-                self.assertSuccess(lifecycle.uninstall(self.context,frozenset({'status','restore'}),self.runner))
-                self.assertEqual(self.context.paths.zshrc.read_text(),old)
+    def resource(self, kind, path, locator, before, installed, owners=('status',)):
+        return dict(kind=kind, target=str(path), locator=locator, before=before,
+                    installed=installed, owners=list(owners), version='1')
 
-    def test_changed_or_ambiguous_legacy_anchor_fails_closed(self):
-        p=self.context.paths.zshrc
-        p.write_text('export BEFORE=1\n# >>> codex-iterm2-status >>>\n'+migration.STATUS_BODY+'\n# <<< codex-iterm2-status <<<\nexport AFTER=1\n')
-        selection=self.selection('status');selection.adopt_legacy=True
-        self.assertSuccess(lifecycle.install(self.context,selection,self.runner))
-        p.write_text(p.read_text().replace('export AFTER=1','export INSERTED=1\nexport AFTER=1'))
-        before=p.read_bytes()
-        result=lifecycle.uninstall(self.context,frozenset({'status'}),self.runner)
-        self.assertTrue(any(f.state=='conflict' for f in result.findings))
-        self.assertEqual(p.read_bytes(),before)
-        self.assertTrue(any(f.code=='legacy_placement_conflict' for f in result.findings))
-        self.assertEqual(result.receipt.selection.features,{'status'})
-        self.assertTrue((self.context.paths.data/'current/hook.py').exists())
+    def value(self, value=None, exists=True):
+        return {'exists':exists, 'value':value if exists else None}
 
-    def test_legacy_receipt_contains_only_anchor_hashes(self):
-        from iterm2_utils import state
-        p=self.context.paths.zshrc
-        p.write_text('export FOREIGN_TOKEN=DO_NOT_PERSIST\n# >>> codex-iterm2-status >>>\n'+migration.STATUS_BODY+'\n# <<< codex-iterm2-status <<<\n')
-        selection=self.selection('status');selection.adopt_legacy=True
-        self.assertSuccess(lifecycle.install(self.context,selection,self.runner))
-        self.assertNotIn('DO_NOT_PERSIST',(self.context.paths.data/'receipt.json').read_text())
-        receipt=state.load(self.context.paths.data/'receipt.json')
-        resource=next(r for r in receipt.resources if r['kind']=='zsh' and r['locator']['name']=='legacy-status')
-        self.assertEqual(len(resource['locator']['placement']['before']),64)
-        resource['locator']['placement']['raw_line']='DO_NOT_PERSIST'
-        with self.assertRaises(ValueError):state.validate(receipt)
+    def historical(self, resources, features=(), agents=('codex',)):
+        return legacy_state.LegacyReceipt('1', legacy_state.LegacySelection(
+            frozenset(agents), frozenset(features), frozenset(), 'Default'), resources, [])
 
-    def restore_hooks_fixture(self):
-        import json, shlex
-        p=self.context.paths
-        source=p.home/'legacy source/codex-resume.zsh';source.parent.mkdir()
-        source.write_bytes((p.repo/'runtime/codex_restore/codex-resume.zsh').read_bytes())
-        p.zshrc.write_text('# >>> codex-resume >>>\nsource '+shlex.quote(str(source))+'\n# <<< codex-resume <<<\n')
-        exact={'hooks':[{'type':'command','command':shlex.quote(str(source.parent/'codex-sessions'))+' hook','timeout':3}]}
-        foreign={'hooks':[{'type':'command','command':'/foreign/codex-sessions hook','timeout':3}]}
-        p.codex_home.mkdir();path=p.codex_home/'hooks.json'
-        document={'foreign':'keep','hooks':{event:[foreign,exact] for event in ('SessionStart','UserPromptSubmit','Stop')}}
-        path.write_text(json.dumps(document))
-        return path,exact,foreign
+    def save(self, receipt, context=None):
+        path = (context or self.context).paths.data/'receipt.json'
+        path.parent.mkdir(parents=True, exist_ok=True)
+        state.save_recovery(path, receipt)
 
-    def test_legacy_restore_hooks_transfer_exactly_and_restore_after_update(self):
-        import json
-        path,exact,foreign=self.restore_hooks_fixture()
-        selection=self.selection('restore');selection.adopt_legacy=True
-        result=lifecycle.install(self.context,selection,self.runner);self.assertSuccess(result)
-        current=json.loads(path.read_text())
-        for event in ('SessionStart','UserPromptSubmit','Stop'):
-            self.assertNotIn(exact,current['hooks'][event]);self.assertIn(foreign,current['hooks'][event])
-            self.assertEqual(len(current['hooks'][event]),2)
-        self.assertSuccess(lifecycle.update(self.context,self.runner))
-        added={'hooks':[{'type':'command','command':'foreign-later'}]}
-        current=json.loads(path.read_text());current['hooks']['Stop'].insert(0,added);path.write_text(json.dumps(current))
-        self.assertSuccess(lifecycle.uninstall(self.context,frozenset({'restore'}),self.runner))
-        current=json.loads(path.read_text())
-        self.assertEqual(current['hooks']['Stop'],[added,foreign,exact])
-        for event in ('SessionStart','UserPromptSubmit'):
-            self.assertEqual(current['hooks'][event],[foreign,exact])
-        self.assertEqual(current['foreign'],'keep')
+    def json_resource(self, path, key='ours', before=0, installed=1, owners=('status',)):
+        return self.resource('json', path, {'pointer':[key], 'mode':0o600},
+                             self.value(before), self.value(installed), owners)
 
-    def test_changed_known_restore_hook_requires_manual_resolution(self):
-        import json
-        path,exact,foreign=self.restore_hooks_fixture()
-        current=json.loads(path.read_text());current['hooks']['Stop'][1]['hooks'][0]['timeout']=99;path.write_text(json.dumps(current))
-        before=self.snapshot()
-        selection=self.selection('restore');selection.adopt_legacy=True
-        result=lifecycle.install(self.context,selection,self.runner)
-        self.assertTrue(any(f.code=='legacy_restore_hook_conflict' for f in result.findings))
-        self.assertNotIn('restore',result.receipt.selection.features)
-        self.assertEqual(self.snapshot(),before)
+    def snapshot(self):
+        return {str(p.relative_to(self.home)):p.read_bytes()
+                for p in self.home.rglob('*') if p.is_file() and not p.is_symlink()}
 
-    def test_legacy_restore_hooks_are_untouched_without_adoption(self):
-        self.restore_hooks_fixture()
-        before=self.snapshot()
-        result=self.install('restore')
-        self.assertTrue(any(f.state=='conflict' for f in result.findings))
-        self.assertEqual(self.snapshot(),before)
 
-    def test_mixed_legacy_hook_group_is_preserved_as_a_conflict(self):
-        import json
-        path,exact,foreign=self.restore_hooks_fixture()
-        current=json.loads(path.read_text())
-        current['hooks']['Stop'][1]['hooks'].append({'type':'command','command':'foreign-inside-group'})
-        path.write_text(json.dumps(current));before=self.snapshot()
-        selection=self.selection('restore');selection.adopt_legacy=True
-        result=lifecycle.install(self.context,selection,self.runner)
-        self.assertTrue(any(f.code=='legacy_restore_hook_conflict' for f in result.findings))
-        self.assertEqual(self.snapshot(),before)
+class MigrationTests(MigrationFixture):
+    def test_cleanup_conflict_remains_retryable_without_old_binaries(self):
+        path = self.home/'legacy.json'
+        path.write_text('{"ours":2,"foreign":{"keep":true}}')
+        resource = self.json_resource(path)
+        self.save(self.historical([resource]))
+        first = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertIsInstance(first.receipt, Receipt)
+        self.assertEqual(first.receipt.selection.features, frozenset())
+        self.assertEqual(first.receipt.legacy_cleanup[0]['resources'], [resource])
+        self.assertTrue(any(f.code == 'legacy_cleanup_conflict' for f in first.findings))
+        path.write_text('{"ours":1,"foreign":{"keep":true}}')
+        second = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(second.receipt.legacy_cleanup, [])
+        self.assertEqual(json.loads(path.read_bytes()), {'ours':0, 'foreign':{'keep':True}})
+        self.assertEqual(self.runner.calls, [])
 
-    def test_failed_restore_migration_restores_old_hooks_and_shell(self):
-        import json
-        from unittest.mock import patch
-        from iterm2_utils import engine
-        path,exact,foreign=self.restore_hooks_fixture()
-        shell_before=self.context.paths.zshrc.read_bytes()
-        hooks_before=json.loads(path.read_text())
-        original=engine._write_file
-        def fail_runtime_settings(target,*args,**kwargs):
-            if target==(self.context.paths.config/'runtime.json').resolve():
-                raise OSError('simulated write failure')
-            return original(target,*args,**kwargs)
-        selection=self.selection('restore');selection.adopt_legacy=True
-        with patch.object(engine,'_write_file',side_effect=fail_runtime_settings):
-            result=lifecycle.install(self.context,selection,self.runner)
-        self.assertNotIn('restore',result.receipt.selection.features)
-        current=json.loads(path.read_text())
-        for event in ('SessionStart','UserPromptSubmit','Stop'):
-            self.assertEqual(current['hooks'][event],hooks_before['hooks'][event])
-        self.assertEqual(self.context.paths.zshrc.read_bytes(),shell_before)
+    def test_preview_never_recovers_or_creates_lock(self):
+        path = self.home/'settings.json'; path.write_text('{"ours":1}')
+        receipt = self.historical([self.json_resource(path)])
+        self.save(receipt)
+        journal = self.context.paths.data/'journal'; journal.mkdir()
+        state.save_recovery(journal/'intent.json', receipt)
+        before = self.snapshot()
+        preview = migration.preview_omp_migration(self.context, self.runner)
+        self.assertTrue(any(f.code == 'migration_recovery_required' for f in preview.changes.findings))
+        self.assertEqual(before, self.snapshot())
+        self.assertFalse((self.context.paths.data/'transaction.lock').exists())
 
-    def test_legacy_restore_and_status_adopt_atomically(self):
-        import json
-        from unittest.mock import patch
-        from iterm2_utils import engine, state
+    def test_apply_recovers_historical_journal_before_cleanup(self):
+        path = self.home/'settings.json'; path.write_text('{"ours":1,"foreign":7}')
+        receipt = self.historical([self.json_resource(path)])
+        self.save(receipt)
+        journal = self.context.paths.data/'journal'; journal.mkdir()
+        state.save_recovery(journal/'intent.json', receipt)
+        result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(json.loads(path.read_bytes()), {'ours':0,'foreign':7})
+        self.assertFalse(journal.exists())
+        self.assertEqual(result.receipt.legacy_cleanup, [])
+
+    def test_all_three_bootstrap_receipts_clean_only_owned_files(self):
+        from iterm2_utils import skill_install
+        for skill in skill_install.BUNDLES:
+            isolated = skill_install._context(self.context, skill)
+            path = self.home/'.codex/skills'/skill/'SKILL.md'
+            path.parent.mkdir(parents=True)
+            path.write_bytes(b'owned')
+            neighbour = path.parent/'foreign.txt'; neighbour.write_bytes(b'keep')
+            resource = self.resource('file', path, {'mode':0o644}, self.value(exists=False),
+                self.value(base64.b64encode(b'owned').decode()), ('bootstrap-skill',))
+            self.save(self.historical([resource], ('bootstrap-skill',)), isolated)
+        result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertFalse(any(f.state == 'conflict' for f in result.findings), result.findings)
+        for skill in skill_install.BUNDLES:
+            self.assertFalse((self.home/'.codex/skills'/skill/'SKILL.md').exists())
+            self.assertEqual((self.home/'.codex/skills'/skill/'foreign.txt').read_bytes(), b'keep')
+            receipt = state.load(skill_install._context(self.context, skill).paths.data/'receipt.json')
+            self.assertEqual(receipt.legacy_cleanup, [])
+
+    def test_changed_bootstrap_file_is_retained_independently(self):
+        from iterm2_utils import skill_install
+        isolated = skill_install._context(self.context, 'iterm2-launch')
+        path = self.home/'skill'; path.write_bytes(b'user')
+        resource = self.resource('file', path, {'mode':0o644}, self.value(exists=False),
+            self.value(base64.b64encode(b'owned').decode()), ('bootstrap-skill',))
+        self.save(self.historical([resource], ('bootstrap-skill',)), isolated)
+        migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        stored = state.load(isolated.paths.data/'receipt.json')
+        self.assertEqual(stored.legacy_cleanup[0]['resources'], [resource])
+        self.assertEqual(path.read_bytes(), b'user')
+
+    def test_preview_fingerprint_covers_foreign_neighbours_and_all_receipts(self):
+        path = self.home/'settings.json'; path.write_text('{"ours":1,"foreign":1}')
+        self.save(self.historical([self.json_resource(path)]))
+        first = migration.preview_omp_migration(self.context, self.runner)
+        path.write_text('{"ours":1,"foreign":2}')
+        second = migration.preview_omp_migration(self.context, self.runner)
+        self.assertNotEqual(first.fingerprint, second.fingerprint)
+
+    def test_fingerprint_revalidated_under_transaction_lock(self):
+        path = self.home/'settings.json'; path.write_text('{"ours":1,"foreign":1}')
+        self.save(self.historical([self.json_resource(path)]))
+        original = migration.preview_omp_migration
+        def stale(*args, **kwargs):
+            preview = original(*args, **kwargs)
+            path.write_text('{"ours":1,"foreign":2}')
+            return preview
+        with patch.object(migration, 'preview_omp_migration', side_effect=stale):
+            result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertTrue(any(f.code == 'migration_stale_preview' for f in result.findings))
+        self.assertEqual(json.loads(path.read_bytes()), {'ours':1,'foreign':2})
+        self.assertIsInstance(state.load(self.context.paths.data/'receipt.json'), legacy_state.LegacyReceipt)
+
+    def test_shared_appearance_and_launcher_preserve_guid_and_original_inverse(self):
+        path = self.context.paths.profiles/'iterm2-utils-project-launcher.json'
+        path.parent.mkdir(parents=True)
+        content = b'{"Profiles":[{"Guid":"existing-guid","Name":"Project"}]}'
+        path.write_bytes(content)
+        resource = self.resource('file', path, {'mode':0o600}, self.value(exists=False),
+            self.value(base64.b64encode(content).decode()), ('shared:project-launcher','codex:project-launcher'))
+        self.save(self.historical([resource], ('project-launcher',)))
+        result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(path.read_bytes(), content)
+        self.assertEqual(result.receipt.resources[0]['before'], {'exists':False,'value':None})
+        self.assertEqual(result.receipt.resources[0]['owners'], ['shared:project-launcher','project-launcher'])
+        self.assertNotIn('project-launcher', result.receipt.selection.features)
+        self.assertEqual(result.receipt.legacy_cleanup[0]['selection']['features'], ['project-launcher'])
+
+    def test_feature_intent_goes_through_actual_lifecycle_builder(self):
+        self.save(self.historical([], ('status',)))
+        result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertNotIn('status', result.receipt.selection.features)
+        self.assertEqual(result.receipt.legacy_cleanup[0]['selection']['features'], ['status'])
+        self.assertTrue(any(f.feature == 'status' and f.state in {'missing_dependency','conflict','unavailable'}
+                            for f in result.findings))
+
+    def test_unknown_registration_provenance_is_retryable_not_guessed(self):
+        resource = self.resource('registration', 'codex', {'name':'iterm2-observe'},
+            self.value(exists=False), self.value({'command':'uvx'}), ('mcp',))
+        self.save(self.historical([resource]))
+        result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(result.receipt.legacy_cleanup[0]['resources'], [resource])
+        self.assertTrue(any(f.code == 'legacy_mcp_unresolved' for f in result.findings))
+        self.assertEqual(self.runner.calls, [])
+
+    def test_exact_mcp_storage_pointer_removes_only_server(self):
+        path = self.home/'config.toml'
+        path.write_text('[mcp_servers.iterm2-observe]\ncommand = "uvx"\nargs = ["owned"]\n\n[mcp_servers.foreign]\ncommand = "keep"\n')
+        resource = self.resource('toml', path, {'pointer':['mcp_servers','iterm2-observe'],'mode':0o600},
+            self.value(exists=False), self.value({'command':'uvx','args':['owned']}), ('mcp',))
+        self.save(self.historical([resource]))
+        result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
         from iterm2_utils.config import tomlfile
-        path,exact,foreign=self.restore_hooks_fixture()
-        p=self.context.paths
-        config=p.codex_home/'config.toml'
-        config.write_text('[plugins."codex-iterm2-status@local"]\nenabled = true\n')
-        p.zshrc.write_text(p.zshrc.read_text()+'# >>> codex-iterm2-status >>>\n'+migration.STATUS_BODY+'\n# <<< codex-iterm2-status <<<\n')
-        shell_before=p.zshrc.read_bytes()
-        selection=self.selection('status','restore');selection.adopt_legacy=True
-        original=engine._write_file
-        def fail_settings(target,*args,**kwargs):
-            if target==(p.config/'runtime.json').resolve():
-                raise OSError('injected combined adoption failure')
-            return original(target,*args,**kwargs)
-        with patch.object(engine,'_write_file',side_effect=fail_settings):
-            result=lifecycle.install(self.context,selection,self.runner)
-        self.assertTrue(any(f.state=='conflict' for f in result.findings))
-        self.assertEqual(result.receipt.selection.features,set())
-        self.assertIsNone(state.load(p.data/'receipt.json'))
-        self.assertEqual(p.zshrc.read_bytes(),shell_before)
-        self.assertTrue(tomlfile.parse(config.read_bytes())['plugins']['codex-iterm2-status@local']['enabled'])
-        for event in ('SessionStart','UserPromptSubmit','Stop'):
-            self.assertEqual(json.loads(path.read_bytes())['hooks'][event],[foreign,exact])
-        self.assertFalse((p.data/'current').exists())
-        self.assertSuccess(lifecycle.install(self.context,selection,self.runner))
-        self.assertSuccess(lifecycle.update(self.context,self.runner))
-        settings=json.loads((p.config/'runtime.json').read_bytes())
-        self.assertEqual(settings['status_backend'],'cc-status');self.assertTrue(settings['restore'])
-        self.assertFalse(tomlfile.parse(config.read_bytes())['plugins']['codex-iterm2-status@local']['enabled'])
-        self.assertSuccess(lifecycle.uninstall(self.context,{'status','restore'},self.runner))
-        self.assertEqual(p.zshrc.read_bytes(),shell_before)
-        self.assertTrue(tomlfile.parse(config.read_bytes())['plugins']['codex-iterm2-status@local']['enabled'])
-        for event in ('SessionStart','UserPromptSubmit','Stop'):
-            self.assertEqual(json.loads(path.read_bytes())['hooks'][event],[foreign,exact])
+        self.assertEqual(tomlfile.parse(path.read_bytes()), {'mcp_servers':{'foreign':{'command':'keep'}}})
+        self.assertEqual(result.receipt.legacy_cleanup, [])
 
-    def test_partial_status_uninstall_restores_legacy_and_keeps_restore(self):
-        import json
+    def test_referenced_profile_remains_retryable(self):
+        path = self.context.paths.profiles/'iterm2-utils.json'; path.parent.mkdir()
+        content = b'{"Profiles":[{"Guid":"referenced","Name":"Old"}]}'
+        path.write_bytes(content)
+        resource = self.resource('file', path, {'mode':0o600}, self.value(exists=False),
+            self.value(base64.b64encode(content).decode()), ('clipboard',))
+        self.save(self.historical([resource]))
+        with patch('iterm2_utils.config.iterm.ensure_unreferenced', side_effect=ValueError('live reference')):
+            result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(path.read_bytes(), content)
+        self.assertEqual(result.receipt.legacy_cleanup[0]['resources'], [resource])
+
+    def test_live_legacy_shell_preserves_immutable_runtime(self):
+        release = self.context.paths.data/'releases/old/codex.zsh'; release.parent.mkdir(parents=True)
+        release.write_bytes(b'old shell helper')
+        resource = self.resource('file', release, {'mode':0o600}, self.value(exists=False),
+            self.value(base64.b64encode(b'old shell helper').decode()), ('shared:runtime','status'))
+        self.save(self.historical([resource]))
+        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[{'id':'live'}]}):
+            result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(release.read_bytes(), b'old shell helper')
+        self.assertEqual(result.receipt.legacy_cleanup[0]['resources'], [resource])
+        self.assertTrue(any(f.code == 'legacy_runtime_deferred' for f in result.findings))
+
+    def test_safe_explicit_retry_cleans_unreferenced_old_runtime(self):
+        path = self.context.paths.data/'releases/old/helper.py'; path.parent.mkdir(parents=True)
+        path.write_bytes(b'old')
+        resource = self.resource('file', path, {'mode':0o600}, self.value(exists=False),
+            self.value(base64.b64encode(b'old').decode()), ('shared:runtime','status'))
+        self.save(self.historical([resource]))
+        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[], 'complete':True}):
+            first = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+            self.assertTrue(path.exists())
+            self.assertTrue(first.receipt.legacy_cleanup)
+            result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertFalse(path.exists())
+        self.assertEqual(result.receipt.legacy_cleanup, [])
+
+    def test_registration_uses_only_companion_receipted_exact_storage_address(self):
+        path = self.home/'custom-config.toml'
+        args = ['--with','mcp<2','mcp-server-iterm2==0.1.1']
+        path.write_text('[mcp_servers.iterm2-observe]\ncommand = "uvx"\nargs = ["--with", "mcp<2", "mcp-server-iterm2==0.1.1"]\n\n[mcp_servers.foreign]\ncommand = "keep"\n')
+        definition = {'command':'uvx','args':args,'scope':'user','enabled':True,'environment_empty':True}
+        registration = self.resource('registration', 'codex', {'name':'iterm2-observe'},
+            self.value(exists=False), self.value(definition), ('mcp',))
+        address = self.resource('toml', path, {'pointer':['mcp_servers','iterm2-observe'],'mode':0o600},
+            self.value(exists=False), self.value({'command':'uvx','args':args}), ('mcp',))
+        self.save(self.historical([registration,address]))
+        result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
         from iterm2_utils.config import tomlfile
-        self.context.paths.codex_home.mkdir()
-        config=self.context.paths.codex_home/'config.toml'
-        config.write_text('[plugins."iterm2-status@local"]\nenabled = true\n')
-        selection=self.selection('status','restore');selection.adopt_legacy=True
-        self.assertSuccess(lifecycle.install(self.context,selection,self.runner))
-        self.assertSuccess(lifecycle.uninstall(self.context,{'status'},self.runner))
-        settings=json.loads((self.context.paths.config/'runtime.json').read_bytes())
-        self.assertFalse(settings['status']);self.assertTrue(settings['restore'])
-        self.assertTrue(tomlfile.parse(config.read_bytes())['plugins']['iterm2-status@local']['enabled'])
-        self.assertTrue((self.context.paths.data/'current/hook.py').exists())
+        self.assertEqual(tomlfile.parse(path.read_bytes()), {'mcp_servers':{'foreign':{'command':'keep'}}})
+        self.assertEqual(result.receipt.legacy_cleanup, [])
+        self.assertEqual(self.runner.calls, [])
+
+    def test_cleanup_crash_replay_restores_intent_then_retries(self):
+        path = self.home/'settings.json'; path.write_text('{"ours":1,"foreign":9}')
+        self.save(self.historical([self.json_resource(path)]))
+        original = engine._write_file
+        def crash(target, *args, **kwargs):
+            original(target, *args, **kwargs)
+            raise KeyboardInterrupt('crash after resource write')
+        with patch.object(engine, '_write_file', side_effect=crash):
+            with self.assertRaises(KeyboardInterrupt):
+                migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(json.loads(path.read_bytes()), {'ours':0,'foreign':9})
+        intent = state.load(self.context.paths.data/'journal/intent.json')
+        self.assertIsInstance(intent, legacy_state.LegacyReceipt)
+        result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(json.loads(path.read_bytes()), {'ours':0,'foreign':9})
+        self.assertEqual(result.receipt.legacy_cleanup, [])
+
+    def test_changed_recovery_resource_blocks_cutover_without_losing_inverse(self):
+        path = self.home/'settings.json'; path.write_text('{"ours":2,"foreign":9}')
+        receipt = self.historical([self.json_resource(path)])
+        self.save(receipt)
+        journal = self.context.paths.data/'journal'; journal.mkdir()
+        state.save_recovery(journal/'intent.json', receipt)
+        result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertTrue(any(f.code == 'rollback_unresolved' for f in result.findings))
+        self.assertEqual(state.load(journal/'intent.json').resources, receipt.resources)
+        self.assertEqual(json.loads(path.read_bytes()), {'ours':2,'foreign':9})
+
+    def test_existing_omp_bootstrap_is_preserved_not_deleted(self):
+        from iterm2_utils import skill_install
+        isolated = skill_install._context(self.context, 'iterm2-setup')
+        path = self.profile.agent_dir/'skills/iterm2-setup/SKILL.md'
+        path.parent.mkdir(parents=True); path.write_bytes(b'owned omp skill')
+        resource = self.resource('file', path, {'mode':0o644}, self.value(exists=False),
+            self.value(base64.b64encode(b'owned omp skill').decode()), ('bootstrap-skill',))
+        self.save(self.historical([resource], ('bootstrap-skill',), agents=('omp',)), isolated)
+        migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        receipt = state.load(isolated.paths.data/'receipt.json')
+        self.assertEqual(path.read_bytes(), b'owned omp skill')
+        self.assertEqual(receipt.resources, [resource])
+        self.assertEqual(receipt.legacy_cleanup, [])
+
+    def test_exact_owned_shell_block_removal_preserves_foreign_lines(self):
+        from iterm2_utils.config import zshrc
+        path = self.context.paths.zshrc
+        path.write_bytes(zshrc.block(b'# foreign shell line\n', 'root', 'source /owned/helper.zsh'))
+        resource = self.resource('zsh', path, {'name':'root','mode':0o600},
+            self.value(exists=False), self.value('source /owned/helper.zsh'))
+        self.save(self.historical([resource]))
+        migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(path.read_bytes(), b'# foreign shell line\n')
+
+    def test_appearance_setting_transfer_keeps_original_inverse_without_claiming_install(self):
+        path = self.context.paths.config/'appearance.json'; path.parent.mkdir()
+        path.write_text('{"ours":1,"foreign":7}')
+        resource = self.json_resource(path, owners=('codex:appearance',))
+        self.save(self.historical([resource], ('appearance',)))
+        result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(json.loads(path.read_bytes()), {'ours':1,'foreign':7})
+        self.assertEqual(result.receipt.resources[0]['before'], {'exists':True,'value':0})
+        self.assertEqual(result.receipt.resources[0]['owners'], ['appearance'])
+        self.assertNotIn('appearance', result.receipt.selection.features)
+
+    def test_feature_pending_journal_is_not_overwritten_by_migration_bookkeeping(self):
+        from iterm2_utils.models import Finding, Outcome
+        self.save(self.historical([], ('status',)))
+        journal = self.context.paths.data/'journal'
+        def unknown(context, selection, runner):
+            journal.mkdir()
+            (journal/'intent.json').write_bytes(b'unknown-outcome-evidence')
+            return Outcome(state.load(context.paths.data/'receipt.json'),
+                [Finding('status','omp','native_outcome_unknown','conflict','Unknown native result.')])
+        with patch.object(lifecycle, 'install', side_effect=unknown):
+            result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual((journal/'intent.json').read_bytes(), b'unknown-outcome-evidence')
+        self.assertFalse(any(f.code == 'migration_cleanup_complete' for f in result.findings))
+
+    def test_source_shortcut_intent_is_not_retired_by_feature_name_alone(self):
+        raw = legacy_state.encode(self.historical([], ('shortcuts',)))
+        raw['selection']['shortcuts'] = ['resume']
+        selection = Selection(frozenset({'shortcuts'}), frozenset(), 'Default', self.profile)
+        self.save(Receipt('2', selection, [], [], [raw]))
+        result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(result.receipt.legacy_cleanup[0]['selection']['shortcuts'], ['resume'])
+        self.assertEqual(result.receipt.selection.shortcuts, frozenset())
