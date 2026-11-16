@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+Добавлен `bootstrap-skill --agent omp` для всех трёх публичных навыков:
+нативный каталог `~/.omp/agent/skills`, профили `OMP_PROFILE`/`PI_PROFILE` и
+переопределения `PI_CONFIG_DIR`/`PI_CODING_AGENT_DIR` с семантикой omp 18.20.2
+на macOS. Сохранены dry-run, owned updates/CAS и конфликты чужих файлов;
+`both` остаётся Codex + Claude. omp может исполнять `iterm2-launch`, но целью
+остаётся Codex. Терминальные интеграции и встроенные статусы omp не изменяются.
+Живое обновление discovery/launch из omp не подтверждается fixture-проверками.
+
 Добавлен отдельный bootstrap-навык `iterm2-projects` для операций со списком
 проектов project-launcher; его receipt независим от receipts других skill/feature,
 а при `both` один receipt описывает оба выбранных host.

@@ -12,6 +12,10 @@ No private skills, corporate services or workspace framework are required.
 Для операций со списком project-launcher используйте отдельный публичный навык
 https://github.com/YarikMix/iterm2-utils/tree/main/skills/iterm2-projects.
 
+This skill may be installed in omp with `bootstrap-skill --agent omp`. The host
+executing the skill is separate from the Codex/Claude consumers selected below.
+It does not add omp as a feature consumer or replace omp's native terminal status.
+
 **Codex sandbox:** When this skill runs inside Codex, pass
 `sandbox_permissions: "require_escalated"` on the tool call before invoking
 `it2`, `doctor --live` or `reconcile`. Do not probe from the default sandbox

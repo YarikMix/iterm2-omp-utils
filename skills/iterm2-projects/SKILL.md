@@ -9,6 +9,10 @@ Use the repository's CLI and its normalized project-launcher config. Keep names,
 paths, ids, profiles, and receipt details private; public examples use only
 Project A and Project B.
 
+This skill may be installed in omp with `bootstrap-skill --agent omp`. omp is the
+host executing it, not a new project-launcher consumer: the supported consumers
+remain Codex/Claude. Do not change omp's native terminal integration.
+
 ## Read first
 
 Preflight an available Python 3.11+ interpreter, zsh, iTerm2 SDK/API 3.7.6,

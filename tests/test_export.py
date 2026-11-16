@@ -287,6 +287,23 @@ class ExportTests(unittest.TestCase):
                 self.assertNotIn('checkout-unavailable', skill)
                 self.assertNotIn(str(root), skill)
 
+    def test_extracted_release_bootstraps_omp_without_source_checkout(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp); repo = self.fixture(root)
+            archive = build_release.build(repo, root/'dist')
+            extracted = self.extract(archive, root/'extract')
+            shutil.rmtree(repo)
+            for skill in ('iterm2-setup', 'iterm2-launch', 'iterm2-projects'):
+                result = self.run_python(extracted, root/'home', '-m', 'iterm2_utils',
+                                         'bootstrap-skill', '--skill', skill, '--agent', 'omp', '--json')
+                self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+                source = extracted/'skills'/skill
+                target = root/'home/.omp/agent/skills'/skill
+                self.assertEqual({p.relative_to(target): p.read_bytes() for p in target.rglob('*.md')},
+                                 {p.relative_to(source): p.read_bytes() for p in source.rglob('*.md')})
+            self.assertFalse((root/'home/.codex').exists())
+            self.assertFalse((root/'home/.claude').exists())
+
     def test_launch_and_standalone_restore_after_source_removed(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp); repo = self.fixture(root)

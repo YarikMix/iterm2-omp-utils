@@ -5,6 +5,26 @@ Release: **v0.1.0-beta.1**, 2026-10-23. Supported target: macOS + zsh with Pytho
 it does not establish Linux product support. This beta has no stable-production
 acceptance claim.
 
+## omp skill bootstrap — 2026-11-16
+
+`bootstrap-skill --agent omp` supports all three public bundles in the native
+macOS omp skill directory. Directory/profile semantics follow the public source
+of omp 18.20.2: default `HOME/.omp/agent/skills`, named profile
+`HOME/.omp/profiles/<name>/agent/skills`, `OMP_PROFILE` over legacy `PI_PROFILE`,
+`PI_CONFIG_DIR`, and default-profile-only `PI_CODING_AGENT_DIR`.
+An explicitly empty OMP_PROFILE selects default; invalid profiles block writes.
+Use OMP_PROFILE on the bootstrap invocation; a separate omp process's --profile
+flag is not discovered. Existing profile copies are retained, not migrated.
+
+The host is separate from the configured consumer: setup/projects still manage
+Codex/Claude features; launch hosted in omp still launches Codex. `both` remains
+Codex + Claude. No omp executable, settings, status integration or iTerm2 API is
+probed or modified by bootstrap. Standard per-skill receipts/CAS apply.
+
+Isolated installer/release fixtures and a temporary-HOME CLI smoke exercise file
+installation and update safety only. They do not establish refresh of discovery
+in an active omp session or live Codex handoff/resume acceptance from omp.
+
 ## Codex API launch and exact resume — 2026-11-01
 
 Current `launch-codex` supports mutually exclusive `--handoff ABS_FILE` and
