@@ -1,322 +1,248 @@
+"""Public parser and real orchestration against temporary storage/native adapters."""
 import contextlib
 import io
 import json
-import subprocess
-import unittest
+import os
+from pathlib import Path
 from unittest.mock import patch
-from tests.support import Fixture
-from iterm2_utils.cli import main
+from tests.test_migration import MigrationFixture
+from iterm2_utils import cli, launch
+from iterm2_utils.launch_checks import LaunchIdentity, LaunchInspection
+from iterm2_utils.launch_api import LaunchCreation
 
 
-class CliTests(unittest.TestCase):
-    def test_launch_modes_are_exclusive(self):
-        common = ['launch-codex', '--window', 'w', '--profile', 'Codex', '--cwd', '/tmp']
-        sid = 'abcdefab-1234-4123-8123-abcdefabcdef'
-        with Fixture() as f, patch('iterm2_utils.launch.launch') as launch:
-            for mode in ([], ['--handoff', '/tmp/task', '--resume', sid], ['--resume', 'invalid']):
-                with self.subTest(mode=mode):
-                    code, out, err = self.invoke(f, common+mode)
-                    self.assertEqual(code, 2, out+err)
-            launch.assert_not_called()
-            launch.return_value = (2, dict(mode='launch_codex', status='blocked', findings=[]))
-            code, out, err = self.invoke(f, common+['--resume', sid.upper(), '--json'])
-            self.assertEqual(code, 2, err)
-            self.assertTrue(launch.called, 'Resume must dispatch a normalized request')
-            request = launch.call_args.args[0]
-            self.assertEqual(request.resume_session_id, sid)
-            self.assertEqual(request.launch_mode, 'resume')
-            self.assertIsNone(request.handoff)
-
-    def test_appearance_config_rejected_without_explicit_feature_before_discovery(self):
-        with Fixture() as f, patch('iterm2_utils.cli.discover') as discover:
-            code,out,err=self.invoke(f,['plan','--agent','codex','--features','shell','--appearance-config','/unused.json','--json'])
-            self.assertEqual(code,2)
-            self.assertIn('appearance_config_selection',out)
-            discover.assert_not_called()
-
-    def test_appearance_cli_plan_install_and_readonly_live_doctor(self):
-        from iterm2_utils.discovery import resolve_paths
-        from iterm2_utils import state
-        with Fixture() as f:
-            config=f.home/'private.json'
-            config.write_text(json.dumps({'projects':[{'root':str(f.home/'repo'),'color':'#112233','icon':'ios'}]}))
-            run=f.runner.run
-            def probe(argv,**kwargs):
-                result=run(argv,**kwargs)
-                if argv[1:2]==['-c']:return subprocess.CompletedProcess(argv,0,'iterm2-sdk-ready\n','')
-                if argv[-1:] == ['--probe']:return subprocess.CompletedProcess(argv,0,'ready\n','')
-                return result
-            with patch.object(f.runner,'run',side_effect=probe):
-                before=f.snapshot()
-                code,out,err=self.invoke(f,['plan','--agent','codex','--features','appearance','--appearance-config',str(config),'--json'])
-                self.assertEqual(code,3,out+err);self.assertEqual(f.snapshot(),before)
-                self.assertNotIn(str(config),out);self.assertNotIn('--probe',repr(f.runner.calls))
-                code,out,err=self.invoke(f,['install','--agent','codex','--features','appearance','--appearance-config',str(config),'--json'])
-                self.assertEqual(code,3,out+err)
-                before=f.snapshot();f.runner.calls.clear()
-                code,out,err=self.invoke(f,['doctor','--json'])
-                self.assertEqual(code,3,out+err);self.assertNotIn('--probe',repr(f.runner.calls))
-                self.assertEqual(f.snapshot(),before)
-                code,out,err=self.invoke(f,['doctor','--live','--json'])
-                self.assertEqual(code,3,out+err)
-                self.assertTrue(any(x['code']=='appearance_api' and x['state']=='ready' for x in json.loads(out)['findings']))
-                self.assertEqual(f.snapshot(),before)
-                self.assertEqual([x.code for x in state.load(resolve_paths().data/'receipt.json').pending_ui],['appearance_api'])
-                code,out,err=self.invoke(f,['reconcile','--step','appearance_api','--json'])
-                self.assertEqual(code,0,out+err)
-                self.assertFalse(state.load(resolve_paths().data/'receipt.json').pending_ui)
-
-    def test_doctor_missing_native_pair_blocks_without_executing_handler(self):
-        for name in ('it2','cc-status'):
-            with self.subTest(name=name), Fixture() as f:
-                code,out,err=self.invoke(f,['install','--agent','codex','--features','status','--json'])
-                self.assertEqual(code,0,out+err)
-                (f.app/'Contents/Resources/utilities'/name).unlink()
-                before=f.snapshot()
-                f.runner.calls.clear()
-                code,out,err=self.invoke(f,['doctor','--json'])
-                self.assertEqual(code,2,out+err)
-                self.assertTrue(any(item['code']=='native_status_capability' and item['state']=='unavailable'
-                                    for item in json.loads(out)['findings']))
-                self.assertFalse(any(call[0][0].endswith('/cc-status') for call in f.runner.calls))
-                self.assertEqual(f.snapshot(),before)
-
-    def test_doctor_preserves_pending_trust_and_unknown_error_source(self):
-        from iterm2_utils import state
-        from iterm2_utils.discovery import resolve_paths
-        from iterm2_utils.models import UiStep
-        with Fixture() as f:
-            f.runner.responses['codex']='codex-cli 0.164.0 --no-daemon'
-            code,out,err=self.invoke(f,['install','--agent','codex','--features','status','--json'])
-            self.assertEqual(code,0,out+err)
-            receipt_path=resolve_paths().data/'receipt.json'
-            receipt=state.load(receipt_path)
-            receipt.pending_ui.append(UiStep('hook-trust','status','codex','Confirm hook trust and start a new session.'))
-            state.save(receipt_path,receipt)
-            before=f.snapshot()
-            code,out,err=self.invoke(f,['doctor','--json'])
-            self.assertEqual(code,3,out+err)
-            findings={item['code']:item for item in json.loads(out)['findings']}
-            self.assertEqual(findings['hook-trust']['state'],'pending_ui')
-            self.assertEqual(findings['codex_error_event']['state'],'limited')
-            self.assertIn('unverified',findings['codex_error_event']['message'])
-            hooks=json.loads((resolve_paths().codex_home/'hooks.json').read_text())['hooks']
-            self.assertEqual(len(hooks),12)
-            self.assertFalse({'StopFailure','Notification','PostToolUseFailure'} & hooks.keys())
-            self.assertEqual(f.snapshot(),before)
-
-    def test_doctor_native_error_limit_is_nonblocking_and_read_only(self):
-        from iterm2_utils.discovery import resolve_paths
-        from tests.test_runtime_events import UUID
-        with Fixture() as f:
-            f.runner.responses['codex']='codex-cli 0.163.0 --no-daemon'
-            code,out,err=self.invoke(f,['install','--agent','codex','--features','status','--json'])
-            self.assertEqual(code,0,err)
-            before=f.snapshot()
-            for live in (False,True):
-                # Discovery's help response stays separate from the live read.
-                original=f.runner.run
-                def run(argv,**kwargs):
-                    if argv[1:3]==['session','get-status']:
-                        f.runner.calls.append((argv,kwargs['timeout'],kwargs.get('stdin')))
-                        return subprocess.CompletedProcess(argv,0,'{"status":"done","detail":"PRIVATE"}','')
-                    return original(argv,**kwargs)
-                f.runner.responses['it2']='session-status set-status --background-tasks --background-tasks-delta --turn-open --if-turn-open --if-background-tasks --json'
-                with patch.dict('os.environ',{'TERM_SESSION_ID':UUID}), patch.object(f.runner,'run',side_effect=run):
-                    code,out,err=self.invoke(f,['doctor','--json',*(['--live'] if live else [])])
-                self.assertEqual(code,0,out+err)
-                findings={item['code']:item for item in json.loads(out)['findings']}
-                self.assertEqual(findings['codex_error_event']['state'],'limited')
-                self.assertIn('0.163.0',findings['codex_error_event']['message'])
-                self.assertEqual(findings['status_backend']['state'],'ready')
-                if live:self.assertEqual(findings['status_api']['state'],'ready')
-                api_calls=[call for call in f.runner.calls if call[0][1:3]==['session','get-status']]
-                self.assertEqual(len(api_calls),int(live))
-                self.assertFalse(any(call[0][0].endswith('/cc-status') or
-                    call[0][1:2]==['set-status'] and call[0][2:]!=['--help'] for call in f.runner.calls))
-                self.assertNotIn('PRIVATE',out+err)
-                self.assertEqual(f.snapshot(),before)
-            settings=resolve_paths().config/'runtime.json'
-            settings.write_text('{PRIVATE')
-            code,out,err=self.invoke(f,['doctor','--json'])
-            self.assertEqual(code,2)
-            self.assertNotIn('PRIVATE',out+err)
-
-    def invoke(self, f, args):
+class CliTests(MigrationFixture):
+    def invoke(self, argv):
         out, err = io.StringIO(), io.StringIO()
-        with patch('iterm2_utils.cli.Runner', return_value=f.runner), contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
-            result = main(args)
-        return result, out.getvalue(), err.getvalue()
+        environment = {'HOME':str(self.home), 'OMP_PROFILE':'default', 'PI_CONFIG_DIR':'.omp'}
+        with patch.dict(os.environ, environment, clear=True), \
+             patch.object(cli, 'resolve_paths', return_value=self.context.paths), \
+             patch.object(cli, 'Runner', return_value=self.runner), \
+             contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+            code = cli.main(argv)
+        return code, out.getvalue(), err.getvalue()
 
-    def test_macos_fixture_is_independent_of_host_platform(self):
-        from iterm2_utils.discovery import discover, resolve_paths
-        for host in ('Linux', 'Darwin'):
-            with self.subTest(host=host), patch('platform.system', return_value=host):
-                with Fixture() as f:
-                    context = discover(resolve_paths(), f.runner)
-                    self.assertIn('macos', context.capabilities)
-                    code, _, err = self.invoke(f, ['plan', '--agent', 'claude', '--features', 'shell'])
-                    self.assertEqual(code, 0, err)
+    def test_invalid_and_removed_inputs_never_discover_or_create(self):
+        common = ['launch-omp','--profile','Shell','--cwd',str(self.home)]
+        cases = [common, common+['--mode','new','--handoff','/unused'],
+                 common+['--mode','shell','--resume-id','x'],
+                 common+['--mode','resume','--resume-file','/unused'],
+                 common+['--mode','handoff'], common+['--mode','new','--allow-duplicate'],
+                 ['launch-codex'], ['plan','--agent','codex','--features','shell'],
+                 ['bootstrap-skill','--agent','claude'],
+                 ['migrate-omp','--apply','--dry-run'],
+                 ['plan','--features','shell','--appearance-config','/unused'],
+                 ['plan','--features','bogus']]
+        before = self.snapshot()
+        with patch.object(cli,'discover',side_effect=AssertionError('discovery')), \
+             patch.object(launch,'create_tab',side_effect=AssertionError('creation')):
+            for args in cases:
+                with self.subTest(args=args):
+                    code, out, err = self.invoke(args)
+                    self.assertEqual(code,2,out+err)
+                    self.assertEqual(self.snapshot(),before)
+        self.assertEqual(self.runner.calls,[])
 
-    def test_fixture_restores_nested_platform_and_home_after_exception(self):
-        import os
-        import platform
-        with patch('platform.system', return_value='HostOS'), patch.dict(os.environ, {'HOME': '/fixture-host-home'}):
-            with Fixture() as outer:
-                self.assertEqual(platform.system(), 'Darwin')
-                with self.assertRaisesRegex(RuntimeError, 'fixture failure'):
-                    with Fixture(platform='Linux') as inner:
-                        inner_home = inner.home
-                        self.assertEqual(platform.system(), 'Linux')
-                        self.assertEqual(os.environ['HOME'], str(inner.home))
-                        raise RuntimeError('fixture failure')
-                self.assertFalse(inner_home.exists())
-                self.assertEqual(platform.system(), 'Darwin')
-                self.assertEqual(os.environ['HOME'], str(outer.home))
-            self.assertFalse(outer.home.exists())
-            self.assertEqual(platform.system(), 'HostOS')
-            self.assertEqual(os.environ['HOME'], '/fixture-host-home')
+    def test_bootstrap_never_discovers_and_resolves_named_profile(self):
+        with patch.object(cli,'discover',side_effect=AssertionError('discovery')):
+            before = self.snapshot()
+            code,out,err = self.invoke(['bootstrap-skill','--skill','iterm2-launch',
+                                      '--omp-profile','work','--dry-run','--json'])
+            self.assertEqual(code,0,out+err)
+            self.assertEqual(self.snapshot(),before)
+            code,out,err = self.invoke(['bootstrap-skill','--skill','iterm2-launch',
+                                      '--omp-profile','work','--json'])
+            self.assertEqual(code,0,out+err)
+        destination = self.home/'.omp/profiles/work/agent/skills/iterm2-launch'
+        self.assertTrue((destination/'references/resume.md').is_file())
+        self.assertFalse((destination.parent/'iterm2-setup').exists())
+        self.assertFalse((self.home/'.omp/profiles/work/agent/config.yml').exists())
+        self.assertEqual(self.runner.calls,[])
 
-    def test_linux_fixture_rejects_plan_and_install_without_writes(self):
-        with Fixture(platform='Linux') as f:
-            before = f.snapshot()
-            for command in ('plan', 'install'):
-                with self.subTest(command=command):
-                    code, out, err = self.invoke(f, [command, '--agent', 'claude', '--features', 'shell', '--json'])
-                    self.assertEqual(code, 2, err)
-                    self.assertTrue(any(item['code'] == 'unsupported_platform' and item['state'] == 'unavailable'
-                                        for item in json.loads(out)['findings']))
-                    self.assertEqual(f.snapshot(), before)
+    def test_legacy_install_update_stop_before_discovery_and_redact_snapshots(self):
+        path = self.home/'legacy.json'
+        self.save(self.historical([self.json_resource(path, before='PRIVATE_SNAPSHOT')]))
+        before = self.snapshot()
+        with patch.object(cli,'discover',side_effect=AssertionError('discovery')):
+            for args in (['install','--features','status'], ['update'], ['doctor']):
+                code,out,err = self.invoke([*args,'--json'])
+                self.assertEqual(code,2,out+err)
+                self.assertIn('migration_required',out)
+                self.assertNotIn('PRIVATE_SNAPSHOT',out+err)
+                self.assertNotIn('resources',json.loads(out))
+        self.assertEqual(self.snapshot(),before)
+        self.assertEqual(self.runner.calls,[])
 
-    def test_empty_choice_writes_nothing(self):
-        with Fixture() as f:
-            before = f.snapshot()
-            code, _, _ = self.invoke(f, ['plan', '--agent', 'claude', '--features', ''])
-            self.assertEqual(code, 2)
-            self.assertEqual(f.snapshot(), before)
-            self.assertEqual(f.runner.calls, [])
+    def test_migration_defaults_preview_then_cleans_without_agent_discovery(self):
+        path = self.home/'legacy.json'; path.write_text('{"ours":1,"private":"PRIVATE_SETTINGS"}')
+        self.save(self.historical([self.json_resource(path, before='PRIVATE_SNAPSHOT')]))
+        before = self.snapshot()
+        with patch.object(cli,'discover',side_effect=AssertionError('discovery')):
+            for extra in ([],['--dry-run']):
+                code,out,err = self.invoke(['migrate-omp',*extra,'--json'])
+                self.assertEqual(code,0,out+err)
+                self.assertEqual(self.snapshot(),before)
+                self.assertFalse(json.loads(out)['restore_external'])
+                self.assertNotIn('PRIVATE_',out+err)
+            code,out,err = self.invoke(['migrate-omp','--apply','--json'])
+        self.assertEqual(code,0,out+err)
+        self.assertEqual(json.loads(path.read_text()),{'ours':'PRIVATE_SNAPSHOT','private':'PRIVATE_SETTINGS'})
+        self.assertNotIn('PRIVATE_',out+err)
+        self.assertEqual(self.runner.calls,[])
 
-    def test_doctor_redacts_other_mcp_env(self):
-        with Fixture() as f:
-            folder = f.home / '.claude'
-            folder.mkdir()
-            (folder / 'settings.json').write_text(json.dumps({'mcpServers': {'other': {'env': {'TOKEN': 'UNRELATED_SECRET_MARKER'}}}}))
-            before = f.snapshot()
-            code, out, err = self.invoke(f, ['doctor', '--json'])
-            self.assertNotIn('UNRELATED_SECRET_MARKER', out + err)
-            self.assertIn(code, (0, 2, 3))
-            json.loads(out)
-            self.assertEqual(f.snapshot(), before)
+    def test_invalid_receipt_is_not_treated_as_empty_install(self):
+        path = self.context.paths.data/'receipt.json'
+        path.parent.mkdir(parents=True); path.write_text('{PRIVATE_INVALID')
+        before = self.snapshot()
+        with patch.object(cli,'discover',side_effect=AssertionError('discovery')):
+            for args in (['install','--features','shell'],['plan','--features','shell'],['doctor']):
+                code,out,err = self.invoke([*args,'--json'])
+                self.assertEqual(code,2,out+err)
+                self.assertIn('ownership_unavailable',out)
+                self.assertNotIn('PRIVATE_INVALID',out+err)
+        self.assertEqual(self.snapshot(),before)
 
-    def test_plan_read_only_and_scoped(self):
-        with Fixture() as f:
-            before = f.snapshot()
-            code, out, err = self.invoke(f, ['plan', '--agent', 'claude', '--features', 'shell', '--json'])
-            self.assertEqual(code, 0, err)
-            self.assertEqual(f.snapshot(), before)
-            self.assertFalse(any('codex' in call[0][0] for call in f.runner.calls))
-            self.assertEqual(json.loads(out)['selection']['features'], ['shell'])
+    def test_launch_modes_reach_real_orchestration_and_exact_native_command(self):
+        import shlex
+        from iterm2_utils.omp_sessions import SessionBinding, binding_record
+        from types import SimpleNamespace
+        from iterm2_utils import launch_checks
+        executable = self.home/'omp'
+        executable.write_text('fixture binary'); executable.chmod(0o700)
+        def run(argv,**kwargs):
+            self.assertIn(argv,([str(executable),'--help'],[str(executable),'--version']))
+            return SimpleNamespace(returncode=0,stdout='--cwd --profile --config --resume')
+        for mode in ('shell','new','handoff','resume'):
+            with self.subTest(mode=mode):
+                sid = 'abcdefab-1234-4123-8123-abcdefabcdef'
+                saved = self.home/'dialog.jsonl'
+                saved.write_text(json.dumps(dict(type='session',id=sid,cwd=str(self.home)))+'\n')
+                artifact = launch.prepare_handoff(self.home,'PRIVATE_TASK') if mode=='handoff' else None
+                if artifact:
+                    self.addCleanup(__import__('shutil').rmtree,artifact.path.parent)
+                observed = dict(argv=None,creates=0,now=0.)
+                profile = self.profile
+                binding = SessionBinding('S','T','W',saved,sid,self.home,profile,123,'birth','generation')
+                class Terminal:
+                    def __init__(self,*args):pass
+                    def bindings(self):return [binding] if observed['creates'] else []
+                    def process_start(self,pid):return 'birth'
+                    def observe(self,terminal_id):return binding_record(binding)
+                    def select_window(self,window,environment):
+                        self_outer.assertEqual(window,'W')
+                        return 'W'
+                    def profiles(self):
+                        return [dict(name='Shell' if mode=='shell' else 'Omp',guid='G')]
+                    def panes(self):return [dict(terminal_id='S',tab_id='T',window_id='W')]
+                    def profile(self,name):return dict(name='Shell' if mode=='shell' else 'Omp',guid='G')
+                    def variable(self,terminal_id,name):
+                        return {'session.profileName':'Shell' if mode=='shell' else 'Omp',
+                                'session.jobName':'zsh' if mode=='shell' else 'omp',
+                                'session.commandLine':shlex.join(['/bin/zsh','-il'] if mode=='shell' else observed['argv'] or [])}[name]
+                async def create(window,profile,guid,command):
+                    observed['creates'] += 1
+                    self.assertEqual((window,profile,guid),('W','Shell' if mode=='shell' else 'Omp','G'))
+                    if mode!='shell':
+                        outer=shlex.split(command)
+                        login=shlex.split(outer[2].split(' && exec ',1)[1])
+                        observed['argv']=shlex.split(login[2].split('; exec ',1)[1])[3:]
+                    else:
+                        outer=shlex.split(command)
+                        self.assertEqual(shlex.split(outer[2].split(' && exec ',1)[1]),['/bin/zsh','-il'])
+                    if artifact:
+                        artifact.ack_path.write_text(json.dumps(dict(request_id=artifact.request_id,
+                            thread_id=sid,cwd=str(self.home),accepted_task='PRIVATE_ACK',first_step='read')))
+                        artifact.ack_path.chmod(0o600)
+                    return LaunchCreation('created_unverified','W','T','S',30,())
+                self_outer = self
+                def shell_identity(zsh,runner,environment,cwd,name):
+                    self.assertNotEqual(mode,'shell','Shell must not probe omp')
+                    self.assertEqual((cwd,name),(self.home,'default'))
+                    return executable,[],'',{'HOME':str(self.home)},self.profile
+                args=['launch-omp','--mode',mode,'--window','W','--profile',
+                      'Shell' if mode=='shell' else 'Omp','--cwd',str(self.home),'--json']
+                if artifact:args += ['--handoff',str(artifact.path)]
+                if mode=='resume':args += ['--resume-file',str(saved),'--resume-id',sid]
+                with patch.object(cli,'discover',side_effect=AssertionError('discovery')), \
+                     patch.object(launch_checks.platform,'system',return_value='Darwin'), \
+                     patch.object(launch_checks,'_iterm',return_value=(self.home,{})), \
+                     patch.object(launch_checks.shutil,'which',return_value='/bin/zsh'), \
+                     patch.object(launch_checks,'_shell_identity',side_effect=shell_identity), \
+                     patch.object(self.runner,'run',side_effect=run), \
+                     patch.object(launch_checks,'Terminal',Terminal), \
+                     patch.object(launch,'Terminal',Terminal),patch.object(launch,'create_tab',create), \
+                     patch.object(launch.time,'monotonic',side_effect=lambda:observed['now']), \
+                     patch.object(launch.time,'sleep',side_effect=lambda n:observed.update(now=observed['now']+n)):
+                    code,out,err=self.invoke(args)
+                self.assertEqual(code,0,out+err)
+                self.assertEqual(observed['creates'],1)
+                self.assertEqual(json.loads(out)['status'],'launched')
+                self.assertNotIn('PRIVATE_',out+err)
+                if mode=='shell':self.assertIsNone(observed['argv'])
+                elif mode=='resume':
+                    self.assertEqual(observed['argv'],[str(self.home/'omp'),'--profile','default','--cwd',str(self.home),'--resume',str(saved)])
+                    self.assertEqual(json.loads(out)['history'],'verified')
+                else:
+                    argv=observed['argv']
+                    self.assertEqual(argv[:5],[str(self.home/'omp'),'--profile','default','--cwd',str(self.home)])
+                    self.assertEqual(json.loads(Path(argv[6]).read_text()),{'autoResume':False})
+                    self.addCleanup(__import__('shutil').rmtree,Path(argv[6]).parent)
+                    if mode=='handoff':self.assertEqual(json.loads(out)['ack'],'received')
+                    else:self.assertEqual(len(argv),7)
 
-    def test_mcp_reports_pending_ui(self):
-        with Fixture() as f:
-            uvx=f.bin/'uvx'
-            uvx.write_text('#!/bin/sh\nexit 0\n')
-            uvx.chmod(0o755)
-            code, out, _ = self.invoke(f, ['plan', '--agent', 'claude', '--features', 'mcp', '--json'])
-            self.assertEqual(code, 3)
-            self.assertIn('mcp-server-iterm2==0.1.1', out)
-            self.assertIn('mcp<2', out)
+    def test_historical_journal_without_receipt_requires_explicit_migration(self):
+        journal = self.context.paths.data/'journal'; journal.mkdir(parents=True)
+        from iterm2_utils import state
+        state.save_recovery(journal/'intent.json',self.historical([],('shell',)))
+        before = self.snapshot()
+        with patch.object(cli,'discover',side_effect=AssertionError('discovery')):
+            code,out,err = self.invoke(['install','--features','shell','--json'])
+        self.assertEqual(code,2,out+err)
+        self.assertIn('migration_required',out)
+        self.assertEqual(self.snapshot(),before)
 
-    def test_unknown_feature_returns_selection_error(self):
-        with Fixture() as f:
-            code, _, _ = self.invoke(f, ['plan', '--agent', 'codex', '--features', 'bogus'])
-            self.assertEqual(code, 2)
+    def test_unknown_creation_keeps_ids_and_redaction_without_retry(self):
+        observed = dict(creates=0,now=0.)
+        overlay = self.home/'unknown-launch'; overlay.mkdir(mode=0o700)
+        class Terminal:
+            def __init__(self,*args):pass
+            def panes(self):return []
+            def profile(self,name):return dict(name='Omp',guid='G')
+            def variable(self,sid,name):return ''
+        async def create(*args):
+            observed['creates'] += 1
+            return LaunchCreation('unknown','W','T',None,30,())
+        identity = LaunchIdentity(self.home/'omp',(),((str(self.home/'omp'),),),'future')
+        inspection = LaunchInspection(self.home/'it2',Path('/bin/zsh'),'G','W',identity)
+        with patch.object(launch,'inspect_launch',return_value=(inspection,[])), \
+             patch.object(launch,'Terminal',Terminal),patch.object(launch,'create_tab',create), \
+             patch.object(launch.tempfile,'mkdtemp',return_value=str(overlay)), \
+             patch.object(launch.time,'monotonic',side_effect=lambda:observed['now']), \
+             patch.object(launch.time,'sleep',side_effect=lambda n:observed.update(now=observed['now']+n)):
+            code,out,err=self.invoke(['launch-omp','--mode','new','--window','W',
+                '--profile','Omp','--cwd',str(self.home),'--json'])
+        self.assertEqual(code,3,out+err)
+        output=json.loads(out)
+        self.assertEqual((output['status'],output['window_id'],output['tab_id'],output['session_id']),
+                         ('created_unverified','W','T',None))
+        self.assertEqual(observed['creates'],1)
+        self.assertEqual(output['command'],'unverified')
+        self.assertNotIn('argv',output)
 
-    def test_install_missing_mcp_runtime_and_dry_run_write_nothing(self):
-        with Fixture() as f:
-            before = f.snapshot()
-            for extra in ([], ['--dry-run']):
-                code,out,err = self.invoke(f,['install','--agent','codex','--features','mcp','--json',*extra])
-                self.assertEqual(code,2,err)
-                self.assertEqual(f.snapshot(),before)
-                self.assertEqual(json.loads(out)['findings'][-1]['code'],'uvx_missing')
+    def test_missing_resume_file_is_blocked_and_never_falls_back_to_new(self):
+        with patch.object(launch,'create_tab',side_effect=AssertionError('creation')):
+            code,out,err=self.invoke(['launch-omp','--mode','resume','--profile','Omp',
+                '--cwd',str(self.home),'--resume-file',str(self.home/'missing.jsonl'),
+                '--resume-id','abcdefab-1234-4123-8123-abcdefabcdef','--json'])
+        self.assertEqual(code,2,out+err)
+        output=json.loads(out)
+        self.assertEqual(output['status'],'blocked')
+        self.assertIsNone(output['tab_id'])
+        self.assertEqual(self.runner.calls,[])
 
-    def test_uninstall_missing_receipt_writes_nothing(self):
-        with Fixture() as f:
-            before = f.snapshot()
-            code,out,err = self.invoke(f,['uninstall','--features','shell','--json'])
-            self.assertEqual(code,2,err)
-            self.assertEqual(f.snapshot(),before)
-            self.assertEqual(json.loads(out)['findings'][0]['code'],'ownership_unavailable')
-
-    def test_update_missing_receipt_is_structured_and_read_only(self):
-        with Fixture() as f:
-            before=f.snapshot()
-            code,out,err=self.invoke(f,['update','--json'])
-            self.assertEqual(code,2);self.assertEqual(f.snapshot(),before)
-            data=json.loads(out);self.assertEqual(data['selection']['features'],[])
-            self.assertEqual(data['findings'][0]['code'],'ownership_unavailable')
-
-    def test_reconcile_requires_known_pending_step(self):
-        with Fixture() as f:
-            before=f.snapshot()
-            code,out,err=self.invoke(f,['reconcile','--step','claude-native-status','--json'])
-            self.assertEqual(code,2)
-            self.assertEqual(json.loads(out)['findings'][0]['code'],'ownership_unavailable')
-            self.assertEqual(f.snapshot(),before)
-
-    def test_doctor_reports_corrupt_receipt_without_mutation(self):
-        from iterm2_utils.discovery import resolve_paths
-        with Fixture() as f:
-            code,out,err=self.invoke(f,['install','--agent','codex','--features','shell','--json'])
-            self.assertEqual(code,0,err)
-            path=resolve_paths().data/'receipt.json';path.write_text('{PRIVATE_CORRUPT_RECEIPT')
-            before=f.snapshot()
-            code,out,err=self.invoke(f,['doctor','--json'])
-            self.assertEqual(code,2)
-            self.assertTrue(any(item['code']=='ownership_unavailable' and item['state']=='conflict' for item in json.loads(out)['findings']))
-            self.assertNotIn('PRIVATE_CORRUPT_RECEIPT',out+err)
-            self.assertEqual(f.snapshot(),before)
-
-    def test_launch_dispatches_before_general_discovery_and_receipts(self):
-        import importlib.util
-        self.assertIsNotNone(importlib.util.find_spec('iterm2_utils.launch'), 'Launch is not implemented')
-        from iterm2_utils.launch_checks import LaunchRequest
-        with Fixture() as f:
-            output = dict(mode='launch_codex', status='created_unverified', window_id='w',
-                          tab_id='t', session_id=None, profile='Codex', findings=[])
-            with patch('iterm2_utils.cli.discover', side_effect=AssertionError('general discovery')), \
-                    patch('iterm2_utils.cli.state.load', side_effect=AssertionError('receipt')), \
-                    patch('iterm2_utils.launch.launch', return_value=(3, output)) as launch:
-                args = ['launch-codex', '--window', 'w', '--profile', 'Codex', '--cwd', str(f.home), '--handoff', str(f.home/'handoff')]
-                code, out, err = self.invoke(f, args+['--json'])
-                self.assertEqual(code, 3, err)
-                self.assertEqual(json.loads(out), output)
-                request = launch.call_args.args[0]
-                self.assertEqual(request, LaunchRequest('w', 'Codex', f.home, f.home/'handoff'))
-                code, out, err = self.invoke(f, args)
-                self.assertEqual(code, 3, err)
-                for value in ('created_unverified', 'window_id="w"', 'tab_id="t"', 'session_id=null'):
-                    self.assertIn(value, out)
-
-    def test_launch_requires_all_values_and_rejects_extra_codex_flags(self):
-        args = ['launch-codex', '--window', 'w', '--profile', 'Codex', '--cwd', '/tmp', '--handoff', '/tmp/task']
-        with Fixture() as f:
-            for offset in (1, 3, 5, 7):
-                code, _, _ = self.invoke(f, args[:offset]+args[offset+2:])
-                self.assertEqual(code, 2)
-            code, _, _ = self.invoke(f, args+['--no-alt-screen'])
-            self.assertEqual(code, 2)
-            self.assertEqual(f.runner.calls, [])
-
-    def test_launch_text_escapes_invalid_target_controls(self):
-        import importlib.util
-        self.assertIsNotNone(importlib.util.find_spec('iterm2_utils.launch'))
-        output = dict(mode='launch_codex', status='blocked', window_id=None, tab_id=None,
-                      session_id=None, profile='bad\nprofile\x1b', findings=[])
-        with Fixture() as f, patch('iterm2_utils.launch.launch', return_value=(2, output)):
-            code, out, err = self.invoke(f, ['launch-codex', '--window', 'w', '--profile', output['profile'],
-                '--cwd', str(f.home), '--handoff', str(f.home/'handoff')])
-            self.assertEqual(code, 2, err)
-            self.assertEqual(len(out.splitlines()), 1)
-            self.assertNotIn('\x1b', out)
+    def test_explicit_external_restore_choice_is_visible_in_migration_preview(self):
+        before = self.snapshot()
+        code,out,err=self.invoke(['migrate-omp','--restore-external','--json'])
+        self.assertEqual(code,0,out+err)
+        self.assertTrue(json.loads(out)['restore_external'])
+        self.assertEqual(self.snapshot(),before)

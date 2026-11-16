@@ -49,6 +49,11 @@ def build(context: Context, *, skill='iterm2-setup') -> ChangeSet:
             changes.findings.append(_conflict(None, 'migration_required',
                 'Resolve this bootstrap receipt’s historical cleanup before replacing its owned bundle.'))
             return changes
+        profile = context.omp_profile or resolve_omp_profile(context.paths.home, {})
+        if receipt is not None and receipt.selection.omp_profile != profile:
+            changes.findings.append(_conflict(None, 'skill_profile_conflict',
+                'Keep the recorded omp profile until its owned skill copy is explicitly removed.'))
+            return changes
         owned = {r['target']: r['installed'] for r in receipt.resources
                  if r['kind'] == 'file' and r['owners'] == [OWNER]} if receipt else {}
         source = context.paths.repo/'skills'/skill
@@ -90,6 +95,14 @@ def install(context, runner, *, dry_run=False, skill='iterm2-setup') -> list[Fin
     if skill not in BUNDLES:
         return build(context, skill=skill).findings
     isolated = _context(context, skill)
+    try:
+        for path in (isolated.paths.data/'receipt.json', isolated.paths.data/'journal/intent.json',
+                     isolated.paths.data/'journal/result.json'):
+            if isinstance(state.load(path), LegacyReceipt):
+                return [_conflict(None, 'migration_required',
+                    'Run explicit migrate-omp before recovering historical bootstrap ownership.')]
+    except (ValueError, OSError):
+        return [_conflict(None, 'skill_ownership_unavailable', 'Bootstrap ownership is unavailable.')]
     if not dry_run and (isolated.paths.data/'journal').exists():
         try:
             with engine._lock(isolated):

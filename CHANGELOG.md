@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+Exposed the omp-only public CLI: `launch-omp --mode shell|new|handoff|resume`,
+exact `--resume-file`/`--resume-id`, explicit preview-default `migrate-omp`, and
+profile-aware independent skill bootstrap. Removed historical agent selectors
+and interim launch flags without aliases. All three retained skills now separate
+ordinary shell, explicit omp, exact continuation and independent evidence;
+copying a bundle does not authorize settings changes. Owned-file CAS/personal
+files and historical migration boundaries are retained. Isolated CLI/ownership
+and structural fixtures are authored; execution and agent scenarios NOT RUN,
+queued to Task10, not live acceptance.
+
 Added one-tab shell/new/handoff/exact-file omp launch with capability checks,
 last-owned autoResume:false overlays, independent identity/history/ack evidence
 and a generic bounded terminal transport. Removed Codex launch version/config

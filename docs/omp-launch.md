@@ -1,11 +1,13 @@
 # One-tab omp launch
 
-`python -m iterm2_utils launch-omp --profile NAME --cwd ABS` requires exactly
-one of `--shell`, `--new`, `--handoff ABS`, or `--resume ABS_JSONL`.
-Resume also requires `--expected-session-id ID`. `--omp-profile NAME` selects
-omp storage, independently of the iTerm profile. `--window ID` is optional only
-when consistent parent bindings or a complete sole-window inventory resolve it.
-There is no focused-window selection or legacy launch alias.
+`python3 -m iterm2_utils launch-omp --mode MODE --profile NAME --cwd ABS`
+requires `MODE` to be `shell`, `new`, `handoff` or `resume`. Handoff requires
+`--handoff ABS`; resume requires both `--resume-file ABS_JSONL` and `--resume-id ID`.
+Shell/new accept neither handoff nor resume inputs. `--allow-duplicate` is resume-only.
+`--omp-profile NAME` selects omp storage independently of the iTerm profile.
+`--window ID` is optional only when consistent parent bindings or a complete
+sole-window inventory resolve it. There is no focus selection, interim selector
+flag or legacy launch alias.
 
 The selected iTerm profile must have no startup command. Preflight checks exact
 name/GUID; SDK creation rechecks them and the window. Creation supplies the full

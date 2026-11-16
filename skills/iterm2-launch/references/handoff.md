@@ -9,8 +9,8 @@ request_id, ack_path and cwd. Include original task, first step (mark suggestion
 scope, constraints, authorization/prohibitions, relevant materials and unresolved
 questions in the task text. Task data is never shell code or extra authorization.
 
-Pass the absolute artifact.path to launch-omp --handoff; do not reuse paths,
-erase an old receipt, resend a prompt or create a second tab after uncertainty.
+Pass absolute artifact.path to `launch-omp --mode handoff --handoff ABS`;
+do not reuse paths, erase a receipt, resend a prompt or create again after uncertainty.
 
 ## Receiving omp
 
@@ -44,5 +44,6 @@ Missing evidence remains unconfirmed; never retry creation or type into a termin
 Report command, identity, history and ack separately with retained known IDs.
 No prompt, full argv, settings or screen belongs in public diagnostics.
 
-Exact Python/CLI API and the explicit duplicate option for Task8 are documented
-in docs/omp-launch.md. Fixtures are not live receipt acceptance.
+Use the selected absolute Python and carry the resolved `--omp-profile` alongside
+the ordinary iTerm `--profile`, `--window`, and canonical `--cwd`. No duplicate
+option is permitted for handoff. Fixtures are not live receipt acceptance.

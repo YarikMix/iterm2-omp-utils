@@ -1,80 +1,57 @@
 ---
 name: iterm2-setup
-description: Use when setting up, checking, updating or removing selective iTerm2 integrations for Codex CLI or Claude Code on macOS with zsh, including clipboard, status, notifications, restore, MCP, shell integration, shortcuts, repository tab appearance and project launcher buttons.
+description: Use when setting up, diagnosing, migrating, updating or removing selective omp iTerm2 integrations on macOS with zsh, including native status, notifications, clipboard, shortcuts, MCP, shell, appearance and project buttons.
 ---
 
-# iTerm2 setup
+# Selective omp setup
 
-Use the public repository https://github.com/YarikMix/iterm2-utils. Obtain it in a
-new directory if needed, read its README and run commands from that checkout.
-This file can be read directly before the current agent refreshes skill discovery.
-No private skills, corporate services or workspace framework are required.
-Для операций со списком project-launcher используйте отдельный публичный навык
-https://github.com/YarikMix/iterm2-utils/tree/main/skills/iterm2-projects.
+Use https://github.com/YarikMix/iterm2-utils from a verified checkout/release;
+read README there. This skill can be read directly before discovery refresh.
+Copying a skill authorizes **no settings changes** and selects no features.
 
-**Codex sandbox:** When this skill runs inside Codex, pass
-`sandbox_permissions: "require_escalated"` on the tool call before invoking
-`it2`, `doctor --live` or `reconcile`. Do not probe from the default sandbox
-first. This is tool-call metadata, not a CLI flag. Keep the approval prefix
-narrow: use only the selected bundled `it2` executable or the exact saved
-Python executable for `iterm2_utils`; do not request broad filesystem access.
-If the host cannot provide escalation, report the setup as blocked and do not
-retry automatically. Other hosts use their native permission mechanism.
+1. Choose existing Python 3.11+. Run `python3 -m iterm2_utils doctor --json`
+   read-only. Ask only for missing choices: selected omp storage profile,
+   [features](references/features.md) and ordinary iTerm parent profile. Preserve
+   explicit choices; “setup” does not mean all nine features.
+2. Resolve omp storage using the shared `resolve_omp_profile`: explicit
+   `--omp-profile`, then `OMP_PROFILE`, then `PI_PROFILE`; respect `PI_CONFIG_DIR`
+   and default-only `PI_CODING_AGENT_DIR`. Never guess the default directory over
+   a named/effective profile. Parent iTerm profile is a separate selection.
+3. Explain only selected missing dependencies. Installing packages/settings
+   needs authorization, not permission inferred from copying this bundle.
+   Preserve model, credentials, endpoint and approval settings. Capability/schema
+   evidence governs compatibility, not exact version strings. Missing capability
+   blocks its feature, not shell or other independent features.
+4. Preview exact selected changes, then matching dry-run/install when authorized:
 
-1. Choose an available Python **3.11+** interpreter; check its version. If absent,
-   report that prerequisite before executing setup. Do not install another agent
-   as a workaround. Run `python3 -m iterm2_utils doctor --json` read-only.
-2. Ask which **detected agents and features** the colleague wants. Preserve choices
-   already explicit in the request. Explain only the relevant choices from
-   [features](references/features.md); never infer all features from “setup”.
-   Bootstrap copies the skill only; it authorizes none of the nine features.
-3. List missing dependencies for the chosen features before installing them with
-   an existing package manager. Keep the chosen agents and features; dependencies
-   do not justify a second agent, a different feature or installing Peekaboo.
-   Appearance needs `iterm2` importable in the selected Python 3.11+ interpreter;
-   choose an existing suitable interpreter with absolute `ITERM2_UTILS_PYTHON`.
-   Do not run pip at shell startup.
-4. Run `python3 -m iterm2_utils plan --agent AGENT --features CSV --json` with only
-   the selected values (`AGENT`: `codex`, `claude`, `both`). For shortcuts add
-   `--shortcuts CSV`; choose the existing parent with `--parent-profile NAME` if
-   needed. For Codex-only `appearance`, add `--appearance-config /path/to/rules.json`
-   on first plan/install; validate the JSON and selected Python SDK prerequisite
-   from [features](references/features.md). Preserve that explicit path for the
-   matching dry-run/install; never publish its contents or personal roots.
-   For selected `project-launcher`, use a private local JSON and explicit
-   `--project-launcher-config /path/to/projects.json` for first plan/install.
-   Read the strict schema/prerequisites in [features](references/features.md).
-   Keep actual project names, folders and inventory local; use fictional
-   Project A / Project B in public examples. To add a project, edit that local
-   config and repeat plan/install with the flag; update reuses the owned copy.
-   API readback is not visual acceptance; report unverified live behavior.
-   Existing appearance also follows ordinary cd: registered roots/subdirectories
-   apply their pair; outside resets Tab Color/custom icon, including light/dark.
-   No new flag/schema is needed. Preserve foreign shell hooks and settings.
-   Use separate calls when agents want different features/shortcuts;
-   inspect `selection.agent_features` and `agent_shortcuts`. Resolve conflicts
-   explicitly; preserve foreign settings and MCP. For `foreign_notifications`,
-   offer keeping the external system alone or explicit `--coexist-notifications`
-   in plan/install, explaining duplicate banners. Ordinary opt-in is insufficient.
-5. Run the matching `install` command, then `doctor --json` (and `doctor --live
-   --json` for a chosen live connection). Existing selection authorizes necessary
-   writes; do not repeatedly ask for the same approval. Installation commits each
-   available feature separately: report actual completed, blocked and pending
-   results, without adding replacements for failed choices.
-6. Follow [UI verification](references/ui.md) for pending steps. Discover Peekaboo
-   from the session's actual tool schemas and connection/permission result; a
-   detected CLI executable is insufficient. No tool means exact localized manual
-   instructions. A UI policy denial stays denied: never try osascript, another
-   automation tool or TCC changes to bypass it. System permission and hook trust
-   dialogs remain human actions. Do not restart the colleague's session.
-7. After “done”, run `reconcile --step CODE --json` for the actual pending code,
-   then verify again; the user's confirmation alone cannot mark ready. New hooks
-   or MCP may require the colleague to start a new agent session. Keep pending
-   findings when verification fails and explain the remaining step.
-   For appearance verify cd between roots/subdirectories and outside, rapid cd
-   and Codex return under APS in owned temporary tabs; follow ui.md. Fixture and
-   read-only API success do not establish visual acceptance.
+   ```sh
+   python3 -m iterm2_utils plan --features status,notifications --omp-profile work --json
+   python3 -m iterm2_utils install --features status,notifications --omp-profile work --dry-run --json
+   python3 -m iterm2_utils install --features status,notifications --omp-profile work --json
+   ```
 
-For maintenance and dependency failures read
-[troubleshooting](references/troubleshooting.md). Summarize what actually changed,
-what remains pending and which live checks were not performed.
+   For shortcuts supply `--shortcuts CSV`; selecting `resume` requires explicit
+   `--resume-key`. `--notify-errors` is explicit notification error opt-in.
+   Appearance/project-launcher first install needs its selected local JSON via
+   `--appearance-config` / `--project-launcher-config`. Preserve the same path
+   for preview/apply; never print private roots/config bodies. Native status and
+   notifications have no hook/daemon fallback; clipboard uses Cmd+C, not Ctrl+C.
+5. Historical receipt/journal? Stop normal install/update and preview
+   `python3 -m iterm2_utils migrate-omp --json`. Only explicit `--apply` mutates.
+   `--restore-external` is a separate visible choice to reactivate proven old
+   external values, never default. Recovery/CAS and exact receipt ownership
+   protect user edits, referenced profiles and old live sessions. Unresolved
+   cleanup/source intent stays pending; transfer alone is not feature installation.
+6. Run doctor after install. Preserve actual completed/blocked/pending results;
+   follow [UI verification](references/ui.md) and reconcile actual codes. Human
+   “done”, SDK readback and saved settings do not prove native events or banners.
+   Missing/denied UI access means manual instructions and pending state; no
+   alternate automation, TCC changes or auto-install. System dialogs remain human.
+
+For maintenance and independent bundle copies read
+[troubleshooting](references/troubleshooting.md). Extra personal skill files,
+foreign settings and changed owned files remain intact; no recursive deletion or
+force/adoption shortcut. Do not close/restart existing sessions or type commands
+into running agents. For an ordinary tab use iterm2-launch shell mode; for project
+list changes use iterm2-projects. Report unperformed live acceptance separately
+from structural validation and isolated agent decision scenarios.

@@ -2,69 +2,65 @@
 
 ## Candidate and schema
 
-Preflight Python 3.11+, zsh, iTerm2 SDK/API 3.7.6, and importable `iterm2`.
-Keep the absolute interpreter path in `ITERM2_UTILS_PYTHON`; do not auto-install
-or request permissions. Start from a fresh `resolve_paths()` result and
-`state.load(path)`. The source document is normalized as:
+Use Python3.11+ with official SDK, zsh and authorized API. Require typed launcher
+inventory/component capability, not an exact iTerm version. Keep the selected
+absolute interpreter in `ITERM2_UTILS_PYTHON`; no automatic install/permissions.
+Read fresh `resolve_paths()` and current `state.load(data/receipt.json)` locally.
 
 ```json
 {"profiles":["Profile A"],"projects":[{"id":"project-a","name":"Project A","path":"/tmp/project-a"}]}
 ```
 
-The path above is a fictional example. With no receipt, first install is allowed
-only when no manual/foreign panel exists and inventory is complete. A missing
-receipt with such a panel, or incomplete inventory, is blocked: do not import or
-adopt it. If an owned receipt exists but its source is absent, copy the fresh
-installed config as the starting point. Write a new candidate in a temporary
-private location with mode `0600`; do not include its contents in output. Keep
-`profiles`, ids, ordering, and `parent_profile` unless explicitly changed.
-Resolve by exact id, then unique name, then normalized absolute path. Duplicate
-ids/names/paths require a question; removing a missing record is a no-op. New
-paths must be absolute and exist.
+Fictional example; actual paths are existing absolute directories. Both lists
+are nonempty; unique profile names/ids/names/physical paths, correct types and
+no unknown/duplicate fields or controls. Keep profile list, ids, ordering and
+receipt parent unless explicitly changed. Missing-record removal/repeated add
+is a no-op; resolve exact id, unique name, then normalized path. Ambiguity needs
+a choice. Rename/path change retains id/position and therefore retained GUIDs.
+
+No receipt plus manual/foreign panel or incomplete inventory blocks first
+install; no import/adoption. With ownership, start from the fresh installed
+0600 config if original source disappeared. Write a new private0600 candidate,
+not the installed file. Save receipt/config fingerprints, compare before apply;
+concurrent change invalidates the preview and stale argv, not the user's edit.
 
 ## Commands
 
-Use the selected agents and parent profile from the request/receipt. Replace
-`AGENT`, `NAME`, `CSV`, and `CONFIG` with separately quoted argv values.
+Use the receipt/request omp storage and parent, not an agent selector. Resolve
+storage with the shared native resolver, respecting explicit profile and its
+environment/directory overrides. Replace NAME/CONFIG with separately quoted argv.
 
 ```sh
-"$ITERM2_UTILS_PYTHON" -m iterm2_utils plan --agent AGENT --features project-launcher --parent-profile NAME --project-launcher-config CONFIG --json
-"$ITERM2_UTILS_PYTHON" -m iterm2_utils install --agent AGENT --features project-launcher --parent-profile NAME --project-launcher-config CONFIG --dry-run --json
-"$ITERM2_UTILS_PYTHON" -m iterm2_utils install --agent AGENT --features project-launcher --parent-profile NAME --project-launcher-config CONFIG --json
+"$ITERM2_UTILS_PYTHON" -m iterm2_utils plan --features project-launcher --omp-profile work --parent-profile NAME --project-launcher-config CONFIG --json
+"$ITERM2_UTILS_PYTHON" -m iterm2_utils install --features project-launcher --omp-profile work --parent-profile NAME --project-launcher-config CONFIG --dry-run --json
+"$ITERM2_UTILS_PYTHON" -m iterm2_utils install --features project-launcher --omp-profile work --parent-profile NAME --project-launcher-config CONFIG --json
 "$ITERM2_UTILS_PYTHON" -m iterm2_utils doctor --json
 ```
 
-For removal, preview and then apply:
+Remove the last project by uninstalling only this feature, no empty config:
 
 ```sh
-"$ITERM2_UTILS_PYTHON" -m iterm2_utils uninstall --features project-launcher --agent AGENT --dry-run --json
-"$ITERM2_UTILS_PYTHON" -m iterm2_utils uninstall --features project-launcher --agent AGENT --json
+"$ITERM2_UTILS_PYTHON" -m iterm2_utils uninstall --features project-launcher --dry-run --json
+"$ITERM2_UTILS_PYTHON" -m iterm2_utils uninstall --features project-launcher --json
 ```
 
-Omit `--agent` only when the receipt's current consumers are intentionally
-removed together. `update` has no project config flag. A failed dry-run or
-doctor is a blocker; do not silently continue. Native readback/API success is
-not visual or click acceptance.
+For one removal preserve all other projects in the candidate. `update` has no
+config flag; it reuses owned copy. Unrelated features and shared dependencies
+remain. Buttons use action27/version2 and ordinary login shell, never implicitly
+launch omp. Explicit agent launch is a separate authorized operation.
 
-## Transitions and safety
+## Safety and evidence
 
-| Situation | Action |
-| --- | --- |
-| owned copy, add | reread, merge the new entry, preserve ids/order, plan → dry-run → install |
-| repeat add | no-op; do not rewrite |
-| rename or move | retain id and position; validate the new path |
-| remove one | write a candidate containing the other entries |
-| remove last | uninstall the feature for current consumers; no empty JSON or folder/session mutation |
-| one consumer only | pass `--agent` and explain that the other panel remains |
-| source/receipt changed after preview | reread and rebuild before apply |
-| no receipt, no panel, complete inventory | allow first install; ask only missing choices |
-| no receipt with manual/foreign panel or incomplete inventory | stop; never import/adopt |
-| unmanaged or invalid config | stop and report the exact CLI error; no legacy/force |
-| preview CAS mismatch | do not run stale argv; preserve concurrent bytes and rebuild |
-| timeout or unknown native write | recover the existing CLI journal before planning again; never invent or repeat native writes |
-| successful apply | delete temporary candidate |
-| unknown first native write | do not retry; keep 0600 candidate and report only its path |
+A failed dry-run/doctor blocks that operation. Exact GUID ownership outranks
+matching display names. Preserve foreign components/advanced fields, original
+inverses, default/surviving references and live/buried session references.
+Incomplete inventory is not zero references. Do not retire referenced profiles,
+close sessions/folders, force overwrite, adopt foreign panels or use direct GUI/
+SDK mutation. An unknown native write retains durable CLI journal; recover that
+existing journal before any further mutation, never immediately retry it.
 
-Check the fake runner separately from agent intent: argv must contain the config
-only for plan/install, uninstall must be scoped as selected, and no direct file,
-folder, GUI, or process-closing effect may be attributed to a model request.
+Delete temporary candidate only after verified success; retain for unknown
+first native write, interrupted/failed recovery, or conflict requiring resolution.
+Report only its path, not its contents. Native readback is not visual/click
+acceptance: actual Bottom/order/same-window active shell/cwd tests remain separate.
+Missing folders later cause native warning/home; Profiles works in narrow windows.

@@ -114,12 +114,9 @@ consumers, and does not reset/restart open tabs. Old custom hash copies remain
 owned until uninstall; an empty config object may remain after removal. New
 generated startup omits appearance source; running shells are not changed remotely.
 
-Apple-image acceptance was verified on 2026-11-02 for both iOS service pairs in a
-normal-size native dark-theme tabbar, ordinary cd into roots/subdirectories and
-outside reset. Selected installation preserved all seven rules. Standalone ios
-was checked in asset tests/contact sheets; unchanged pairs retain their historical
-acceptance. Actual theme switching and fresh Codex/APS/restore runs were not repeated
-for this artwork change; see docs/compatibility.md for the precise scope.
+Historical artwork acceptance is not omp acceptance. Fresh omp launch/return,
+foreground/identity, APS and actual theme switching require separate authorized
+checks; retain their pending state rather than crediting older agent results.
 
 
 ## Project launcher (ninth opt-in feature)

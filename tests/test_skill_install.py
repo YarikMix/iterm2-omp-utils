@@ -133,3 +133,34 @@ class SkillInstallTests(MigrationFixture):
         self.assertEqual(stored.resources, [resource])
         self.assertEqual(stored.legacy_cleanup, [])
         self.assertEqual(path.read_bytes(), b'owned omp skill')
+
+    def test_update_preserves_extra_personal_files_and_other_bundle_receipts(self):
+        for skill in skill_install.BUNDLES:
+            skill_install.install(self.context, self.runner, skill=skill)
+        personal = self.profile.agent_dir/'skills/iterm2-launch/personal.md'
+        personal.write_text('private notes')
+        receipts = {skill: (skill_install._context(self.context, skill).paths.data/'receipt.json').read_bytes()
+                    for skill in ('iterm2-setup', 'iterm2-projects')}
+        findings = skill_install.install(self.context, self.runner, skill='iterm2-launch')
+        self.assertFalse(any(f.state == 'conflict' for f in findings), findings)
+        self.assertEqual(personal.read_text(), 'private notes')
+        for skill, content in receipts.items():
+            self.assertEqual((skill_install._context(self.context, skill).paths.data/'receipt.json').read_bytes(), content)
+
+    def test_profile_conflict_is_also_reported_by_preview(self):
+        skill_install.install(self.context, self.runner)
+        self.context.omp_profile = OmpProfile('other', self.home/'.omp/profiles/other/agent')
+        before = self.snapshot()
+        findings = skill_install.install(self.context, self.runner, dry_run=True)
+        self.assertTrue(any(f.code == 'skill_profile_conflict' for f in findings), findings)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_historical_journal_never_recovers_implicitly_during_bootstrap(self):
+        isolated = skill_install._context(self.context, 'iterm2-setup')
+        journal = isolated.paths.data/'journal'; journal.mkdir(parents=True)
+        receipt = self.historical([], ('bootstrap-skill',))
+        state.save_recovery(journal/'intent.json', receipt)
+        before = self.snapshot()
+        findings = skill_install.install(self.context, self.runner)
+        self.assertTrue(any(f.code == 'migration_required' for f in findings), findings)
+        self.assertEqual(self.snapshot(), before)

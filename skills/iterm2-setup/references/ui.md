@@ -1,71 +1,46 @@
-# Pending UI and verification
+# Pending UI and native acceptance
 
-Read the CLI `ui` entries and preserve their codes; UI completion is not inferred
-from a successful install, an installed Peekaboo binary or the user's “done”.
-Use a connected, permitted Peekaboo tool if present in this agent session. If it
-is absent, disconnected or denied, provide the manual steps below and keep the
-feature pending. Never install Peekaboo silently, grant permissions, change TCC
-or try a second UI method after a policy denial.
+Use the actual `ui` codes returned by CLI. Installed files, an available UI
+binary or the user's “done” do not clear a checkpoint. A connected permitted UI
+tool may navigate ordinary controls; absent/disconnected/denied access requires
+manual instructions. Never install tooling, change TCC, automate system dialogs
+or try another API/automation path after denial.
 
-- Python API: iTerm2 → Settings… (Настройки…) → General (Основные) → Magic →
-  Enable Python API (Включить Python API). The label may remain English in a
-  localized build. The colleague handles the authorization dialog for the pinned
-  MCP server. Afterwards run the pending `mcp_authorize` or `python_api` code with
-  `python3 -m iterm2_utils reconcile --step CODE --json` and a live doctor probe.
-  A failed connection leaves pending state; do not claim ready.
-- Profile for a **new tab**: top-level Profiles (Профили) → selected profile opens
-  a new tab. Applying to the **existing tab**: Session (Сеанс) → Edit Session…
-  (Изменить сеанс…) → choose the profile → Use Selected Settings (Использовать
-  выбранные настройки). Verify automatic switching is not prevented for that
-  session. Do not switch or restart someone else's tab automatically.
-- Claude native status: iTerm2 application menu → Install/Reinstall Claude Code
-  Integration (Установить/переустановить интеграцию Claude Code). Choose only API,
-  hooks and Session Status (Статус сеанса); leave Workgroup and Auto-Enter
-  unchecked. Read the CLI instruction for `claude-native-status`; the colleague
-  confirms installation and hook trust. Run `reconcile --step claude-native-status
-  --json` to verify recognized cc-status hooks, preserving existing foreign hooks.
-  If the control is unavailable, report that capability rather than installing a
-  competing hook.
+Python API: iTerm2 → Settings… (Настройки…) → General (Основные) → Magic →
+Enable Python API (Включить Python API). The label may remain English. The human
+handles authorization. For the returned code run
+`python3 -m iterm2_utils reconcile --step CODE --json` and
+`python3 -m iterm2_utils doctor --live --json`; failed proof stays pending.
 
-A new session may be required to load hooks or an MCP registration. Tell the
-colleague; never restart it automatically. System permission dialogs always
-remain human actions, including when Peekaboo can navigate normal app settings.
+For appearance the API code is `appearance_api`; reconcile from an explicit
+consistent local iTerm2 session outside tmux. This probe does not change
+color/icon and is not rendered acceptance. For MCP use the returned
+`mcp_authorize` code; SDK readiness alone is not a server connection.
 
-Codex native status has no ready official installer menu: use the existing
-selected package plan/install (or update for owned beta.1 hooks). Do not apply
-Claude's menu checkpoint to Codex. New hooks still require human trust and may
-need a fresh session. Leave independent notifications/restore unselected unless
-requested. A successful save or API read does not verify event delivery; Codex
-0.163.0 cannot supply StopFailure for automatic API-error status.
+Native omp status (`terminal.programStatus`, OSC7501), notifications (OSC9),
+resume and shortcuts require their actual effective/event/keyboard acceptance.
+Storage writes or status reads never establish working/blocked/done/error,
+one completion banner or EN/RU key delivery. No competing hooks/daemon/menu
+integration is installed to fill a missing capability. Ctrl+Q remains native;
+Cmd+C copies terminal selection, Ctrl+C is clear/cancel.
 
+A new profile can be opened from Profiles (Профили). Applying selected settings
+to an existing tab is Session (Сеанс) → Edit Session… (Изменить сеанс…) → Use
+Selected Settings (Использовать выбранные настройки), only when the user asks.
+Never switch/restart another tab automatically. A fresh session may be needed
+to load changed runtime/MCP; the human starts it.
 
-For selected appearance, the pending code is **`appearance_api`**. Use the same
-Settings → General → Magic → Enable Python API menu and let the human authorize
-the helper. Then run `python3 -m iterm2_utils doctor --live --json` and
-`python3 -m iterm2_utils reconcile --step appearance_api --json` from a valid
-explicit local iTerm2 session. This verifier reads API access without changing
-color/icon and never chooses the active tab. Offline doctor cannot clear pending;
-API-ready is not evidence for rendering or APS transitions.
+Before authorized own temporary tabs, warn that they appear. Verify shell and
+explicit omp launch/return/resume, main-vs-child foreground identity and APS.
+Ordinary cd into each registered root/subdirectory applies its exact pair;
+switching roots changes both; outside resets base/light/dark use-color=false,
+Icon=0 and empty path without default RGB. Include rapid A→B→outside, no-match,
+manual settings and actual themes/readability. Do not create missing roots,
+disconnect disks, change neighbouring tabs/Default, or close user processes.
+Close only your own authorized test tabs and undo temporary settings you changed.
 
-Before opening your own temporary tabs, warn that they will appear. After code
-review and authorized appearance installation, verify shell/Codex start,
-resume/fork/restore and existing APS on entry/exit. Ordinary cd into each selected
-root and a subdirectory must apply its exact color/icon; switching roots must
-replace both. Outside all roots, verify base/light/dark use-color=false, Icon=0
-and empty custom icon path without choosing a default RGB. Check rapid A → B →
-outside, no-match launch/return and an unavailable target without disconnecting
-a disk in use or creating missing roots. Check icon pairs at normal size in the
-actual themes and preserve foreign chpwd hooks. Do not
-change neighboring tabs or the Default profile. Close only your own temporary
-tabs and restore only temporary settings you changed. Record actual fixture/live
-results; keep unperformed APS/theme/readability checks pending.
-
-
-For explicitly selected project-launcher, enable/authorize the existing iTerm2
-Python API in the chosen SDK interpreter. No permission dialog is automated.
-Install reads typed native profile/session inventory and verifies writes; this
-is not visual acceptance. Verify the chosen panel profiles, Bottom position,
-button order, new active tab in the same window and login shell/cwd manually
-after an authorized installation. Repeat clicks create further tabs. Missing
-folders warn and fall back to home; use Profiles in a narrow window. Do not
-claim this new CLI was live-tested from fixtures or read-only API access.
+Project launcher acceptance separately checks chosen profiles, Bottom position,
+button order, same-window new active login-shell tabs and cwd. Repeated clicks
+create more tabs; missing folders warn/fall back home. Narrow window Profiles
+is a fallback. Typed API readback and fixtures do not prove rendering/clicks.
+Report actual checks, unperformed checks and permission blockers independently.
