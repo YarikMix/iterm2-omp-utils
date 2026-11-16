@@ -144,7 +144,7 @@ def _compile(edit):
     old, new = edit.before, edit.after
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else edit.mode
     locator = {'mode':mode}
-    if edit.path.name in {'iterm2-utils.json','iterm2-utils-project-launcher.json'}:
+    if edit.owner=='shared:runtime' or edit.path.name in {'iterm2-utils.json','iterm2-utils-project-launcher.json'}:
         return [_resource('file',path,locator,_encode(old),_encode(new),edit.owner)]
     if edit.path.suffix in {'.json','.toml'} and new is not None:
         kind = edit.path.suffix[1:]

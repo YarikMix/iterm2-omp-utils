@@ -51,6 +51,8 @@ runtime-to-root-vendor layout. Transferred unchanged appearance/launcher setting
 can be selected without falsely crediting transfer as installation. Native OSC,
 keyboard, banner and identity acceptance remain unverified; all Task4 checks are
 queued to the final integrated verification.
+Immutable runtime JSON (including the bundled parser package metadata) is
+compiled as byte-owned files, not reconstructed configuration addresses.
 
 Добавлен отдельный bootstrap-навык `iterm2-projects` для операций со списком
 проектов project-launcher; его receipt независим от receipts других skill/feature,

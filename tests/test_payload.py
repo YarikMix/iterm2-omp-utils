@@ -115,6 +115,20 @@ class PayloadTests(test_shell.ShellFixture):
         with self.assertRaisesRegex(ValueError,'runtime source'):
             runtime_payload(self.context,self.selection(('appearance',)))
 
+    def test_runtime_json_is_an_immutable_byte_payload_not_address_recomposition(self):
+        from iterm2_utils import engine
+        from iterm2_utils.models import Plan
+        changes = runtime_payload(self.context,self.selection())
+        source = self.context.paths.repo/'vendor/yaml/package.json'
+        package = next(e for e in changes.edits if e.path.parts[-3:]==('vendor','yaml','package.json'))
+        result = engine.apply(Plan(self.selection(),changes,'payload'),self.context,self.runner)
+        self.assertSuccess(result)
+        self.assertEqual(package.path.read_bytes(),source.read_bytes())
+        self.assertEqual(next(r['kind'] for r in result.receipt.resources if r['target']==str(package.path)),'file')
+        repeated = runtime_payload(self.context,self.selection())
+        self.assertEqual(next(e.after for e in repeated.edits if isinstance(e,SymlinkEdit)),
+                         next(e.after for e in changes.edits if isinstance(e,SymlinkEdit)))
+
 
 class AppearancePayloadTests(test_shell.ShellFixture, unittest.TestCase):
     def checkout(self):
