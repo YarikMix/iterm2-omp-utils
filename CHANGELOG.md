@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Added one-tab shell/new/handoff/exact-file omp launch with capability checks,
+last-owned autoResume:false overlays, independent identity/history/ack evidence
+and a generic bounded terminal transport. Removed Codex launch version/config
+preflight. Live ambiguous resume candidates block automatic duplicate creation;
+an explicit duplicate request is separate. See docs/omp-launch.md. Execution
+and live acceptance remain queued to Task10.
+
 Added exact omp saved-header/continuation validation and main-TUI-only identity.
 Profile-scoped owned standalone extensions publish private generation records
 and own-TTY iTerm user variables; PID birth, scoped terminal observations and

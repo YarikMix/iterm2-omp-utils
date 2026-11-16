@@ -4,7 +4,6 @@ import json
 import os
 from pathlib import Path
 from dataclasses import asdict
-from runtime.codex_restore.codexlib.transcripts import normalize_uuid
 from .commands import Runner
 from .discovery import discover, resolve_paths, live_status
 from .models import Selection, Finding, Context, Outcome
@@ -81,12 +80,18 @@ def main(argv=None):
             command_parser.add_argument('--live',action='store_true')
         elif command == 'reconcile':
             command_parser.add_argument('--step',required=True)
-    launch_parser = sub.add_parser('launch-codex', help='Launch one Codex in an explicit iTerm2 tab.')
-    for flag in ('window', 'profile', 'cwd'):
+    launch_parser = sub.add_parser('launch-omp', help='Create one shell or omp tab without retries.')
+    launch_parser.add_argument('--window', default='')
+    for flag in ('profile', 'cwd'):
         launch_parser.add_argument('--'+flag, required=True)
+    launch_parser.add_argument('--omp-profile')
     launch_modes = launch_parser.add_mutually_exclusive_group(required=True)
-    launch_modes.add_argument('--handoff')
-    launch_modes.add_argument('--resume', type=normalize_uuid)
+    launch_modes.add_argument('--shell', action='store_true')
+    launch_modes.add_argument('--new', action='store_true')
+    launch_modes.add_argument('--handoff', type=Path)
+    launch_modes.add_argument('--resume', type=Path)
+    launch_parser.add_argument('--expected-session-id')
+    launch_parser.add_argument('--allow-duplicate', action='store_true')
     launch_parser.add_argument('--json', action='store_true')
     bootstrap = sub.add_parser('bootstrap-skill', help='Copy one public skill; select no terminal features.')
     bootstrap.add_argument('--skill', choices=['iterm2-setup','iterm2-launch','iterm2-projects'], default='iterm2-setup')
@@ -116,12 +121,25 @@ def main(argv=None):
         return 2
     runner = Runner()
     paths = resolve_paths()
-    if args.command == 'launch-codex':
+    if args.command == 'launch-omp':
         from .launch import launch
         from .launch_checks import LaunchRequest
-        request = LaunchRequest(args.window, args.profile, Path(args.cwd),
-                                Path(args.handoff) if args.handoff is not None else None, args.resume)
-        status, output = launch(request, paths, runner)
+        from .omp_profile import resolve_omp_profile
+        from .omp_sessions import resolve_resume
+        try:
+            selected = resolve_omp_profile(paths.home, dict(os.environ), args.omp_profile)
+            mode = 'shell' if args.shell else 'new' if args.new else 'handoff' if args.handoff else 'resume'
+            if (args.resume is not None) != (args.expected_session_id is not None):
+                raise ValueError('Exact resume requires expected session ID')
+            if args.allow_duplicate and mode != 'resume':
+                raise ValueError('Duplicate option requires resume')
+            target = resolve_resume(args.resume, args.expected_session_id, selected) if args.resume else None
+            request = LaunchRequest(args.window, args.profile, Path(args.cwd), selected, mode,
+                                    args.handoff, target, args.allow_duplicate)
+            status, output = launch(request, paths, runner)
+        except (OSError, ValueError):
+            status, output = 2, dict(mode='launch_omp', status='blocked', findings=[
+                asdict(Finding('launch','omp','launch_invalid_request','conflict','Exact launch inputs could not be validated.'))])
     elif args.command == 'bootstrap-skill':
         from . import skill_install
         from .omp_profile import resolve_omp_profile

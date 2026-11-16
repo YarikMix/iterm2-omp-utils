@@ -81,7 +81,7 @@ def _result(status, window_id=None, tab_id=None, session_id=None, deadline=None)
     message = ('The iTerm2 SDK or selected launch target is unavailable.' if status == 'blocked' else
                'Launch observations are incomplete. Inspect the known tab before taking further action.')
     findings = () if status == 'created_unverified' else (
-        Finding('launch', 'codex', 'launch_'+status, 'unavailable', message),)
+        Finding('launch', 'omp', 'launch_'+status, 'unavailable', message),)
     return LaunchCreation(status, window_id, tab_id, session_id, deadline, findings)
 
 

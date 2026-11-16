@@ -60,6 +60,7 @@ class Tab:
     @property
     def all_sessions(self):
         if SCENARIO == 'partial': raise ConnectionError('PRIVATE_SDK_DETAIL')
+        if SCENARIO == 'duplicate_session': return [SimpleNamespace(session_id='S-one'), SimpleNamespace(session_id='S-two')]
         return [SimpleNamespace(session_id='S-created')]
 class Window:
     window_id = 'W-explicit'
@@ -155,6 +156,11 @@ class LaunchAPITests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.calls('close'), [None])
 
     async def test_partial_create_preserves_ids(self):
+        duplicate = await self.run_sdk('duplicate_session')
+        self.assertEqual(duplicate.status, 'unknown')
+        self.assertEqual(duplicate.tab_id, 'T-created')
+        self.assertIsNone(duplicate.session_id)
+        self.log.unlink(missing_ok=True)
         result = await self.run_sdk('partial')
         self.assertEqual(result.status, 'unknown')
         self.assertEqual((result.window_id, result.tab_id, result.session_id), ('W-explicit', 'T-created', None))
