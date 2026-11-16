@@ -2,7 +2,7 @@ import { test, expect } from 'bun:test';
 import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, symlinkSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { registerIdentity, type IdentityContext, type Observation, type RecordValue } from '../runtime/omp_identity';
+import { registerIdentity, readProcessIdentity, type IdentityContext, type Observation, type RecordValue } from '../runtime/omp_identity';
 
 const terminal = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE';
 function fixture() {
@@ -90,5 +90,38 @@ test('failed session-switch observation invalidates the prior record', async () 
     await f.handlers.get('session_switch')!({},f.ctx);
     expect(f.records()).toEqual([]);
     expect(f.writes.at(-1)?.session_id).toBe('real-id');
+  } finally { rmSync(f.root,{recursive:true,force:true}); }
+});
+
+test('publisher uses shared precise kernel birth and fails closed on unavailable live identity', () => {
+  const calls: string[][] = [];
+  let response = JSON.stringify('darwin-bsd:1800000000:123456');
+  const run = (python: string, args: string[]) => {
+    calls.push([python,...args]);
+    return {status:0,stdout:response};
+  };
+  expect(readProcessIdentity('/selected/python','/owned/terminal_identity.py',123,run))
+    .toEqual({pid:123,process_start:'darwin-bsd:1800000000:123456'});
+  response = JSON.stringify('darwin-bsd:1800000000:123457');
+  expect(readProcessIdentity('/selected/python','/owned/terminal_identity.py',123,run))
+    .toEqual({pid:123,process_start:'darwin-bsd:1800000000:123457'});
+  response = 'null'; // Zombie/unsupported probe returns no live birth, not coarse ps data.
+  expect(readProcessIdentity('/selected/python','/owned/terminal_identity.py',123,run)).toBeNull();
+  response = JSON.stringify('Sun Jan 15 08:00:00 2027');
+  expect(readProcessIdentity('/selected/python','/owned/terminal_identity.py',123,run)).toBeNull();
+  expect(calls).toEqual(Array(4).fill(['/selected/python','/owned/terminal_identity.py','--process-start','123']));
+});
+
+test('unavailable shared live process authority cannot publish a stale main identity', async () => {
+  const f = fixture();
+  try {
+    registerIdentity({on:(event,handler)=>f.handlers.set(event,handler)}, {
+      ...f.options,
+      process: () => readProcessIdentity('/selected/python','/owned/terminal_identity.py',123,
+        () => ({status:0,stdout:'null'})),
+    });
+    await f.handlers.get('session_start')!({},f.ctx);
+    expect(f.writes).toEqual([]);
+    expect(readdirSync(f.root)).not.toContain('registry');
   } finally { rmSync(f.root,{recursive:true,force:true}); }
 });

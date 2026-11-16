@@ -36,7 +36,7 @@ private temporary file prevents symlink/foreign overwrite. The JSON has exactly:
 - `terminal_id`, `tab_id`, `window_id`: explicit observed addresses
 - `session_id`, `session_file` (absolute string or null), `cwd`
 - `profile: {name: string|null, agent_dir: absolute string}`
-- `pid`, `process_start` (bounded `/bin/ps -o lstart=` identity), `generation`
+- `pid`, `process_start` (`darwin-bsd:<birth seconds>:<six-digit microseconds>`), `generation`
 
 The own tty receives OSC 1337 `SetUserVar=iterm2_utils_omp` containing base64 JSON
 of the same record. Consumers obtain decoded JSON from
@@ -68,6 +68,25 @@ No registry echo, active-tab lookup, title, jobName or PID-only result is valid.
 All binding fields including generation/file/profile must match, and process
 birth identity must still match. Callers bound their SDK worker operations and
 keep API/create/identity/handoff evidence separate.
+
+`runtime.terminal_identity.process_start(pid) -> str | None` is the single
+process authority for both publication and consumption. It calls public Darwin
+`libproc.proc_pidinfo(PROC_PIDTBSDINFO)` through stdlib ctypes, reading
+`proc_bsdinfo.pbi_start_tvsec/pbi_start_tvusec` and `pbi_status` in one kernel
+snapshot. Only SRUN, SSLEEP and SSTOP establish a live birth; zombies, creation,
+unknown states, wrong PID, partial results or unavailable ABI return None.
+There is no ps-lstart, kill-zero or PID-only fallback. Same-second PID reuse
+differs at microsecond birth precision, even if stale record and variable
+generations still agree. The public ABI is defined by macOS SDK `libproc.h`,
+`sys/proc_info.h`, `sys/proc.h` and `sys/param.h` (MAXCOMLEN=16);
+the LP64 BSD-info structure is 136 bytes with birth fields at offset 120.
+
+The standalone extension invokes its selected Python/helper as
+`terminal_identity.py --process-start PID`; this prints the shared authority's
+JSON string or null without importing the SDK. TypeScript validates that wire
+value only; it has no separate process-state/birth implementation.
+Consumer transports must use the same Python process_start function unchanged.
+Previously formatted coarse lstart strings cannot establish current identity.
 
 Retained Python helpers `terminal_id` and `terminal_from_environment` keep their
 Task4 signatures. `tty_device`, `process_start`, `observe_own_terminal` are generic

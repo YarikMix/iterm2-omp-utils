@@ -101,14 +101,22 @@ function observation(value: unknown): value is Observation {
     'tab_id' in value && typeof value.tab_id === 'string' &&
     'window_id' in value && typeof value.window_id === 'string';
 }
+type ProcessRunner = (python: string, args: string[]) => { status: number | null; stdout: string };
+export function readProcessIdentity(python: string, helper: string, pid: number,
+  run: ProcessRunner = (binary,args) => spawnSync(binary,args,{encoding:'utf8',timeout:2000,maxBuffer:4096})) {
+  // One Python/kernel authority for both publication and registry consumption.
+  const result = run(python,[helper,'--process-start',String(pid)]);
+  if (result.status !== 0) return null;
+  try {
+    const birth: unknown = JSON.parse(result.stdout);
+    return typeof birth === 'string' && /^darwin-bsd:[1-9][0-9]*:[0-9]{6}$/.test(birth)
+      ? {pid,process_start:birth} : null;
+  } catch { return null; }
+}
 export default function identity(api: API) {
   const install = installation();
   registerIdentity(api, { registry:install.registry, profile:install.profile,
-    process: () => {
-      const result = spawnSync('/bin/ps',['-p',String(process.pid),'-o','lstart='],{encoding:'utf8',timeout:2000});
-      const start = result.stdout?.trim();
-      return result.status === 0 && start ? {pid:process.pid,process_start:start} : null;
-    },
+    process: () => readProcessIdentity(install.python,install.helper,process.pid),
     observe: () => {
       // readlink of fd 0 would resolve /dev/tty aliases inconsistently; tty(1) asks the fd itself.
       const ownTTY = spawnSync('/usr/bin/tty',[],{encoding:'utf8',stdio:[0,'pipe','pipe'],timeout:2000});

@@ -103,3 +103,34 @@ class Sessions(unittest.TestCase):
             path.write_text(json.dumps(raw))
             path.chmod(0o600)
             self.assertEqual(read_bindings(registry),[])
+
+    def test_zombie_with_unchanged_registry_and_terminal_variable_is_not_open(self):
+        self._assert_stale_kernel_identity_rejected(status=5, microseconds=123456)
+
+    def test_reused_pid_with_same_lstart_and_unchanged_variable_is_not_open(self):
+        self._assert_stale_kernel_identity_rejected(status=2, microseconds=123457)
+
+    def _assert_stale_kernel_identity_rejected(self, *, status, microseconds):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+        from runtime.terminal_identity import process_start as kernel_process_start
+        from iterm2_utils.omp_sessions import binding_record
+        birth = 'darwin-bsd:1800000000:123456'
+        binding = replace(self.binding(),process_start=birth)
+        # Registry and terminal variable both remain unchanged after the crash.
+        observed = binding_record(binding)
+        class Transport:
+            def bindings(self): return [binding]
+            process_start = staticmethod(kernel_process_start)
+            def observe(self, terminal): return observed
+        kernel = SimpleNamespace(pbi_pid=123,pbi_status=2,pbi_start_tvsec=1800000000,
+                                 pbi_start_tvusec=123456)
+        # Both processes (or live/zombie) would print exactly this coarse lstart.
+        with patch('runtime.terminal_identity._read_bsdinfo',return_value=kernel), patch(
+                'subprocess.run',return_value=SimpleNamespace(returncode=0,stdout='Sun Jan 15 08:00:00 2027')) as ps:
+            self.assertEqual(find_open(self.target,Transport()),binding)
+            kernel.pbi_status, kernel.pbi_start_tvusec = status,microseconds
+            self.assertIsNone(find_open(self.target,Transport()))
+            self.assertEqual(observed['process_start'],birth)
+            self.assertEqual(observed['generation'],'generation-1')
+            ps.assert_not_called()

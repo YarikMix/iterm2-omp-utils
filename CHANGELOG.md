@@ -10,6 +10,10 @@ forks, replaced headers and orphan generations are not open-dialog evidence.
 Restore and appearance share transactional identity installation, without
 status/notification callbacks or model/endpoint/approval changes.
 See docs/omp-identity.md; execution/live acceptance remains queued to Task10.
+Process identity now shares one public Darwin libproc probe for publisher and
+reader: live-state validation plus kernel birth seconds/microseconds, never
+coarse ps lstart. Unreaped zombies, same-second PID reuse, partial ABI reads and
+unavailable kernel probes cannot establish a live dialog.
 
 Separated current omp receipt v2 from strict historical v1 integration data.
 Added pure, shared omp profile resolution matching the existing bootstrap rules.
