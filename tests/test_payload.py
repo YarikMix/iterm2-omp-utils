@@ -54,52 +54,66 @@ def Color(*rgb): return list(rgb)
 '''
 
 
-class PayloadTests(test_shell.ShellFixture, unittest.TestCase):
-    def test_payload_survives_checkout_move(self):
-        checkout=self.root/'checkout'; checkout.mkdir()
+class PayloadTests(test_shell.ShellFixture):
+    def checkout(self):
+        checkout = self.root/'checkout'
+        checkout.mkdir()
         for name in ('runtime','vendor'):
             shutil.copytree(self.context.paths.repo/name,checkout/name)
-        for name in ('LICENSE','THIRD_PARTY_NOTICES.md'):
+        for name in ('LICENSE','THIRD_PARTY_NOTICES.md','sources.lock.json'):
             shutil.copy2(self.context.paths.repo/name,checkout/name)
-        self.context.paths=replace(self.context.paths,repo=checkout)
-        changes=runtime_payload(self.context,self.selection(('status',)))
+        self.context.paths = replace(self.context.paths,repo=checkout)
+        return checkout
+
+    def install_payload(self, changes):
         for edit in changes.edits:
             edit.path.parent.mkdir(parents=True,exist_ok=True)
-            if isinstance(edit,SymlinkEdit): edit.path.symlink_to(edit.after)
-            else: edit.path.write_bytes(edit.after)
+            if isinstance(edit,SymlinkEdit):
+                edit.path.symlink_to(edit.after)
+            else:
+                edit.path.write_bytes(edit.after)
+
+    def test_payload_survives_checkout_move_and_preserves_yaml_import_layout(self):
+        checkout = self.checkout()
+        changes = runtime_payload(self.context,self.selection())
+        self.install_payload(changes)
         shutil.rmtree(checkout)
-        self.assertTrue((self.context.paths.data/'current/codex.zsh').is_file())
-        self.assertTrue((self.context.paths.data/'current/native_status.py').is_file())
-        self.assertFalse(any(e.path.name in {'cc-status','it2'} for e in changes.edits))
-        self.assertFalse(any(str(checkout).encode() in e.after for e in changes.edits if isinstance(e,FileEdit)))
-        self.assertTrue(changes.consumers)
-        import subprocess
-        result=subprocess.run(['/bin/zsh','-dfc','source "$1"; whence -w codex','fixture',str(self.context.paths.data/'current/codex.zsh')],capture_output=True,text=True)
+        current = self.context.paths.data/'current'
+        helper = current/'runtime/omp_config.ts'
+        self.assertTrue(helper.is_file())
+        self.assertTrue((helper.parent/'../vendor/yaml/dist/index.js').is_file())
+        result = subprocess.run(['bun','--no-install','--no-env-file','--config=/dev/null',str(helper)],
+            input=json.dumps({'op':'read','raw':'terminal: {programStatus: true}\n','pointer':['terminal','programStatus']}),
+            capture_output=True,text=True,cwd=self.home,env={**os.environ,'HOME':str(self.home)},timeout=5)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(result.stdout.strip(),'codex: function')
-    def test_release_identity_changes_with_payload_not_in_place(self):
-        checkout=self.root/'checkout'; checkout.mkdir()
-        for name in ('runtime','vendor'):
-            shutil.copytree(self.context.paths.repo/name,checkout/name)
-        for name in ('LICENSE','THIRD_PARTY_NOTICES.md'):
-            shutil.copy2(self.context.paths.repo/name,checkout/name)
-        self.context.paths=replace(self.context.paths,repo=checkout)
-        first=runtime_payload(self.context,self.selection())
-        (checkout/'runtime/new_helper.py').write_text('VALUE = 42\n')
-        second=runtime_payload(self.context,self.selection())
-        a=next(e.after for e in first.edits if isinstance(e,SymlinkEdit))
-        b=next(e.after for e in second.edits if isinstance(e,SymlinkEdit))
-        self.assertNotEqual(a,b)
-        self.assertTrue(any(isinstance(e,FileEdit) and e.path.name=='new_helper.py' for e in second.edits))
-    def test_source_symlink_is_rejected_before_edits(self):
-        checkout=self.root/'checkout'; checkout.mkdir()
-        for name in ('runtime','vendor'):
-            shutil.copytree(self.context.paths.repo/name,checkout/name)
-        (checkout/'runtime/foreign.py').symlink_to('/not-read')
-        for name in ('LICENSE','THIRD_PARTY_NOTICES.md'):
-            shutil.copy2(self.context.paths.repo/name,checkout/name)
-        self.context.paths=replace(self.context.paths,repo=checkout)
-        with self.assertRaises(ValueError): runtime_payload(self.context,self.selection())
+        self.assertEqual(json.loads(result.stdout),{'value':{'exists':True,'value':True}})
+        self.assertFalse(any((current/name).exists() for name in
+                             ('codex.zsh','hook.py','native_status.py','notifier.py','codex_restore','vendor/codex_status')))
+
+    def test_allowlist_ignores_arbitrary_runtime_and_vendor_sources(self):
+        checkout = self.checkout()
+        first = runtime_payload(self.context,self.selection())
+        (checkout/'runtime/private.py').write_text('PRIVATE = True\\n')
+        (checkout/'vendor/private.py').write_text('PRIVATE = True\\n')
+        second = runtime_payload(self.context,self.selection())
+        self.assertEqual(next(e.after for e in first.edits if isinstance(e,SymlinkEdit)),
+                         next(e.after for e in second.edits if isinstance(e,SymlinkEdit)))
+        self.assertFalse(any(e.path.name=='private.py' for e in second.edits))
+
+    def test_selected_source_symlink_is_rejected_before_edits(self):
+        checkout = self.checkout()
+        target = checkout/'runtime/omp_config.ts'
+        target.unlink()
+        target.symlink_to('/not-read')
+        with self.assertRaises(ValueError):
+            runtime_payload(self.context,self.selection())
+
+    def test_appearance_requires_real_identity_source_not_placeholder(self):
+        checkout = self.checkout()
+        source = checkout/'runtime/omp_identity.ts'
+        source.unlink(missing_ok=True)
+        with self.assertRaisesRegex(ValueError,'runtime source'):
+            runtime_payload(self.context,self.selection(('appearance',)))
 
 
 class AppearancePayloadTests(test_shell.ShellFixture, unittest.TestCase):
@@ -108,7 +122,7 @@ class AppearancePayloadTests(test_shell.ShellFixture, unittest.TestCase):
         checkout.mkdir()
         for name in ('runtime', 'vendor'):
             shutil.copytree(self.context.paths.repo/name, checkout/name)
-        for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
+        for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'sources.lock.json'):
             shutil.copy2(self.context.paths.repo/name, checkout/name)
         self.context.paths = replace(self.context.paths, repo=checkout)
         return checkout
@@ -125,7 +139,7 @@ class AppearancePayloadTests(test_shell.ShellFixture, unittest.TestCase):
         self.assertEqual({p for p in files if p.startswith('assets/')},
                          {f'assets/appearance/{name}.{ext}' for name in names for ext in ('png', 'svg')})
         self.assertTrue({'appearance.py', 'appearance.zsh', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
-                         'vendor/shell_integration/LICENSE', 'vendor/codex_status/LICENSE'} <= files.keys())
+                         'vendor/shell_integration/LICENSE', 'vendor/yaml/LICENSE'} <= files.keys())
 
     def test_builtin_bytes_change_release_and_appearance_plan_identity(self):
         from iterm2_utils.planner import plan

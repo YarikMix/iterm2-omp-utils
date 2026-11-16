@@ -1,56 +1,96 @@
 import unittest
 from tests.support import Fixture
 from iterm2_utils.discovery import discover, resolve_paths
-from iterm2_utils.legacy_state import LegacySelection
-from iterm2_utils.planner import plan, validate
+from iterm2_utils.models import Selection
+from iterm2_utils.planner import FEATURES, plan, validate
+from tests.native_features_support import NativeFixture
 
 
-class SelectionTests(unittest.TestCase):
-    def test_appearance_pairs_are_codex_only_even_for_legacy_both_selection(self):
-        from iterm2_utils.legacy_state import resource_pairs
-        with Fixture() as f:
-            context=discover(resolve_paths(),f.runner)
-            selection=LegacySelection(frozenset({'codex','claude'}),frozenset({'appearance','shell'}),frozenset(),'Default')
-            self.assertEqual(selection.agents_for('appearance'),{'codex'})
-            self.assertEqual(selection.explicit().features_for('claude'),{'shell'})
-            self.assertEqual(resource_pairs(selection,'appearance','',context),{'codex:appearance'})
-
-    def test_missing_binary_blocks_only_affected_feature(self):
-        with Fixture() as f:
-            (f.bin / 'terminal-notifier').unlink()
-            context = discover(resolve_paths(), f.runner)
-            findings = validate(LegacySelection(frozenset({'codex'}), frozenset({'notifications', 'shell'}), frozenset(), 'Default'), context)
-            self.assertTrue(any(x.feature == 'notifications' and x.state == 'missing_dependency' for x in findings))
-            self.assertTrue(any(x.feature == 'shell' and x.state == 'ready' for x in findings))
-
-    def test_claude_does_not_select_codex_only_features(self):
-        with Fixture() as f:
-            context = discover(resolve_paths(), f.runner)
-            result = plan(context, LegacySelection(frozenset({'claude'}), frozenset({'clipboard', 'shell'}), frozenset(), 'Default'))
-            self.assertNotIn('clipboard', result.selection.features)
-            self.assertIn('shell', result.selection.features)
-            self.assertTrue(any(x.feature == 'clipboard' and x.state == 'unavailable' for x in result.changes.findings))
-            self.assertTrue(result.changes.edits)
-            self.assertFalse(any(e.owner == 'clipboard' for e in result.changes.edits))
-            startup=next(e.after for e in result.changes.edits if e.path==context.paths.zshrc)
-            self.assertNotIn(b'codex.zsh',startup)
-            self.assertIn(b'shell_integration',startup)
+class SelectionTests(NativeFixture):
+    def test_all_nine_features_are_retained(self):
+        self.assertEqual(FEATURES,{'clipboard','shortcuts','status','notifications','restore',
+                                   'mcp','shell','appearance','project-launcher'})
 
     def test_shortcuts_require_explicit_valid_selection(self):
-        with Fixture() as f:
-            context = discover(resolve_paths(), f.runner)
-            for features, shortcuts in (({'shell'}, {'ctrl-q'}), ({'shortcuts'}, set()), ({'shortcuts'}, {'unknown'})):
-                findings = validate(LegacySelection(frozenset({'codex'}), frozenset(features), frozenset(shortcuts), 'Default'), context)
-                self.assertTrue(any(x.state == 'conflict' for x in findings))
+        for features,shortcuts in ((('shell',),('ctrl-q',)), (('shortcuts',),()), (('shortcuts',),('unknown',))):
+            findings = validate(self.selection(*features,shortcuts=shortcuts),self.context)
+            self.assertTrue(any(f.state=='conflict' for f in findings))
 
-    def test_legacy_status_reuse_does_not_install_second_shell_wrapper(self):
-        with Fixture() as f:
-            from dataclasses import replace
-            context=replace(discover(resolve_paths(),f.runner),installed={'codex-status':{'enabled':True}})
-            selection=LegacySelection(frozenset({'codex'}),frozenset({'status'}),frozenset(),'Default')
-            result=plan(context,selection)
-            self.assertFalse(result.changes.edits)
-            self.assertTrue(any(f.code=='existing_status' for f in result.changes.findings))
+    def test_resume_requires_explicit_key_without_changing_independent_feature(self):
+        selection = self.selection('shortcuts','shell',shortcuts=('resume',))
+        findings = validate(selection,self.context)
+        self.assertTrue(any(f.feature=='shortcuts' and f.code=='resume_key_required' for f in findings))
+        self.assertTrue(any(f.feature=='shell' and f.state=='ready' for f in findings))
+
+    def test_mcp_is_native_profile_scoped_and_foreign_neighbours_survive(self):
+        from iterm2_utils import lifecycle
+        import json
+        path = self.profile.agent_dir/'mcp.json'
+        path.write_text('{"mcpServers":{"foreign":{"command":"keep"}},"foreign":7}')
+        result = lifecycle.install(self.context,self.selection('mcp'),self.runner)
+        self.assertSuccess(result)
+        self.assertEqual(json.loads(path.read_text())['foreign'],7)
+        self.assertEqual(json.loads(path.read_text())['mcpServers']['foreign'],{'command':'keep'})
+        self.assertEqual([r['locator']['pointer'] for r in result.receipt.resources],
+                         [['mcpServers','iterm2-observe']])
+
+    def test_shell_has_no_omp_bun_or_python_prerequisite(self):
+        self.context.executables = {k:v for k,v in self.context.executables.items() if k in {'iterm2','zsh'}}
+        findings = validate(self.selection('shell'),self.context)
+        self.assertFalse([f for f in findings if f.state in {'unavailable','conflict','missing_dependency'}])
+
+    def test_proven_transferred_launcher_configuration_does_not_require_installed_selection(self):
+        import json
+        from iterm2_utils import engine, state
+        from iterm2_utils.features import project_launcher
+        from iterm2_utils.models import FileEdit, Receipt
+        source = {'profiles':['Default'],'projects':[{'id':'a','name':'Project A','path':str(self.home)}]}
+        path = self.context.paths.config/project_launcher.FILENAME
+        path.parent.mkdir(parents=True)
+        content = json.dumps(source).encode()
+        path.write_bytes(content)
+        resource = engine._compile(FileEdit(path,None,content,0o600,project_launcher.OWNER))[0]
+        state.save(self.context.paths.data/'receipt.json',Receipt('2',self.selection(),[resource],[]))
+        config, receipt = project_launcher._load(self.context)
+        self.assertEqual(config,source)
+        self.assertNotIn('project-launcher',receipt.selection.features)
+
+    def test_proven_transferred_appearance_configuration_can_be_explicitly_selected(self):
+        import json
+        from iterm2_utils import engine, state
+        from iterm2_utils.features import appearance
+        from iterm2_utils.models import FileEdit, Receipt
+        path = self.context.paths.config/'appearance.json'
+        path.parent.mkdir(parents=True)
+        content = json.dumps({'projects':[{'root':str(self.home),'color':'#123456','icon':'ios'}]}).encode()
+        path.write_bytes(content)
+        resources = engine._compile(FileEdit(path,None,content,0o600,'appearance'))
+        state.save(self.context.paths.data/'receipt.json',Receipt('2',self.selection(),resources,[]))
+        changes = appearance.build(self.context,self.selection('appearance'))
+        self.assertTrue(changes.edits)
+        self.assertFalse([f for f in changes.findings if f.state=='conflict'])
+
+    def test_foreign_mcp_collision_blocks_only_mcp(self):
+        from iterm2_utils import lifecycle
+        path = self.profile.agent_dir/'mcp.json'
+        path.write_text('{"mcpServers":{"iterm2-observe":{"command":"foreign"}}}')
+        before = path.read_bytes()
+        result = lifecycle.install(self.context,self.selection('mcp','shell'),self.runner)
+        self.assertEqual(result.receipt.selection.features,{'shell'})
+        self.assertEqual(path.read_bytes(),before)
+        self.assertTrue(any(f.feature=='mcp' and f.state=='conflict' for f in result.findings))
+
+    def test_identical_foreign_mcp_entry_is_not_adopted(self):
+        import json
+        from iterm2_utils import lifecycle
+        from iterm2_utils.config.mcp import definition
+        path = self.profile.agent_dir/'mcp.json'
+        path.write_text(json.dumps({'mcpServers':{'iterm2-observe':definition()},'foreign':7}))
+        before = path.read_bytes()
+        result = lifecycle.install(self.context,self.selection('mcp'),self.runner)
+        self.assertSuccess(result)
+        self.assertEqual(result.receipt.resources,[])
+        self.assertEqual(path.read_bytes(),before)
 
 
 class CurrentLifecycleTests(unittest.TestCase):

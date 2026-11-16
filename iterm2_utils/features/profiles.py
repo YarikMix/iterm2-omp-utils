@@ -1,108 +1,113 @@
-"""Build inherited foreground-job profiles without changing the default profile."""
-import copy
-import fnmatch
+"""Dedicated explicitly selected omp profile, with no inherited agent key maps."""
+import base64
 import json
 import uuid
-from ..config import tomlfile
-from ..models import ChangeSet, Context, FileEdit, PreferenceEdit, Finding
-from ..legacy_state import LegacySelection
+import re
+from .. import state
+from ..commands import Runner
+from ..config import omp
+from ..models import ChangeSet, Context, FileEdit, PreferenceEdit, Finding, Selection, UiStep
 
 DOMAIN = 'com.googlecode.iterm2'
 OWNER = 'shared:agent-profiles'
+NAME = 'iterm2-utils:omp'
+GUID = str(uuid.uuid5(uuid.NAMESPACE_URL, NAME))
 SHORTCUTS = {
-    'ctrl-v-ru': ('0x43c-0x40000-0x9-0x1', 11, '0x16'),
-    'alt-enter': ('0xd-0x20000-0x24-0x1', 11, '0x1b 0x0d'),
-    'ctrl-q': ('0x71-0x40000-0xc-0x1', 11, '0x03 0x03'),
-    'resume': ('0x52-0x120000-0xf-0x1', 12, '/resume\n'),
+    'ctrl-v-ru': ('0x43c-0x40000-0x9-0x1', '0x16'),
+    'alt-enter': ('0xd-0x20000-0x24-0x1', '0x0a'),
 }
+# Native pi-tui app-keybindings defaults observed with omp 18.20.2. Keep these
+# reserved even when locally remapped; a resume chord must not steal core input.
+RESERVED_KEYS = frozenset('''
+up down left right ctrl+b ctrl+f alt+left ctrl+left alt+b alt+right ctrl+right alt+f
+home ctrl+a end ctrl+e ctrl+] ctrl+alt+] pageup pagedown backspace delete ctrl+d
+ctrl+w alt+backspace ctrl+backspace super+alt+backspace alt+delete alt+d ctrl+delete
+super+alt+delete super+alt+d ctrl+u ctrl+k ctrl+y alt+y ctrl+- ctrl+_ ctrl+.
+shift+enter ctrl+j enter tab ctrl+c escape ctrl+z alt+l shift+tab ctrl+t ctrl+p
+shift+ctrl+p alt+m alt+p ctrl+o ctrl+shift+o alt+h n alt+n ctrl+enter ctrl+q ctrl+g
+alt+g f5 alt+r alt+up shift+up alt+i ctrl+v ctrl+shift+v alt+shift+v alt+shift+l
+alt+shift+c alt+a ctrl+s ctrl+r alt+k alt+shift+k alt+shift+p alt+o space ctrl+l
+'''.split())
 
 
-def build(context: Context, selection: LegacySelection) -> ChangeSet:
+def _chord(value):
+    parts = value.lower().split('+') if isinstance(value,str) else []
+    modifiers = parts[:-1]
+    if (not parts or not parts[-1] or any(m not in {'ctrl','alt','shift','super'} for m in modifiers)
+            or len(set(modifiers))!=len(modifiers) or any(c.isspace() for c in value)
+            or not (len(parts[-1])==1 or parts[-1] in {
+                'up','down','left','right','home','end','pageup','pagedown',
+                'enter','tab','escape','backspace','delete','space'} or
+                re.fullmatch(r'f(?:[1-9]|1[0-9]|2[0-4])',parts[-1]))):
+        return None
+    return tuple(sorted(modifiers)),parts[-1]
+
+
+def resume_key_conflict(value):
+    chord = _chord(value)
+    return chord is None or chord in {_chord(key) for key in RESERVED_KEYS}
+
+
+def build(context: Context, selection: Selection) -> ChangeSet:
     changes = ChangeSet([], [], [])
-    clipboard = 'codex' in selection.agents_for('clipboard')
-    shortcuts = selection.shortcuts if 'shortcuts' in selection.features else frozenset()
-    if not clipboard and not shortcuts:
+    consumers = selection.features & {'clipboard', 'shortcuts'}
+    if not consumers:
         return changes
-
-    def finding(code, message, agent=None, state='conflict'):
-        changes.findings.append(Finding('shortcuts' if code in {'shortcut_capability','custom_keymap_caveat'} else ('clipboard' if clipboard else 'shortcuts'), agent, code, state, message))
-
+    feature = 'shortcuts' if 'shortcuts' in consumers else 'clipboard'
+    def fail(code, message):
+        changes.findings.append(Finding(feature, 'omp', code, 'conflict', message))
+        return changes
     parent = context.profiles.get(selection.parent_profile)
-    if parent is None:
-        finding('missing_parent', 'The selected parent profile must exist.')
-        return changes
-    if not isinstance(parent.get('Keyboard Map', {}), dict):
-        finding('invalid_parent_keyboard_map', 'The parent keyboard map must be a dictionary.')
-        return changes
-    # iTerm2 v3.7.6 ITAddressBookMgr.h KEY_PREVENT_APS; session overrides
-    # are not readable as a global defaults flag.
-    if parent.get('Prevent Automatic Profile Switching'):
-        finding('prevent_aps', 'The parent prevents automatic profile switching; choose how to resolve it.')
-        return changes
-    preferences = context.preferences.get(DOMAIN, {})
-    agents = sorted(selection.agents_for('shortcuts') | ({'codex'} if clipboard else set()))
-    for name, existing in context.profiles.items():
-        if (name in {'iterm2-utils:codex', 'iterm2-utils:claude'} and
-                existing.get('Guid') == str(uuid.uuid5(uuid.NAMESPACE_URL, name))):
-            continue
-        if any(isinstance(rule, str) and '&' in rule and
-               any(fnmatch.fnmatchcase(agent, rule.rsplit('&', 1)[1]) for agent in agents)
-               for rule in existing.get('Bound Hosts', [])):
-            finding('competing_aps', 'An existing automatic profile rule matches the selected agent.')
-            return changes
-    profiles = []
-    for agent in agents:
-        keys = copy.deepcopy(parent.get('Keyboard Map', {}))
-        wanted = {}
-        if clipboard and agent == 'codex':
-            for char in ('0x63', '0x441'):
-                wanted[char+'-0x40000-0x8-0x1'] = {'Action': 11, 'Text': '0x03'}
-                wanted[char+'-0x100000-0x8-0x1'] = {'Action': 11, 'Text': '0x1b 0x5b 0x39 0x39 0x3b 0x39 0x75'}
-        for shortcut in sorted(selection.shortcuts_for(agent)):
-            if shortcut == 'alt-enter' and agent+':alt-enter' not in context.capabilities:
-                finding('shortcut_capability', 'Alt+Enter compatibility has not been verified for this agent version.', agent, 'unavailable')
-                continue
-            if shortcut == 'alt-enter' and agent == 'codex':
-                finding('custom_keymap_caveat', 'Alt+Enter uses the verified default insert_newline binding; a custom Codex TUI keymap may override it.', agent, 'ready')
-            key, action, text = SHORTCUTS[shortcut]
-            wanted[key] = {'Action': action, 'Text': text}
-        for key, value in wanted.items():
-            if key in keys and keys[key] != value:
-                finding('binding_conflict', 'A parent binding differs; explicit conflict resolution is required.', agent)
-                return changes
-        keys.update(wanted)
-        profiles.append({'Name': 'iterm2-utils:'+agent,
-                         'Guid': str(uuid.uuid5(uuid.NAMESPACE_URL, 'iterm2-utils:'+agent)),
-                         'Dynamic Profile Parent Name': selection.parent_profile,
-                         'Bound Hosts': ['&'+agent], 'Keyboard Map': keys})
+    if not isinstance(parent, dict):
+        return fail('missing_parent', 'The selected parent profile must exist.')
+    if selection.parent_profile == NAME:
+        return fail('invalid_parent', 'The dedicated omp profile cannot inherit itself.')
+    if 'resume' in selection.shortcuts and not selection.resume_key:
+        return fail('resume_key_required', 'Select --resume-key explicitly; no text-injection resume shortcut is installed.')
+    if 'resume' in selection.shortcuts and resume_key_conflict(selection.resume_key):
+        return fail('resume_key_conflict', 'The resume key is invalid or conflicts with native input; choose an unused chord.')
+    keys = {key: {'Action': 11, 'Text': text}
+            for name, (key, text) in SHORTCUTS.items() if name in selection.shortcuts}
+    profile = {'Name': NAME, 'Guid': GUID,
+               'Dynamic Profile Parent Name': selection.parent_profile,
+               'Custom Command': 'No', 'Command': '', 'Bound Hosts': [],
+               'Keyboard Map': keys}
+    # A Bun job is not an omp identity. Only explicit launch selects this profile.
+    document = {'Profiles': [profile]}
     path = context.paths.profiles/'iterm2-utils.json'
     before = path.read_bytes() if path.exists() else None
-    try:
-        document = json.loads(before) if before else {}
-        if not isinstance(document,dict):
-            raise ValueError('profile root')
-        document['Profiles'] = profiles
-    except (ValueError,TypeError):
-        finding('profile_conflict','The dedicated profile document cannot be safely read.')
-        return changes
-    # A dedicated profile document is still CAS protected and address-owned by the engine.
-    after = before if before is not None and json.loads(before) == document else (json.dumps(document, sort_keys=True, indent=2)+'\n').encode()
-    changes.edits.append(FileEdit(path, before, after, 0o600, OWNER))
-    consumers = ({'clipboard'} if clipboard else set()) | ({'shortcuts'} if shortcuts else set())
+    if before is not None:
+        receipt = state.load(context.paths.data/'receipt.json')
+        owned = any(r['kind']=='file' and r['target']==str(path.resolve()) and OWNER in r['owners']
+                    and r['installed']=={'exists':True,'value':base64.b64encode(before).decode()}
+                    for r in receipt.resources) if receipt else False
+        if not owned and json.loads(before) != document:
+            return fail('profile_conflict', 'The dedicated profile document is foreign or changed; resolve ownership first.')
+    after = before if before is not None and json.loads(before)==document else (
+        json.dumps(document,sort_keys=True,indent=2)+'\n').encode()
+    changes.edits.append(FileEdit(path,before,after,0o600,OWNER))
+    runner = Runner()
+    for shortcut, action, chord, defaults in (
+            ('alt-enter','tui.input.newLine','ctrl+j',['shift+enter','ctrl+j']),
+            ('ctrl-v-ru','app.clipboard.pasteImage','ctrl+v',['ctrl+v'])):
+        if shortcut not in selection.shortcuts:
+            continue
+        effective = omp.effective_binding(selection.omp_profile,action,runner)
+        value = effective['value'] if effective['exists'] else defaults
+        alternatives = list(value) if isinstance(value,list) else [] if value is None else [value]
+        if not any(_chord(key)==_chord(chord) for key in alternatives):
+            alternatives.append(chord)
+        changes.edits.append(omp.binding_edit(selection.omp_profile,action,
+            {'exists':True,'value':alternatives},runner,owner='shortcuts'))
     changes.consumers[OWNER] = frozenset(consumers)
-    if clipboard:
-        path = context.paths.codex_home/'config.toml'
-        before = path.read_bytes() if path.exists() else None
-        try:
-            config = tomlfile.parse(before or b'')
-            overrides = config.get('profiles', {})
-            if any(isinstance(p, dict) and isinstance(p.get('tui'), dict) and 'copy_on_select' in p['tui'] for p in overrides.values()):
-                finding('profile_copy_override', 'A named Codex profile overrides tui.copy_on_select; review invocations using that profile.', 'codex')
-            after = tomlfile.patch(before or b'', ('tui', 'copy_on_select'), 'never')
-        except (ValueError, AttributeError):
-            finding('codex_config_conflict', 'Codex configuration cannot be safely edited.', 'codex')
-            changes.edits.clear()
-            return changes
-        changes.edits.extend([FileEdit(path, before, after, 0o600, 'clipboard'),
-                              PreferenceEdit(DOMAIN, 'CopySelection', preferences.get('CopySelection'), False, 'clipboard')])
+    if 'resume' in selection.shortcuts:
+        changes.edits.append(omp.binding_edit(selection.omp_profile,'app.session.resume',
+            {'exists':True,'value':selection.resume_key},Runner(),owner='shortcuts'))
+    if 'clipboard' in consumers:
+        preferences = context.preferences.get(DOMAIN,{})
+        changes.edits.append(PreferenceEdit(DOMAIN,'CopySelection',preferences.get('CopySelection'),False,'clipboard'))
+    changes.ui.append(UiStep('native_keyboard',feature,'omp',
+        'Select the dedicated omp profile explicitly; verify Cmd+C selection copy, Ctrl+C clear/cancel, '
+        'native Ctrl+Q follow-up/approval and only the selected RU paste/newline/resume keys. '
+        'No automatic Bun job matching or parent agent keyboard-map inheritance is installed.'))
     return changes

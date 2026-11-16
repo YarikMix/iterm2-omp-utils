@@ -39,6 +39,19 @@ transferred consumers, preserving literal shell/appearance references and siblin
 files of active releases even with zero live sessions. Bootstrap now copies only to the selected
 omp profile and recovers its own journal before planning an actual update.
 
+Native omp feature builders now configure one status/notification writer, native
+picker/resume, scoped MCP, terminal clipboard and explicitly selected shortcuts.
+Dedicated profiles remove inherited agent key maps and never match arbitrary
+Bun jobs. Ctrl+C/Ctrl+Q retain native semantics. Explicit resume keys are checked
+against known defaults and inherited user bindings. Feature checkpoints preserve
+notification policy, resume keys, original inverses and shared-consumer guards.
+Discovery probes only selected dependencies; versions remain diagnostics.
+Retained payloads use a manifest/file allowlist and preserve the YAML helper's
+runtime-to-root-vendor layout. Transferred unchanged appearance/launcher settings
+can be selected without falsely crediting transfer as installation. Native OSC,
+keyboard, banner and identity acceptance remain unverified; all Task4 checks are
+queued to the final integrated verification.
+
 Добавлен отдельный bootstrap-навык `iterm2-projects` для операций со списком
 проектов project-launcher; его receipt независим от receipts других skill/feature,
 а при `both` один receipt описывает оба выбранных host.

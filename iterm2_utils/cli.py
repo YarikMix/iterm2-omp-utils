@@ -8,9 +8,9 @@ from runtime.codex_restore.codexlib.transcripts import normalize_uuid
 from .commands import Runner
 from .discovery import discover, resolve_paths, live_status
 from .models import Selection, Finding, Context, Outcome
-from .legacy_state import LegacyReceipt, LegacySelection
+from .legacy_state import AGENTS, LegacyReceipt, LegacySelection
 from . import lifecycle, migration, state
-from .planner import AGENTS, FEATURES, SHORTCUTS, plan
+from .planner import FEATURES, SHORTCUTS, plan
 
 
 def _csv(value):
@@ -146,7 +146,7 @@ def main(argv=None):
             previous = None
         if _receipt_boundary(previous, args):
             return 2
-        context = discover(paths,runner,agents=agents | (previous.selection.agents if previous else frozenset()))
+        context = discover(paths,runner,features=features | (previous.selection.features if previous else frozenset()))
         context.appearance_config = args.appearance_config
         context.project_launcher_config = args.project_launcher_config
         selection = LegacySelection(agents,features,shortcuts,args.parent_profile if args.parent_profile is not None else previous.selection.parent_profile if previous else 'Default',args.adopt_legacy,coexist_notifications=args.coexist_notifications)
@@ -175,7 +175,8 @@ def main(argv=None):
             if _receipt_boundary(receipt, args):
                 return 2
         if receipt is not None and not isinstance(receipt, LegacyReceipt):
-            context = Context(paths, {}, {}, frozenset(), {}, {}, omp_profile=receipt.selection.omp_profile)
+            context = discover(paths,runner,features=receipt.selection.features)
+            context.omp_profile = receipt.selection.omp_profile
             if args.command == 'doctor':
                 findings = lifecycle.doctor(context, receipt, runner)
                 if args.live and 'mcp' in receipt.selection.features:
@@ -191,8 +192,7 @@ def main(argv=None):
                 output = _outcome(args.command, result)
             print(json.dumps(output, sort_keys=True) if args.json else '\n'.join(f.message for f in findings))
             return _exit(findings)
-        agents = receipt.selection.agents if receipt else AGENTS
-        context = discover(paths,runner,agents=agents)
+        context = discover(paths,runner,features=receipt.selection.features if receipt else frozenset())
         if args.command == 'doctor':
             findings = migration.preview_omp_migration(context, runner).changes.findings
             if receipt_error:
@@ -203,7 +203,7 @@ def main(argv=None):
                 findings += [Finding(s.feature,s.agent,s.code,'pending_ui',s.instruction) for s in receipt.pending_ui]
             if args.live:
                 findings.extend(live_status(context,runner,receipt.selection if receipt else None))
-                if receipt and receipt.selection.agents_for('appearance'):
+                if receipt and 'appearance' in receipt.selection.features:
                     from .discovery import live_appearance
                     findings.append(live_appearance(context,runner))
             output = dict(mode='read_only_discovery',executables=sorted(context.executables),versions=context.versions,
@@ -217,7 +217,7 @@ def main(argv=None):
             if args.command == 'update':
                 result = lifecycle.update(context,runner,dry_run=args.dry_run)
             elif args.command == 'uninstall':
-                result = lifecycle.uninstall(context,features,runner,dry_run=args.dry_run,agents=None if args.agent is None else AGENTS if args.agent=='both' else frozenset({args.agent}))
+                result = lifecycle.uninstall(context,features,runner,dry_run=args.dry_run)
             else:
                 result = lifecycle.reconcile_ui(context,args.step,runner)
             output = _outcome(args.command+('_preview' if getattr(args,'dry_run',False) else ''),result)

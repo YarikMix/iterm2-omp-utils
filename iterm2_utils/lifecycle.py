@@ -9,7 +9,7 @@ from .omp_profile import resolve_omp_profile
 from .planner import FEATURES, plan, validate
 
 BLOCKING = {'conflict', 'missing_dependency', 'unavailable'}
-ORDER = ('shell', 'clipboard', 'shortcuts', 'status', 'notifications', 'mcp', 'appearance', 'project-launcher')
+ORDER = ('shell', 'clipboard', 'shortcuts', 'status', 'notifications', 'restore', 'mcp', 'appearance', 'project-launcher')
 
 
 def _empty(context):
@@ -85,7 +85,11 @@ def install(context, selection, runner, *, dry_run=False):
             continue
         chosen = replace(selection, features=working.selection.features | {feature},
                          shortcuts=(working.selection.shortcuts | selection.shortcuts
-                                    if feature == 'shortcuts' else working.selection.shortcuts))
+                                    if feature == 'shortcuts' else working.selection.shortcuts),
+                         resume_key=(selection.resume_key if feature=='shortcuts'
+                                     else working.selection.resume_key),
+                         notify_errors=(selection.notify_errors if feature=='notifications'
+                                        else working.selection.notify_errors))
         from .features.project_launcher import prepare
         prepared_context = prepare(context, chosen, runner)
         prepared = plan(prepared_context, chosen)
@@ -155,7 +159,7 @@ def update(context, runner, *, dry_run=False):
     return install(context, receipt.selection, runner, dry_run=dry_run)
 
 
-def uninstall(context, owners, runner, *, dry_run=False, agents=None):
+def uninstall(context, owners, runner, *, dry_run=False):
     recovery = _recover_pending(context, runner, dry_run)
     if recovery is not None:
         return recovery
@@ -170,10 +174,10 @@ def uninstall(context, owners, runner, *, dry_run=False, agents=None):
     context = replace(context, omp_profile=receipt.selection.omp_profile)
     if not owners or owners - FEATURES:
         return _problem(context, receipt, 'invalid_selection', 'Choose supported features explicitly.')
-    if agents is not None and agents != frozenset({'omp'}):
-        return _migration(context, receipt)
     selection = replace(receipt.selection, features=receipt.selection.features-owners,
-                        shortcuts=frozenset() if 'shortcuts' in owners else receipt.selection.shortcuts)
+                        shortcuts=frozenset() if 'shortcuts' in owners else receipt.selection.shortcuts,
+                        resume_key=None if 'shortcuts' in owners else receipt.selection.resume_key,
+                        notify_errors=False if 'notifications' in owners else receipt.selection.notify_errors)
     remove_owners = owners | frozenset('omp:'+feature for feature in owners)
     affected_shared = {owner for resource in receipt.resources
         if set(resource['owners']) & remove_owners
@@ -231,6 +235,8 @@ def reconcile_ui(context, code, runner):
             elif code in {'mcp_authorize', 'python_api'}:
                 from .config import mcp
                 findings = [mcp.probe(context, runner)]
+            elif code in {'native_status','native_notifications','native_keyboard','native_restore'}:
+                findings = [Finding(step.feature,'omp',code,'pending_ui',step.instruction) for step in steps]
             else:
                 return _problem(context, receipt, 'unknown_ui_step', 'This pending step has no automatic verifier.')
             if any(f.state != 'ready' for f in findings):

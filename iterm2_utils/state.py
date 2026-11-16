@@ -18,7 +18,7 @@ VERSION = '2'
 RESOURCE_VERSION = '1'
 FIELDS = {'kind','target','locator','before','installed','owners','version'}
 KINDS = {'file','json','toml','zsh','preference','registration','symlink','hook','profile_bar','status_bar_position','omp_setting','omp_binding'}
-CURRENT_FEATURES = frozenset({'clipboard', 'status', 'notifications', 'mcp', 'shell', 'shortcuts',
+CURRENT_FEATURES = frozenset({'clipboard', 'status', 'notifications', 'restore', 'mcp', 'shell', 'shortcuts',
                               'appearance', 'project-launcher', 'bootstrap-skill'})
 CURRENT_SHORTCUTS = frozenset({'ctrl-v-ru', 'alt-enter', 'ctrl-q', 'resume'})
 SHARED_OWNERS = frozenset({'shared:runtime', 'shared:shell', 'shared:hooks', 'shared:agent-profiles',

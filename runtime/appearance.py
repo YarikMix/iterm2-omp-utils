@@ -15,9 +15,9 @@ import threading
 import time
 
 try:
-    from .events import terminal_from_environment, terminal_id
+    from .terminal_identity import terminal_from_environment, terminal_id
 except ImportError:
-    from events import terminal_from_environment, terminal_id
+    from terminal_identity import terminal_from_environment, terminal_id
 
 
 BUILTIN_ICONS = frozenset({
