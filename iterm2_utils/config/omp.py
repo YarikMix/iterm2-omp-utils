@@ -16,6 +16,7 @@ from ..models import OmpProfile, OmpEdit
 LIMIT = 1024 * 1024
 HELPER = Path(__file__).resolve().parents[2]/'runtime/omp_config.ts'
 SETTINGS = frozenset({'terminal.programStatus', 'completion.notify', 'error.notify'})
+ACTION = re.compile(r'(?:app|tui)\.[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*')
 
 
 def same(left, right):
@@ -40,6 +41,32 @@ def value_snapshot(value):
     return value
 
 
+def _pointer(kind, key):
+    """Translate native setting IDs and literal action IDs only in the adapter."""
+    if not isinstance(key, str) or not key or len(key) > 256:
+        raise ValueError('Invalid native omp address')
+    if kind == 'setting' and key in SETTINGS:
+        return key.split('.')
+    if kind == 'binding' and ACTION.fullmatch(key):
+        return [key]
+    raise ValueError('Unsupported native omp address')
+
+
+def _native_value(kind, key, snapshot):
+    value_snapshot(snapshot)
+    if not snapshot['exists'] or snapshot['value'] is None:
+        return snapshot
+    value = snapshot['value']
+    if kind == 'setting':
+        valid = type(value) is bool if key == 'terminal.programStatus' else value in ('on', 'off')
+    else:
+        chords = value if isinstance(value, list) else [value]
+        valid = len(chords) <= 64 and all(isinstance(chord, str) and chord.strip() and len(chord) <= 100 and not re.search(r'[\x00-\x1f]', chord) for chord in chords)
+    if not valid:
+        raise ValueError('Invalid native omp address value')
+    return snapshot
+
+
 def validate_resource(resource):
     """Validate persisted addresses without executing a parser or touching files."""
     from ..omp_profile import profile_name
@@ -51,23 +78,10 @@ def validate_resource(resource):
             not isinstance(loc['key'], str) or
             loc['profile'] is not None and (not isinstance(loc['profile'], str) or profile_name(loc['profile']) != loc['profile'])):
         raise ValueError('Invalid native omp receipt address')
-    if resource['kind'] == 'omp_setting':
-        if loc['key'] not in SETTINGS:
-            raise ValueError('Unsupported native omp setting')
-    elif not re.fullmatch(r'(?:app|tui)\.[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*', loc['key']):
-        raise ValueError('Invalid native omp action')
-    for field in ('before','installed'):
-        snapshot = value_snapshot(resource[field])
-        if not snapshot['exists'] or snapshot['value'] is None:
-            continue
-        value = snapshot['value']
-        if resource['kind'] == 'omp_setting':
-            valid = type(value) is bool if loc['key'] == 'terminal.programStatus' else value in ('on','off')
-        else:
-            chords = value if isinstance(value,list) else [value]
-            valid = len(chords) <= 64 and all(isinstance(chord,str) and chord.strip() and len(chord) <= 100 and not re.search(r'[\x00-\x1f]',chord) for chord in chords)
-        if not valid:
-            raise ValueError('Invalid native omp receipt value')
+    kind = resource['kind'].removeprefix('omp_')
+    _pointer(kind, loc['key'])
+    for field in ('before', 'installed'):
+        _native_value(kind, loc['key'], resource[field])
 
 
 def storage(profile: OmpProfile, kind: str) -> Path:
@@ -99,12 +113,12 @@ def _bytes(path: Path) -> bytes | None:
     return raw
 
 
-def transform(raw: bytes | None, kind: str, key: str, runner: Runner, *, value=None, expected=None, operation='read') -> dict:
+def transform(raw: bytes | None, pointer: list[str], runner: Runner, *, op='read', expected=None, next=None) -> dict:
+    """Use only the private {op,raw,pointer,expected?,next?} wire protocol."""
     try:
-        source = (raw or b'').decode('utf-8', errors='strict')
-        request = {'source': source, 'kind': kind, 'key': key, 'operation': operation}
-        if operation == 'patch':
-            request.update(value=value_snapshot(value), expected=value_snapshot(expected))
+        request = {'op': op, 'raw': (raw or b'').decode('utf-8', errors='strict'), 'pointer': pointer}
+        if op == 'patch':
+            request.update(expected=value_snapshot(expected), next=value_snapshot(next))
         payload = json.dumps(request, ensure_ascii=False, allow_nan=False)
         if len(payload.encode()) > 2 * LIMIT:
             raise ValueError()
@@ -117,25 +131,32 @@ def transform(raw: bytes | None, kind: str, key: str, runner: Runner, *, value=N
         result = json.loads(response.stdout)
         if not isinstance(result, dict) or 'error' in result:
             raise ValueError()
-        if operation == 'bindings':
-            if set(result) != {'bindings'} or not isinstance(result['bindings'], dict):
-                raise ValueError()
-        elif operation == 'read':
+        if op == 'read':
             if set(result) != {'value'}:
                 raise ValueError()
             value_snapshot(result['value'])
-        elif set(result) != {'source', 'value'} or not isinstance(result['source'], str) or len(result['source'].encode()) > LIMIT or not same(result['value'], value):
+        elif op != 'patch' or set(result) != {'raw'} or not isinstance(result['raw'], str) or len(result['raw'].encode()) > LIMIT:
             raise ValueError()
         return result
     except Exception:
         raise ValueError('Native omp configuration helper failed') from None
 
 
+def _native_snapshot(raw, kind, key, runner):
+    pointer = _pointer(kind, key)
+    if kind == 'setting':
+        root = transform(raw, [], runner)['value']
+        content = root['value'] if root['exists'] else {}
+        if not isinstance(content, dict) or key in content:
+            raise ValueError('Ambiguous native omp setting storage')
+    return _native_value(kind, key, transform(raw, pointer, runner)['value'])
+
+
 def read_address(profile, kind, key, runner, *, path=None):
     selected = storage(profile, kind).resolve()
     if path is not None and selected != Path(path):
         raise ValueError('Native omp configuration location changed')
-    return transform(_bytes(selected), kind, key, runner)['value']
+    return _native_snapshot(_bytes(selected), kind, key, runner)
 
 
 def read_setting(profile: OmpProfile, key: str, runner: Runner) -> dict:
@@ -173,7 +194,14 @@ def _binding_guards(profile, action, value, runner):
     for scope in ([inherited] if inherited else []) + [profile]:
         path = storage(scope, 'binding').resolve()
         raw = _bytes(path)
-        merged.update(transform(raw, 'binding', action, runner, operation='bindings')['bindings'])
+        snapshot = transform(raw, [], runner)['value']
+        bindings = snapshot['value'] if snapshot['exists'] else {}
+        if not isinstance(bindings, dict):
+            raise ValueError('Invalid native binding storage')
+        for binding, keys in bindings.items():
+            _pointer('binding', binding)
+            _native_value('binding', binding, {'exists': True, 'value': keys})
+        merged.update(bindings)
         sources.append((scope, path, raw))
     if value['exists']:
         wanted = value['value']
@@ -187,13 +215,16 @@ def _binding_guards(profile, action, value, runner):
 
 
 def set_address(profile, kind, key, value, runner, *, expected, path=None):
-    value_snapshot(value); value_snapshot(expected)
+    pointer = _pointer(kind, key)
+    _native_value(kind, key, value); _native_value(kind, key, expected)
     selected = storage(profile, kind).resolve()
     if path is not None and selected != Path(path):
         raise ValueError('Native omp configuration location changed')
     raw = _bytes(selected)
+    if not same(_native_snapshot(raw, kind, key, runner), expected):
+        raise ValueError('Concurrent native configuration edit')
     guards = _binding_guards(profile, key, value, runner) if kind == 'binding' else []
-    result = transform(raw, kind, key, runner, value=value, expected=expected, operation='patch')['source'].encode()
+    result = transform(raw, pointer, runner, next=value, expected=expected, op='patch')['raw'].encode()
     if result == raw:
         return
     mode = stat.S_IMODE(selected.stat().st_mode) if selected.exists() else 0o600
@@ -216,11 +247,12 @@ def set_binding(profile: OmpProfile, action: str, value: dict, runner: Runner, *
 
 
 def _edit(profile, kind, key, value, runner, owner):
-    value_snapshot(value)
+    pointer = _pointer(kind, key)
+    _native_value(kind, key, value)
     path = storage(profile, kind).resolve()
     raw = _bytes(path)
-    before = transform(raw, kind, key, runner)['value']
-    transform(raw, kind, key, runner, value=value, expected=before, operation='patch')
+    before = _native_snapshot(raw, kind, key, runner)
+    transform(raw, pointer, runner, next=value, expected=before, op='patch')
     if kind == 'binding':
         _binding_guards(profile, key, value, runner)
     return OmpEdit(profile, kind, key, before, value, owner, path)

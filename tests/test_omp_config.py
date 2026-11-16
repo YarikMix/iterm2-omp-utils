@@ -1,3 +1,4 @@
+import json
 import os
 import shutil
 import subprocess
@@ -145,7 +146,11 @@ class NativeConfigTests(unittest.TestCase):
                 self.assertEqual(Path(argv[-1]).name, 'omp_config.ts')
                 self.assertEqual(kwargs['timeout'], 5)
                 self.assertNotIn('terminal.programStatus', ' '.join(argv))
-                self.assertIn('terminal.programStatus', kwargs['stdin'])
+                request = json.loads(kwargs['stdin'])
+                self.assertEqual(set(request), {'op', 'raw', 'pointer'})
+                self.assertEqual(request['op'], 'read')
+                self.assertEqual(request['raw'], '')
+                self.assertEqual(request['pointer'], [])
                 self.assertIn('--no-install', argv)
                 self.assertIn('--no-env-file', argv)
                 self.assertNotIn('BUN_OPTIONS', kwargs['env'])
@@ -220,3 +225,76 @@ class NativeConfigTests(unittest.TestCase):
         self.assertEqual(omp.read_setting(self.profile, 'terminal.programStatus', self.runner), present(None))
         self.assertIn('# сохранено', path.read_text())
         self.assertEqual(path.stat().st_mode & 0o777, 0o640)
+
+    def test_multidocument_forward_and_inverse_preserve_original_bytes(self):
+        for filename, key, setter, installed in (
+                ('config.yml', 'terminal.programStatus', omp.set_setting, True),
+                ('keybindings.yml', 'app.session.resume', omp.set_binding, 'Alt+R')):
+            path = self.profile.agent_dir/filename
+            selected = 'terminal: {programStatus: true}' if filename == 'config.yml' else 'app.session.resume: Alt+R'
+            for raw in (b'foreign: keep\n---\nother: preserve\n',
+                        (selected + '\n---\nprivate: preserve\n').encode()):
+                path.write_bytes(raw)
+                for next_value, expected in ((present(installed), ABSENT), (ABSENT, present(installed))):
+                    with self.subTest(filename=filename, inverse=not next_value['exists']), self.assertRaises(ValueError):
+                        setter(self.profile, key, next_value, self.runner, expected=expected)
+                    self.assertEqual(path.read_bytes(), raw)
+
+    def test_block_scalar_bindings_preserve_following_actions_and_eof_header_comments(self):
+        path = self.profile.agent_dir/'keybindings.yml'
+        for style in ('|-', '>-'):
+            for tail in ('app.history.search: Ctrl+R # neighbour\n', ''):
+                path.write_text('# heading\napp.session.resume: ' + style + ' # keep header\n  Alt+R\n' + tail)
+                omp.set_binding(self.profile, 'app.session.resume', present('F8'), self.runner, expected=present('Alt+R'))
+                self.assertEqual(omp.read_binding(self.profile, 'app.session.resume', self.runner), present('F8'))
+                self.assertIn('# keep header', path.read_text())
+                self.assertIn('# heading', path.read_text())
+                if tail:
+                    self.assertEqual(omp.read_binding(self.profile, 'app.history.search', self.runner), present('Ctrl+R'))
+                    self.assertIn('# neighbour', path.read_text())
+                omp.set_binding(self.profile, 'app.session.resume', present('Alt+R'), self.runner, expected=present('F8'))
+                self.assertEqual(omp.read_binding(self.profile, 'app.session.resume', self.runner), present('Alt+R'))
+                self.assertIn('# keep header', path.read_text())
+                if tail:
+                    self.assertIn(tail.strip(), path.read_text())
+
+    def test_private_wire_protocol_and_native_pointer_translation(self):
+        class RecordingRunner(Runner):
+            def __init__(inner):
+                inner.requests = []
+            def run(inner, argv, **kwargs):
+                inner.requests.append(json.loads(kwargs['stdin']))
+                return super().run(argv, **kwargs)
+        runner = RecordingRunner()
+        raw = b'app.session.resume: Alt+R\n'
+        self.assertEqual(omp.transform(raw, ['app.session.resume'], runner), {'value': present('Alt+R')})
+        changed = omp.transform(raw, ['app.session.resume'], runner, op='patch', expected=present('Alt+R'), next=present('F8'))
+        self.assertEqual(changed, {'raw': 'app.session.resume: "F8"\n'})
+        self.assertEqual(runner.requests, [
+            {'op': 'read', 'raw': raw.decode(), 'pointer': ['app.session.resume']},
+            {'op': 'patch', 'raw': raw.decode(), 'pointer': ['app.session.resume'], 'expected': present('Alt+R'), 'next': present('F8')},
+        ])
+        runner.requests.clear()
+        omp.set_setting(self.profile, 'terminal.programStatus', present(True), runner, expected=ABSENT)
+        self.assertEqual([request for request in runner.requests if request['op'] == 'patch'], [
+            {'op': 'patch', 'raw': '', 'pointer': ['terminal', 'programStatus'], 'expected': ABSENT, 'next': present(True)},
+        ])
+        runner.requests.clear()
+        omp.set_binding(self.profile, 'app.session.resume', present('F8'), runner, expected=ABSENT)
+        self.assertEqual([request for request in runner.requests if request['op'] == 'patch'], [
+            {'op': 'patch', 'raw': '', 'pointer': ['app.session.resume'], 'expected': ABSENT, 'next': present('F8')},
+        ])
+        self.assertTrue(any(request == {'op': 'read', 'raw': '', 'pointer': []} for request in runner.requests))
+        self.assertTrue(all(set(request) == ({'op', 'raw', 'pointer'} if request['op'] == 'read' else {'op', 'raw', 'pointer', 'expected', 'next'}) for request in runner.requests))
+
+    def test_adapter_rejects_invalid_native_values_and_literal_setting_shadows(self):
+        path = self.profile.agent_dir/'config.yml'
+        for key, value in (('terminal.programStatus', 1), ('completion.notify', True), ('error.notify', True), ('model', 'changed')):
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                omp.set_setting(self.profile, key, present(value), self.runner, expected=ABSENT)
+            self.assertFalse(path.exists())
+        raw = b'terminal.programStatus: false\nforeign: keep\n'
+        path.write_bytes(raw)
+        with self.assertRaises(ValueError):
+            omp.set_setting(self.profile, 'terminal.programStatus', present(True), self.runner, expected=ABSENT)
+        self.assertEqual(path.read_bytes(), raw)

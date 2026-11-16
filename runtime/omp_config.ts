@@ -1,11 +1,9 @@
 /** Pure, bounded YAML address transforms. No omp imports, filesystem or network. */
-import { Document, isAlias, isMap, isScalar, isSeq, parseDocument, visit } from "../vendor/yaml/dist/index.js";
+import { Document, isAlias, isMap, isScalar, isSeq, parseAllDocuments, parseDocument, visit } from "../vendor/yaml/dist/index.js";
 
 const LIMIT = 1024 * 1024;
-const SETTINGS: Record<string, true> = { "terminal.programStatus": true, "completion.notify": true, "error.notify": true };
-const ACTION = /^(?:app|tui)\.[A-Za-z][A-Za-z0-9]*(?:\.[A-Za-z][A-Za-z0-9]*)*$/;
 type Value = { exists: boolean; value: unknown };
-type Request = { source: string; kind: string; key: string; operation: string; value?: Value; expected?: Value };
+type Request = { op: "read" | "patch"; raw: string; pointer: string[]; expected?: Value; next?: Value };
 const absent = (): Value => ({ exists: false, value: null });
 
 function fail(): never { throw new Error("Unsupported or conflicting native configuration"); }
@@ -17,32 +15,55 @@ function same(a: unknown, b: unknown): boolean {
   const x = a as Record<string, unknown>, y = b as Record<string, unknown>;
   return Object.keys(x).length === Object.keys(y).length && Object.keys(x).every(k => Object.hasOwn(y, k) && same(x[k], y[k]));
 }
-function jsonValue(value: unknown, seen = new Set<object>(), depth = 0, count = { n: 0 }): void {
+function jsonValue(value: unknown, seen = new Set<object>(), depth = 0, count = { n: 0, bytes: 0 }): void {
   if (depth > 64 || ++count.n > 100000) fail();
-  if (value === null || typeof value === "string" || typeof value === "boolean") return;
-  if (typeof value === "number") { if (!Number.isFinite(value) || (Number.isInteger(value) && !Number.isSafeInteger(value))) fail(); return; }
+  if (value === null || typeof value === "string" || typeof value === "boolean" || typeof value === "number") {
+    if (typeof value === "number" && (!Number.isFinite(value) || Number.isInteger(value) && !Number.isSafeInteger(value))) fail();
+    count.bytes += Buffer.byteLength(JSON.stringify(value));
+    if (count.bytes > 2 * LIMIT) fail();
+    return;
+  }
   if (typeof value !== "object" || seen.has(value)) fail();
   seen.add(value);
-  for (const child of Object.values(value)) jsonValue(child, seen, depth + 1, count);
+  count.bytes += 2;
+  // Only own string-keyed entries are traversed after the object guard.
+  const record = value as Record<string, unknown>;
+  let first = true;
+  for (const key of Object.keys(record)) {
+    if (!first) count.bytes++;
+    first = false;
+    if (!Array.isArray(value)) count.bytes += Buffer.byteLength(JSON.stringify(key)) + 1;
+    if (count.bytes > 2 * LIMIT) fail();
+    jsonValue(record[key], seen, depth + 1, count);
+  }
   seen.delete(value);
 }
 function wrapped(value: Value | undefined): asserts value is Value {
   if (!value || typeof value.exists !== "boolean" || Object.keys(value).sort().join() !== "exists,value" || (!value.exists && value.value !== null)) fail();
   jsonValue(value.value);
 }
-function nativeValue(kind: string, key: string, value: unknown): void {
-  // Null is a real stored value and must remain restorable, not become absence.
-  if (value === null) return;
-  if (kind === "setting") {
-    if (key === "terminal.programStatus" ? typeof value !== "boolean" : value !== "on" && value !== "off") fail();
-  } else {
-    const chords = Array.isArray(value) ? value : [value];
-    if (chords.length > 64 || chords.some(v => typeof v !== "string" || !v.trim() || v.length > 100 || /[\r\n\x00-\x1f]/.test(v))) fail();
-  }
+function validateRequest(request: unknown): asserts request is Request {
+  if (!request || typeof request !== "object" || Array.isArray(request) ||
+      !("op" in request) || request.op !== "read" && request.op !== "patch" ||
+      !("raw" in request) || typeof request.raw !== "string" ||
+      !("pointer" in request) || !Array.isArray(request.pointer)) fail();
+  const fields = request.op === "read" ? ["op", "raw", "pointer"] : ["op", "raw", "pointer", "expected", "next"];
+  if (Object.keys(request).length !== fields.length || fields.some(field => !Object.hasOwn(request, field)) ||
+      request.pointer.length > 64 || request.op === "patch" && request.pointer.length === 0 ||
+      request.pointer.some(part => typeof part !== "string" || !part || part.length > 256 ||
+        /[\x00-\x1f]/.test(part) || ["__proto__", "prototype", "constructor"].includes(part))) fail();
 }
 function document(source: string) {
   if (typeof source !== "string" || Buffer.byteLength(source) > LIMIT) fail();
-  const doc = parseDocument(source, { keepSourceTokens: true, uniqueKeys: true, strict: true, prettyErrors: false, logLevel: "silent", version: "1.2" });
+  const options = { keepSourceTokens: true, uniqueKeys: true, strict: true, prettyErrors: false, logLevel: "silent", version: "1.2" };
+  // parseDocument suppresses MULTIPLE_DOCS in silent mode. Count the complete
+  // stream independently before any read or mutation can discard later docs.
+  const documents = parseAllDocuments(source, options);
+  if (documents.length > 1 || documents.some(doc => doc.errors.length || doc.warnings.length)) fail();
+  // The empty-stream result carries stream errors; parseDocument is used only
+  // after the count check to preserve a comment-only document's metadata.
+  if ("errors" in documents && documents.errors.length || "warnings" in documents && documents.warnings.length) fail();
+  const doc = documents[0] ?? parseDocument(source, options);
   if (doc.errors.length || doc.warnings.length || (doc.contents !== null && !isMap(doc.contents))) fail();
   // Empty/comment-only source is absence; explicit null is malformed storage.
   if (doc.contents === null && source.replace(/#[^\r\n]*/g, "").trim()) fail();
@@ -68,53 +89,41 @@ function address(doc: Document, path: string[]) {
   return { value: { exists: true, value: node == null ? null : node.toJS(doc, { maxAliasCount: 50 }) }, node };
 }
 
-export function transform(request: Request): { value?: Value; source?: string; bindings?: Record<string, unknown> } {
-  if (!request || !["setting", "binding"].includes(request.kind) || typeof request.key !== "string" ||
-      (request.kind === "setting" ? !Object.hasOwn(SETTINGS, request.key) : !ACTION.test(request.key)) ||
-      !["read", "patch", "bindings"].includes(request.operation)) fail();
-  const { source, kind, key } = request;
-  const doc = document(source);
-  if (kind === "setting" && doc.has(key)) fail(); // literal dotted settings are not native nested storage
-  if (request.operation === "bindings") {
-    if (kind !== "binding") fail();
-    const bindings = doc.contents === null ? {} : doc.toJS({ maxAliasCount: 50 });
-    for (const [action, value] of Object.entries(bindings)) {
-      if (!ACTION.test(action)) fail(); // legacy unqualified actions require explicit native migration
-      nativeValue("binding", action, value);
-    }
-    return { bindings };
-  }
-  const path = kind === "setting" ? key.split(".") : [key];
-  const current = address(doc, path);
-  if (current.value.exists) nativeValue(kind, key, current.value.value);
-  if (request.operation === "read") return { value: current.value };
-  wrapped(request.expected); wrapped(request.value);
+export function transform(request: unknown): { value?: Value; raw?: string } {
+  validateRequest(request);
+  const { raw, pointer } = request;
+  const doc = document(raw);
+  const current = address(doc, pointer);
+  if (request.op === "read") return { value: current.value };
+  wrapped(request.expected); wrapped(request.next);
   if (!same(current.value, request.expected)) fail();
-  if (request.value.exists) nativeValue(kind, key, request.value.value);
-  if (same(current.value, request.value)) return { source, value: current.value };
+  if (same(current.value, request.next)) return { raw };
   let result: string;
-  if (request.value.exists && current.node?.range && current.node.range[1] > current.node.range[0] && (isScalar(current.node) || isSeq(current.node) && current.node.flow)) {
-    // Replace only the value span: all foreign whitespace, quoting and comments
-    // remain byte-identical, including flow maps and literal dotted action IDs.
-    const [start, end] = current.node.range;
-    result = source.slice(0, start) + JSON.stringify(request.value.value) + source.slice(end);
+  const span = current.node?.range;
+  const inline = isScalar(current.node) && current.node.type !== "BLOCK_LITERAL" && current.node.type !== "BLOCK_FOLDED" ||
+    isSeq(current.node) && current.node.flow;
+  if (request.next.exists && span && span[1] > span[0] && inline && !/[\r\n]/.test(raw.slice(span[0], span[1]))) {
+    // Only genuinely inline spans may be spliced. Block/multiline scalars use
+    // Document mutation to retain their newline boundaries and header comments.
+    const [start, end] = span;
+    result = raw.slice(0, start) + JSON.stringify(request.next.value) + raw.slice(end);
   } else {
-    if (request.value.exists) doc.setIn(path, request.value.value);
+    if (request.next.exists) doc.setIn(pointer, request.next.value);
     else {
       // A heading may be attached to the first key rather than the document.
       // Preserve comments from a removed pair instead of deleting user prose.
-      const parent = doc.getIn(path.slice(0, -1), true);
-      const pair = isMap(parent) ? parent.items.find(item => isScalar(item.key) && item.key.value === path[path.length - 1]) : undefined;
+      const parent = doc.getIn(pointer.slice(0, -1), true);
+      const pair = isMap(parent) ? parent.items.find(item => isScalar(item.key) && item.key.value === pointer[pointer.length - 1]) : undefined;
       const comments = [pair?.key?.commentBefore, pair?.key?.comment, pair?.value?.commentBefore, pair?.value?.comment].filter(value => typeof value === "string");
-      doc.deleteIn(path);
+      doc.deleteIn(pointer);
       if (comments.length) doc.commentBefore = [doc.commentBefore, ...comments].filter(value => typeof value === "string").join("\n");
     }
     result = doc.toString({ lineWidth: 0 });
   }
   if (Buffer.byteLength(result) > LIMIT) fail();
-  const actual = address(document(result), path).value;
-  if (!same(actual, request.value)) fail();
-  return { source: result, value: actual };
+  const actual = address(document(result), pointer).value;
+  if (!same(actual, request.next)) fail();
+  return { raw: result };
 }
 
 if (import.meta.main) {
@@ -130,7 +139,9 @@ if (import.meta.main) {
       chunks.push(chunk);
     }
     const request = JSON.parse(Buffer.concat(chunks).toString("utf8"));
-    process.stdout.write(JSON.stringify(transform(request)) + "\n");
+    const response = JSON.stringify(transform(request));
+    if (Buffer.byteLength(response) > 2 * LIMIT) fail();
+    process.stdout.write(response + "\n");
   } catch {
     process.stdout.write('{"error":"native_config_conflict"}\n');
     process.exitCode = 1;

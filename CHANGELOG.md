@@ -21,6 +21,10 @@ Named-profile binding conflicts and malformed/legacy storage fail without
 overwrite. Bun is needed only for native YAML operations; no startup install,
 agent initialization or personal-settings discovery is performed by the helper.
 Runtime verification remains queued to the final integrated task.
+Native YAML edits reject complete multi-document streams independently of silent
+diagnostics and retain block-scalar line boundaries/header comments. The private
+helper uses only bounded `{op, raw, pointer, expected?, next?}` read/patch messages;
+native setting/action validation stays in the Python adapter.
 
 Добавлен отдельный bootstrap-навык `iterm2-projects` для операций со списком
 проектов project-launcher; его receipt независим от receipts других skill/feature,
