@@ -1,9 +1,10 @@
 """Read-only prerequisite gate for the locally bundled Codex restorer."""
 import re
-from ..models import ChangeSet, Context, Selection, Finding
+from ..models import ChangeSet, Context, Finding
+from ..legacy_state import LegacySelection
 
 
-def build(context: Context, selection: Selection) -> ChangeSet:
+def build(context: Context, selection: LegacySelection) -> ChangeSet:
     changes=ChangeSet([],[],[])
     if 'restore' not in selection.features:
         return changes

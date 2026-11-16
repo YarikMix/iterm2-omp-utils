@@ -14,8 +14,9 @@ class EngineTests(unittest.TestCase):
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
         p = self.root
-        self.context = Context(Paths(p, p/'zshrc', p/'codex', p/'claude.json', p/'config', p/'cache', p/'data', p/'profiles', p), {}, {}, frozenset(), {}, {})
-        self.selection = Selection(frozenset({'codex'}), frozenset({'clipboard'}), frozenset(), 'Default')
+        self.profile = OmpProfile(None, p/'.omp/agent')
+        self.context = Context(Paths(p, p/'zshrc', p/'config', p/'cache', p/'data', p/'profiles', p), {}, {}, frozenset(), {}, {}, omp_profile=self.profile)
+        self.selection = Selection(frozenset({'clipboard'}), frozenset(), 'Default', self.profile)
 
     def plan(self, edits):
         return Plan(self.selection, ChangeSet(edits, [], []), 'fixture')
@@ -193,7 +194,7 @@ class EngineTests(unittest.TestCase):
 
     def test_shared_resource_only_explicit_consumers_retain_it(self):
         p=self.root/'shared'
-        selected=Selection(frozenset({'codex'}),frozenset({'shell','status','clipboard'}),frozenset(),'Default')
+        selected=Selection(frozenset({'shell','status','clipboard'}),frozenset(),'Default',self.profile)
         changes=ChangeSet([FileEdit(p,None,b'runtime',0o600,'shared:runtime')],[],[],{'shared:runtime':frozenset({'shell','status'})})
         result=engine.apply(Plan(selected,changes,'fixture'),self.context,None)
         self.assertEqual(set(result.receipt.resources[0]['owners']),{'shared:runtime','shell','status'})
@@ -291,12 +292,12 @@ class EngineTests(unittest.TestCase):
         for suffix,old,new in (('json',b'{"ours":0}',b'{"ours":1}'),('toml',b'[tui]\nours=0\n',b'[tui]\nours=1\n')):
             with self.subTest(suffix=suffix):
                 p=self.root/('fresh.'+suffix);p.write_bytes(old)
-                selection=Selection(frozenset({'codex'}),frozenset({'shell'}),frozenset(),'Default')
+                selection=Selection(frozenset({'shell'}),frozenset(),'Default',self.profile)
                 changes=ChangeSet([FileEdit(p,old,new,0o600,'shared:runtime')],[],[],{'shared:runtime':frozenset({'shell'})})
                 one=engine.apply(Plan(selection,changes,'fixture'),self.context,None)
                 self.assertFalse(one.findings)
                 current=p.read_bytes()
-                selection=Selection(frozenset({'codex'}),frozenset({'status','clipboard'}),frozenset(),'Default')
+                selection=Selection(frozenset({'status','clipboard'}),frozenset(),'Default',self.profile)
                 changes=ChangeSet([FileEdit(p,current,current,0o600,'shared:runtime')],[],[],{'shared:runtime':frozenset({'status'})})
                 two=engine.apply(Plan(selection,changes,'fixture'),self.context,None)
                 self.assertFalse(two.findings)
@@ -308,7 +309,7 @@ class EngineTests(unittest.TestCase):
     def test_fresh_noop_does_not_adopt_another_features_address(self):
         p=self.root/'settings.json';p.write_bytes(b'{"ours":0,"foreign":7}')
         one=engine.apply(self.plan([FileEdit(p,p.read_bytes(),b'{"ours":1,"foreign":7}',0o600,'clipboard')]),self.context,None)
-        selection=Selection(frozenset({'codex'}),frozenset({'status'}),frozenset(),'Default')
+        selection=Selection(frozenset({'status'}),frozenset(),'Default',self.profile)
         current=p.read_bytes()
         two=engine.apply(Plan(selection,ChangeSet([FileEdit(p,current,current,0o600,'status')],[],[]),'fixture'),self.context,None)
         self.assertFalse(two.findings)
@@ -328,6 +329,71 @@ class EngineTests(unittest.TestCase):
 class NativeResourceTests(unittest.TestCase):
     setUp = EngineTests.setUp
     plan = EngineTests.plan
+
+    def test_historical_journal_conflict_retains_original_inverse(self):
+        import json
+        from iterm2_utils import legacy_state, state
+        from tests.test_legacy_state import legacy_fixture
+        target = self.root/'settings.json'
+        target.write_bytes(b'{"ours":9,"foreign":7}')
+        raw = legacy_fixture(str(target))
+        journal = self.context.paths.data/'journal'
+        journal.mkdir(parents=True)
+        path = journal/'intent.json'
+        path.write_text(json.dumps(raw))
+        result = engine.apply(self.plan([FileEdit(self.root/'next',None,b'new',0o600,'clipboard')]),self.context,None)
+        self.assertTrue(any(f.code=='rollback_unresolved' for f in result.findings))
+        self.assertEqual(target.read_bytes(),b'{"ours":9,"foreign":7}')
+        self.assertFalse((self.root/'next').exists())
+        retained = state.load(path)
+        self.assertIsInstance(retained,legacy_state.LegacyReceipt)
+        self.assertEqual(retained.resources,raw['resources'])
+        target.write_bytes(b'{"ours":1,"foreign":7}')
+        self.assertEqual(engine._recover(self.context,None),[])
+        self.assertEqual(json.loads(target.read_bytes()),{'ours':0,'foreign':7})
+        self.assertFalse(journal.exists())
+
+    def test_historical_committed_journal_stays_historical_without_agent_calls(self):
+        import json
+        from iterm2_utils import legacy_state, state
+        from tests.test_legacy_state import legacy_fixture
+        raw = legacy_fixture(str(self.root/'settings.json'))
+        journal = self.context.paths.data/'journal'
+        journal.mkdir(parents=True)
+        (journal/'result.json').write_text(json.dumps(raw))
+        (journal/'phase').write_bytes(b'commit')
+        with patch.object(engine.registration_adapter,'inspect',side_effect=AssertionError('old agent call')):
+            self.assertEqual(engine._recover(self.context,None),[])
+            result = engine.apply(self.plan([FileEdit(self.root/'next',None,b'new',0o600,'clipboard')]),self.context,None)
+        self.assertTrue(any(f.code=='migration_required' for f in result.findings))
+        self.assertIsInstance(state.load(self.context.paths.data/'receipt.json'),legacy_state.LegacyReceipt)
+        self.assertFalse((self.root/'next').exists())
+
+    def test_historical_registration_recovery_is_deferred_without_executables(self):
+        import json
+        from iterm2_utils import state
+        from tests.test_legacy_state import legacy_fixture
+        raw = legacy_fixture()
+        raw['selection']['features'] = ['mcp']
+        raw['resources'] = [dict(kind='registration',target='codex',locator={'name':'iterm2'},
+            before={'exists':False,'value':None},installed={'exists':True,'value':{'command':'fixture'}},
+            owners=['mcp'],version='1')]
+        journal = self.context.paths.data/'journal'
+        journal.mkdir(parents=True)
+        (journal/'intent.json').write_text(json.dumps(raw))
+        with patch.object(engine.registration_adapter,'inspect',side_effect=AssertionError('old agent call')):
+            findings = engine._recover(self.context,None)
+        self.assertTrue(any(f.code=='rollback_unresolved' for f in findings))
+        self.assertEqual(state.load(journal/'intent.json').resources,raw['resources'])
+
+    def test_current_apply_preserves_deferred_historical_inverse(self):
+        from iterm2_utils import state
+        from tests.test_legacy_state import legacy_fixture
+        receipt = Receipt('2',self.selection,[],[],[legacy_fixture()])
+        state.save(self.context.paths.data/'receipt.json',receipt)
+        result = engine.apply(self.plan([FileEdit(self.root/'next',None,b'new',0o600,'clipboard')]),self.context,None)
+        self.assertFalse(result.findings)
+        self.assertEqual(result.receipt.legacy_cleanup,[legacy_fixture()])
 
     def test_native_resources_compile_as_group_and_restore_exact_types(self):
         before = {'Show Status Bar': False, 'Status Bar Layout': {'components': []}}

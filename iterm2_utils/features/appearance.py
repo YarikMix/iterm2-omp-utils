@@ -7,7 +7,8 @@ import zlib
 
 from runtime.appearance import BUILTIN_ICONS, load_rules
 from .. import state
-from ..models import ChangeSet, Context, FileEdit, Finding, Selection, UiStep
+from ..models import ChangeSet, Context, FileEdit, Finding, UiStep
+from ..legacy_state import LegacySelection
 
 
 def _png(path):
@@ -75,7 +76,7 @@ def _png(path):
     return data
 
 
-def build(context: Context, selection: Selection) -> ChangeSet:
+def build(context: Context, selection: LegacySelection) -> ChangeSet:
     changes = ChangeSet([], [], [])
     if not selection.agents_for('appearance'):
         return changes

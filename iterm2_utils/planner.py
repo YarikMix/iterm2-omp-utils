@@ -4,7 +4,8 @@ import json
 import re
 from dataclasses import replace
 
-from .models import ChangeSet, Context, Finding, Plan, Selection, UiStep, resource_pairs
+from .models import ChangeSet, Context, Finding, Plan, Selection, UiStep
+from .legacy_state import LegacySelection, resource_pairs
 
 AGENTS = frozenset({'codex', 'claude'})
 FEATURES = frozenset({'clipboard', 'status', 'notifications', 'restore', 'mcp', 'shell', 'shortcuts', 'appearance', 'project-launcher'})
@@ -23,8 +24,10 @@ DESCRIPTIONS = {
 }
 
 
-def validate(selection: Selection, context: Context) -> list[Finding]:
+def validate(selection: LegacySelection, context: Context) -> list[Finding]:
     findings = []
+    if isinstance(selection, Selection):
+        return _omp_validate(selection, context)
 
     def add(feature, agent, code, state, message):
         findings.append(Finding(feature, agent, code, state, message))
@@ -76,7 +79,9 @@ def validate(selection: Selection, context: Context) -> list[Finding]:
     return findings
 
 
-def plan(context: Context, selection: Selection) -> Plan:
+def plan(context: Context, selection: LegacySelection) -> Plan:
+    if isinstance(selection, Selection):
+        return _omp_plan(context, selection)
     findings = validate(selection, context)
     from .features import profiles, shell, status, notifications, restore, mcp, appearance, project_launcher
     from . import migration
@@ -138,3 +143,78 @@ def plan(context: Context, selection: Selection) -> Plan:
         elif isinstance(edit, (ProfileBarEdit, StatusBarPositionEdit)):
             digest.update(json.dumps(edit.__dict__,sort_keys=True).encode())
     return Plan(selected, changes, digest.hexdigest())
+
+
+def _omp_validate(selection, context):
+    from . import state
+    try:
+        state.validate_selection(selection)
+    except ValueError:
+        return [Finding('selection', 'omp', 'invalid_selection', 'conflict', 'Choose a valid omp profile and explicit selection.')]
+    findings = []
+    supported = FEATURES - {'restore'}
+    if not selection.features or selection.features - supported:
+        findings.append(Finding('selection', 'omp', 'invalid_features', 'conflict', 'Choose supported features explicitly.'))
+    if (selection.shortcuts - SHORTCUTS or
+            (selection.shortcuts and 'shortcuts' not in selection.features) or
+            ('shortcuts' in selection.features and not selection.shortcuts)):
+        findings.append(Finding('shortcuts', 'omp', 'invalid_shortcuts', 'conflict', 'Select supported shortcuts explicitly.'))
+    for feature in sorted(selection.features & supported):
+        dependencies = {'iterm2', 'zsh'}
+        if feature not in {'shell', 'project-launcher', 'appearance'}:
+            dependencies.add('omp')
+        if feature in {'status', 'notifications', 'mcp', 'appearance', 'project-launcher'}:
+            dependencies.add('python3')
+        if feature == 'notifications':
+            dependencies.update({'terminal-notifier', 'it2', 'osascript'})
+        missing = sorted(dependencies - context.executables.keys())
+        python = re.fullmatch(r'(\d+)\.(\d+)(?:\.\d+)?', context.versions.get('python3', ''))
+        if missing:
+            findings.append(Finding(feature, 'omp', 'missing_binary', 'missing_dependency', 'Required executables: '+', '.join(missing)))
+        elif 'python3' in dependencies and (not python or tuple(map(int, python.groups())) < (3, 11)):
+            findings.append(Finding(feature, 'omp', 'python_version', 'missing_dependency', 'Select a verified Python 3.11+ runtime.'))
+        elif feature == 'appearance' and 'python:iterm2' not in context.capabilities:
+            findings.append(Finding(feature, 'omp', 'appearance_sdk', 'missing_dependency', 'The selected Python must import the iTerm2 SDK.'))
+        elif 'macos' not in context.capabilities:
+            findings.append(Finding(feature, 'omp', 'unsupported_platform', 'unavailable', 'This package supports macOS and zsh.'))
+        else:
+            findings.append(Finding(feature, 'omp', 'preview', 'ready', 'Explicit selected feature is ready for planning.'))
+    return findings
+
+
+def _omp_plan(context, selection):
+    """Build through the shared transaction contract, never an old-agent selection."""
+    from .features import profiles, shell, status, notifications, mcp, appearance, project_launcher
+    findings = _omp_validate(selection, context)
+    changes = ChangeSet([], [], findings)
+    builders = (
+        (profiles.build, {'clipboard', 'shortcuts'}),
+        (shell.runtime_payload, {'shell', 'status', 'notifications', 'appearance'}),
+        (shell.build, {'shell', 'status', 'notifications', 'appearance'}),
+        (status.build, {'status'}),
+        (notifications.build, {'notifications'}),
+        (mcp.build, {'mcp'}),
+        (appearance.build, {'appearance'}),
+        (project_launcher.build, {'project-launcher'}),
+    )
+    for builder, features in builders:
+        if not selection.features & features:
+            continue
+        try:
+            built = builder(context, selection)
+            changes.edits.extend(built.edits)
+            changes.ui.extend(built.ui)
+            changes.findings.extend(built.findings)
+            changes.consumers.update(built.consumers)
+        except (ValueError, OSError, KeyError, TypeError, AttributeError):
+            for feature in sorted(selection.features & features):
+                changes.findings.append(Finding(feature, 'omp', 'builder_conflict', 'conflict',
+                                               'A selected resource could not be safely prepared.'))
+    payload = {'features': sorted(selection.features), 'shortcuts': sorted(selection.shortcuts),
+               'parent_profile': selection.parent_profile,
+               'omp_profile': {'name': selection.omp_profile.name, 'agent_dir': str(selection.omp_profile.agent_dir)},
+               'resume_key': selection.resume_key, 'notify_errors': selection.notify_errors}
+    digest = hashlib.sha256(json.dumps(payload, sort_keys=True).encode())
+    for edit in changes.edits:
+        digest.update(repr(edit).encode())
+    return Plan(selection, changes, digest.hexdigest())

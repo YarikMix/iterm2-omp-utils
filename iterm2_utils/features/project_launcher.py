@@ -8,7 +8,7 @@ from dataclasses import replace
 
 from .. import state
 from ..config import iterm
-from ..models import ChangeSet, FileEdit, Finding, ProfileBarEdit, StatusBarPositionEdit
+from ..models import ChangeSet, FileEdit, Finding, ProfileBarEdit, Selection, StatusBarPositionEdit
 
 FEATURE = 'project-launcher'
 OWNER = 'shared:project-launcher'
@@ -86,7 +86,8 @@ def _load(context):
 
 def prepare(context, selection, runner):
     """Only explicitly selected/recorded consumers may contact the native helper."""
-    if not selection.agents_for(FEATURE):
+    selected = FEATURE in selection.features if isinstance(selection, Selection) else bool(selection.agents_for(FEATURE))
+    if not selected:
         return context
     snapshot = None
     try:

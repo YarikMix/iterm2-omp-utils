@@ -4,7 +4,8 @@ import fnmatch
 import json
 import uuid
 from ..config import tomlfile
-from ..models import ChangeSet, Context, Selection, FileEdit, PreferenceEdit, Finding
+from ..models import ChangeSet, Context, FileEdit, PreferenceEdit, Finding
+from ..legacy_state import LegacySelection
 
 DOMAIN = 'com.googlecode.iterm2'
 OWNER = 'shared:agent-profiles'
@@ -16,7 +17,7 @@ SHORTCUTS = {
 }
 
 
-def build(context: Context, selection: Selection) -> ChangeSet:
+def build(context: Context, selection: LegacySelection) -> ChangeSet:
     changes = ChangeSet([], [], [])
     clipboard = 'codex' in selection.agents_for('clipboard')
     shortcuts = selection.shortcuts if 'shortcuts' in selection.features else frozenset()

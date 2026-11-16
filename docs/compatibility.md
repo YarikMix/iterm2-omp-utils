@@ -5,6 +5,43 @@ Release: **v0.1.0-beta.1**, 2026-10-23. Supported target: macOS + zsh with Pytho
 it does not establish Linux product support. This beta has no stable-production
 acceptance claim.
 
+## Receipt v2 and historical recovery boundary — 2026-11-16
+
+The current receipt has exactly `version: "2"`, `selection`, `resources`,
+`pending_ui`, and `legacy_cleanup`. Its selection contains explicit feature and
+shortcut lists, the iTerm2 `parent_profile`, `omp_profile` (`name` and absolute
+`agent_dir`), nullable `resume_key`, and boolean `notify_errors`. The default omp
+profile is represented by `name: null`; it is not an agent or iTerm2 profile.
+Current paths and selection have no Codex/Claude agent fields.
+
+Resource address schema version remains `"1"` independently of the receipt
+version. Before-values, installed values, owners, typed native values, CAS,
+symlink guards, backups and durable intent-before-write ordering are unchanged.
+Reapplying an owned address preserves its original inverse.
+
+`legacy_cleanup` is a list of complete, strictly validated v1 receipt objects.
+This preserves deferred/unresolved historical resources together with their
+original before-values, pending UI and bounded native UI snapshots. It does not
+promote them into current resource ownership. Normal install, update, uninstall,
+reconcile and doctor dispatch historical receipts as `migration_required`
+without discovering or invoking historical agent executables.
+
+`state.load` returns a current receipt, a distinct historical receipt, or `None`;
+malformed/unsupported state grants no ownership. `state.save` accepts current
+receipts only. Recovery alone uses `save_recovery` to finish a historical commit
+as v1 or retain an unresolved historical journal as v1. A user-modified address
+is never overwritten, and its original inverse remains retryable. Historical
+CLI registrations are deferred instead of calling their old agent commands.
+Bootstrap receipts remain under their separate existing per-bundle state paths.
+
+Profile resolution follows the existing omp-bootstrap implementation: explicit
+choice, then `OMP_PROFILE`, then `PI_PROFILE`; empty/`default` selects default.
+`PI_CONFIG_DIR` uses Node-style HOME-prefixed joining even for absolute-looking
+values. Named profiles ignore `PI_CODING_AGENT_DIR`; default-only relative
+overrides resolve against process cwd without expanding `~`. Resolution is pure.
+The implementation is fixture-scoped; integrated and live verification remain
+separate acceptance gates.
+
 ## Codex API launch and exact resume — 2026-11-01
 
 Current `launch-codex` supports mutually exclusive `--handoff ABS_FILE` and

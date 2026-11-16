@@ -8,11 +8,21 @@ import re
 import tempfile
 from dataclasses import asdict
 from pathlib import Path
-from .models import Receipt, Selection, UiStep
+from typing import TYPE_CHECKING
 
-VERSION = '1'
+if TYPE_CHECKING:
+    from .legacy_state import LegacyReceipt
+from .models import OmpProfile, Receipt, Selection, UiStep
+
+VERSION = '2'
+RESOURCE_VERSION = '1'
 FIELDS = {'kind','target','locator','before','installed','owners','version'}
 KINDS = {'file','json','toml','zsh','preference','registration','symlink','hook','profile_bar','status_bar_position'}
+CURRENT_FEATURES = frozenset({'clipboard', 'status', 'notifications', 'mcp', 'shell', 'shortcuts',
+                              'appearance', 'project-launcher', 'bootstrap-skill'})
+CURRENT_SHORTCUTS = frozenset({'ctrl-v-ru', 'alt-enter', 'ctrl-q', 'resume'})
+SHARED_OWNERS = frozenset({'shared:runtime', 'shared:shell', 'shared:hooks', 'shared:agent-profiles',
+                           'shared:project-launcher'})
 
 
 def private_dir(path):
@@ -41,39 +51,21 @@ def durable_write(path, content, mode=0o600, *, before_replace=None):
             os.unlink(temporary)
 
 
-def validate(receipt):
-    choice = receipt.selection
-    if not isinstance(choice.parent_profile, str) or type(choice.adopt_legacy) is not bool or type(choice.coexist_notifications) is not bool:
-        raise ValueError('Invalid selection')
-    if choice.notification_coexist_agents is not None and (not isinstance(choice.notification_coexist_agents, list) or
-            any(not isinstance(a,str) or a not in choice.agents for a in choice.notification_coexist_agents)):
-        raise ValueError('Invalid coexistence choice')
-    if (choice.agent_features is None) != (choice.agent_shortcuts is None):
-        raise ValueError('Incomplete pairwise selection')
-    if choice.agent_features is not None:
-        for mapping, allowed in ((choice.agent_features, choice.features), (choice.agent_shortcuts, choice.shortcuts)):
-            if not isinstance(mapping, dict) or set(mapping) != set(choice.agents):
-                raise ValueError('Invalid pairwise agents')
-            for agent, values in mapping.items():
-                if not isinstance(values, list) or any(not isinstance(v,str) for v in values) or len(set(values)) != len(values) or not set(values) <= allowed:
-                    raise ValueError('Invalid pairwise choices')
-            if set().union(*(set(values) for values in mapping.values())) != set(allowed):
-                raise ValueError('Pairwise choices disagree with aggregate')
-        if any(choice.agent_shortcuts[a] and 'shortcuts' not in choice.agent_features[a] for a in choice.agents):
-            raise ValueError('Shortcut choices require their feature')
-    if receipt.version != VERSION or not isinstance(receipt.resources,list):
-        raise ValueError('Unsupported receipt')
-    if not isinstance(receipt.ui_snapshots, dict) or set(receipt.ui_snapshots) - {'claude-native-status'}:
-        raise ValueError('Invalid UI snapshot')
-    for entries in receipt.ui_snapshots.values():
-        if not isinstance(entries, list):
-            raise ValueError('Invalid UI snapshot')
-        for entry in entries:
-            if not isinstance(entry, dict) or set(entry) != {'event', 'entry'} or not isinstance(entry['event'], str):
-                raise ValueError('Invalid UI snapshot entry')
-            validate_native_entry(entry)
-    for r in receipt.resources:
-        if (not isinstance(r,dict) or set(r) != FIELDS or r['version'] != VERSION or
+def validate_ui(steps):
+    if not isinstance(steps, list):
+        raise ValueError('Invalid pending UI')
+    for step in steps:
+        if (not isinstance(step, UiStep) or not all(isinstance(v, str) for v in
+                (step.code, step.feature, step.instruction)) or
+                (step.agent is not None and not isinstance(step.agent, str))):
+            raise ValueError('Invalid pending UI')
+
+
+def validate_resources(resources):
+    if not isinstance(resources, list):
+        raise ValueError('Invalid resources')
+    for r in resources:
+        if (not isinstance(r,dict) or set(r) != FIELDS or r['version'] != RESOURCE_VERSION or
             r['kind'] not in KINDS or not isinstance(r['target'],str) or
             not isinstance(r['locator'],dict) or not isinstance(r['owners'],list) or
             not r['owners'] or any(not isinstance(o,str) or not o for o in r['owners'])):
@@ -137,35 +129,109 @@ def validate(receipt):
             for key in ('before','installed'):
                 if r[key]['exists'] and r[key]['value'] != loc['entry']:
                     raise ValueError('Invalid hook value')
+
+
+def validate_selection(choice):
+    from .omp_profile import profile_name
+    if not isinstance(choice, Selection):
+        raise ValueError('Current selection required')
+    for values in (choice.features, choice.shortcuts):
+        if not isinstance(values, frozenset) or any(not isinstance(v, str) or not v for v in values):
+            raise ValueError('Invalid selection')
+    if (not isinstance(choice.parent_profile, str) or not choice.parent_profile.strip() or
+            type(choice.notify_errors) is not bool or
+            (choice.resume_key is not None and (not isinstance(choice.resume_key, str) or not choice.resume_key))):
+        raise ValueError('Invalid selection')
+    profile = choice.omp_profile
+    if (not isinstance(profile, OmpProfile) or not isinstance(profile.agent_dir, Path) or
+            not profile.agent_dir.is_absolute() or
+            (profile.name is not None and (not isinstance(profile.name, str) or profile_name(profile.name) != profile.name))):
+        raise ValueError('Invalid omp profile')
+    if not choice.features <= CURRENT_FEATURES or not choice.shortcuts <= CURRENT_SHORTCUTS:
+        raise ValueError('Unknown current selection')
+    if choice.shortcuts and 'shortcuts' not in choice.features:
+        raise ValueError('Shortcut choices require their feature')
+    return choice
+
+
+def validate(receipt):
+    if not isinstance(receipt, Receipt) or receipt.version != VERSION:
+        raise ValueError('Unsupported receipt')
+    validate_selection(receipt.selection)
+    validate_resources(receipt.resources)
+    validate_ui(receipt.pending_ui)
+    if any(step.agent not in {None, 'omp'} for step in receipt.pending_ui):
+        raise ValueError('Historical UI requires historical state')
+    for resource in receipt.resources:
+        for owner in resource['owners']:
+            if owner not in SHARED_OWNERS and owner.removeprefix('omp:') not in CURRENT_FEATURES:
+                raise ValueError('Unknown or historical owner requires historical state')
+        if resource['kind'] == 'registration' and resource['target'] != 'omp':
+            raise ValueError('Historical registration requires historical state')
+    if not isinstance(receipt.legacy_cleanup, list):
+        raise ValueError('Invalid historical cleanup')
+    from .legacy_state import decode
+    for raw in receipt.legacy_cleanup:
+        decode(raw)
     return receipt
 
 
-def load(path: Path) -> Receipt | None:
+def decode(data):
+    if not isinstance(data, dict):
+        raise ValueError('Invalid receipt')
+    if data.get('version') == '1':
+        from .legacy_state import decode as decode_legacy
+        return decode_legacy(data)
+    if set(data) != {'version', 'selection', 'resources', 'pending_ui', 'legacy_cleanup'} or data['version'] != VERSION:
+        raise ValueError('Unsupported receipt')
+    if not isinstance(data['selection'], dict) or not isinstance(data['pending_ui'], list):
+        raise ValueError('Invalid selection')
+    selection = dict(data['selection'])
+    if set(selection) != {'features', 'shortcuts', 'parent_profile', 'omp_profile', 'resume_key', 'notify_errors'}:
+        raise ValueError('Invalid selection')
+    for key in ('features', 'shortcuts'):
+        values = selection[key]
+        if not isinstance(values, list) or any(not isinstance(v, str) for v in values) or len(set(values)) != len(values):
+            raise ValueError('Invalid selection')
+        selection[key] = frozenset(values)
+    profile = selection['omp_profile']
+    if not isinstance(profile, dict) or set(profile) != {'name', 'agent_dir'} or not isinstance(profile['agent_dir'], str):
+        raise ValueError('Invalid omp profile')
+    selection['omp_profile'] = OmpProfile(profile['name'], Path(profile['agent_dir']))
+    return validate(Receipt(data['version'], Selection(**selection), data['resources'],
+                            [UiStep(**s) for s in data['pending_ui']], data['legacy_cleanup']))
+
+
+def load(path: Path) -> 'Receipt | LegacyReceipt | None':
     try:
         raw = path.read_bytes()
     except FileNotFoundError:
         return None
     try:
-        data = json.loads(raw)
-        if set(data) not in ({'version','selection','resources','pending_ui'}, {'version','selection','resources','pending_ui','ui_snapshots'}):
-            raise ValueError()
-        selection = dict(data['selection'])
-        for key in ('agents','features','shortcuts'):
-            if not isinstance(selection[key],list) or any(not isinstance(v,str) for v in selection[key]):
-                raise ValueError('Invalid selection')
-            selection[key] = frozenset(selection[key])
-        return validate(Receipt(data['version'],Selection(**selection),data['resources'],[UiStep(**s) for s in data['pending_ui']],data.get('ui_snapshots',{})))
-    except (ValueError,TypeError,KeyError,UnicodeError):
+        from .config.jsonfile import parse
+        return decode(parse(raw))
+    except (ValueError, TypeError, KeyError, UnicodeError, AttributeError):
         raise ValueError('Invalid or unsupported receipt; ownership unavailable') from None
 
 
 def save(path: Path, receipt: Receipt) -> None:
-    validate(receipt)
-    data = asdict(receipt)
-    for key in ('agents','features','shortcuts'):
+    data = asdict(validate(receipt))
+    for key in ('features', 'shortcuts'):
         data['selection'][key] = sorted(data['selection'][key])
+    data['selection']['omp_profile']['agent_dir'] = str(receipt.selection.omp_profile.agent_dir)
     private_dir(path.parent)
-    durable_write(path,(json.dumps(data,sort_keys=True,ensure_ascii=False)+'\n').encode())
+    durable_write(path, (json.dumps(data, sort_keys=True, ensure_ascii=False, allow_nan=False)+'\n').encode())
+
+
+def save_recovery(path: Path, receipt) -> None:
+    """Preserve a v1 journal/commit as v1; never silently adopt its ownership."""
+    from .legacy_state import LegacyReceipt, encode
+    if isinstance(receipt, LegacyReceipt):
+        data = encode(receipt)
+        private_dir(path.parent)
+        durable_write(path, (json.dumps(data, sort_keys=True, ensure_ascii=False, allow_nan=False)+'\n').encode())
+    else:
+        save(path, receipt)
 
 
 def validate_hook(entry):

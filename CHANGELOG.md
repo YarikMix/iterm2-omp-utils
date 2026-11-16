@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Separated current omp receipt v2 from strict historical v1 integration data.
+Added pure, shared omp profile resolution matching the existing bootstrap rules.
+Generic recovery preserves historical inverses and conflicts without old-agent
+commands; current lifecycle requests require explicit migration for v1 receipts.
+Resource schema/CAS/native unknown-outcome safeguards and independent bootstrap
+receipt locations are retained. Integrated verification is queued, not claimed.
+
 Добавлен отдельный bootstrap-навык `iterm2-projects` для операций со списком
 проектов project-launcher; его receipt независим от receipts других skill/feature,
 а при `both` один receipt описывает оба выбранных host.

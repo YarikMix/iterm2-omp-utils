@@ -14,9 +14,9 @@ import tempfile
 import uuid
 from contextlib import contextmanager
 from pathlib import Path
-from . import state
+from . import state, legacy_state
 from .config import jsonfile, tomlfile, zshrc, preferences, mcp, iterm
-from .models import SymlinkEdit, FileEdit, PreferenceEdit, RegistrationEdit, ProfileBarEdit, StatusBarPositionEdit, Receipt, Outcome, Finding, Plan, Context
+from .models import SymlinkEdit, FileEdit, PreferenceEdit, RegistrationEdit, ProfileBarEdit, StatusBarPositionEdit, Receipt, Outcome, Finding, Plan, Context, Selection
 from .commands import Runner
 
 # Registration backend uses the transaction Context for every inspection and write.
@@ -41,13 +41,13 @@ def _value(value=None, exists=True):
     return {'exists':exists,'value':value if exists else None}
 
 
-def _empty(selection):
+def _empty(selection: Selection):
     return Receipt(state.VERSION,selection,[],[])
 
 
 def _resource(kind,target,locator,before,installed,owner):
     return dict(kind=kind,target=str(target),locator=locator,before=before,
-                installed=installed,owners=[owner],version=state.VERSION)
+                installed=installed,owners=[owner],version=state.RESOURCE_VERSION)
 
 
 def _identity(r):
@@ -125,6 +125,8 @@ def _compile(edit):
         path = edit.path.parent.resolve() / edit.path.name
         return [_resource('symlink',path,{},_value(edit.before,edit.before is not None),_value(edit.after,edit.after is not None),edit.owner)]
     if isinstance(edit,RegistrationEdit):
+        if edit.agent != 'omp':
+            raise ValueError('Historical registrations require migration')
         if registration_adapter is None:
             raise ValueError('Registration backend unavailable')
         return [_resource('registration',edit.agent,{'name':edit.name},_value(edit.before,edit.before is not None),_value(edit.after,edit.after is not None),edit.owner)]
@@ -206,6 +208,8 @@ def _read(r,runner,context):
     if kind == 'preference':
         return preferences.read(runner,r['target'],loc['key'])
     if kind == 'registration':
+        if r['target'] != 'omp':
+            raise ValueError('Historical registrations require migration')
         if registration_adapter is None:
             raise ValueError('Registration backend unavailable')
         value = registration_adapter.inspect(r['target'],loc['name'],context,runner)
@@ -355,6 +359,8 @@ def _inverse(records,runner,context):
     for inverse in inverses:
         r = dict(inverse,before=inverse['installed'],installed=inverse['before'])
         try:
+            if r['kind'] == 'registration' and r['target'] in {'codex', 'claude'}:
+                raise ValueError('Historical registrations require receipt-authorized migration')
             current = _read(r,runner,context)
             if _same(current,r['before']):
                 continue
@@ -390,7 +396,7 @@ def _recover(context,runner):
         result = state.load(journal/'result.json')
         if result is None:
             raise ValueError('Missing committed journal')
-        state.save(context.paths.data/'receipt.json',result)
+        state.save_recovery(context.paths.data/'receipt.json',result)
         shutil.rmtree(journal)
         return []
     intent = state.load(journal/'intent.json')
@@ -401,7 +407,7 @@ def _recover(context,runner):
     unresolved,findings = _inverse(intent.resources,runner,context)
     if unresolved:
         intent.resources = unresolved
-        state.save(journal/'intent.json',intent)
+        state.save_recovery(journal/'intent.json',intent)
         return findings
     shutil.rmtree(journal)
     return []
@@ -450,7 +456,7 @@ def _transaction(changes,result,context,runner):
 
 
 def pair_resources(resources, selection, context):
-    from .models import resource_pairs
+    from .legacy_state import resource_pairs
     result = copy.deepcopy(resources)
     for resource in result:
         owners = []
@@ -460,25 +466,29 @@ def pair_resources(resources, selection, context):
                 owners.append(owner)
             else:
                 owners.extend(sorted(resource_pairs(selection, owner, resource['target'], context, shared)))
-        if shared == 'shared:hooks' and resource['target'] == str((context.paths.codex_home/'hooks.json').resolve()):
+        if shared == 'shared:hooks' and resource['target'].endswith('/hooks.json'):
             owners = ['shared:codex-hooks' if o == shared else o for o in owners]
         resource['owners'] = list(dict.fromkeys(owners))
     return result
 
 
-def apply(plan: Plan, context: Context, runner: Runner, *, ui_snapshots=None, remove_owners=frozenset(), expected_receipt=...) -> Outcome:
+def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozenset(), expected_receipt=...) -> Outcome:
+    if isinstance(plan.selection, legacy_state.LegacySelection):
+        historical = legacy_state.LegacyReceipt('1',plan.selection,[],[])
+        return Outcome(historical,[_finding('migration_required','Historical selections cannot install current resources.')])
     empty = _empty(plan.selection)
     findings = list(plan.changes.findings)
-    if ((not plan.selection.features and not remove_owners) or not plan.selection.agents or
+    if ((not plan.selection.features and not remove_owners) or
             any(f.state in {'conflict','missing_dependency','unavailable'} for f in findings)):
-        return Outcome(empty,findings or [_finding('invalid_selection','Select agents and features before installation.')])
+        return Outcome(empty,findings or [_finding('invalid_selection','Select features before installation.')])
     try:
+        state.validate_selection(plan.selection)
         compiled = []
         for edit in plan.changes.edits:
             consumers = None
             if edit.owner.startswith('shared:'):
                 consumers = plan.changes.consumers.get(edit.owner)
-                if not consumers or not consumers <= (plan.selection.features | plan.selection.pairs):
+                if not consumers or not consumers <= plan.selection.features:
                     raise ValueError('Shared dependency consumers must be explicit')
             for r in _compile(edit):
                 if consumers is not None:
@@ -495,8 +505,8 @@ def apply(plan: Plan, context: Context, runner: Runner, *, ui_snapshots=None, re
                 raise ValueError('Receipt changed since feature planning')
             previous = persisted or empty
             previous = copy.deepcopy(previous)
-            if plan.selection.agent_features is not None:
-                previous.resources = pair_resources(previous.resources, previous.selection, context)
+            if isinstance(persisted, legacy_state.LegacyReceipt):
+                return Outcome(persisted,findings+[_finding('migration_required','Historical ownership must be migrated before installation.')])
             resources = copy.deepcopy(previous.resources)
             # A regenerated builder may describe an implemented no-op. Reuse only
             # addresses already owned by this exact feature/shared marker, never
@@ -567,7 +577,7 @@ def apply(plan: Plan, context: Context, runner: Runner, *, ui_snapshots=None, re
                     else:
                         changes.append(dict(resource,before=resource['installed'],installed=resource['before']))
                 resources = retained
-            receipt = Receipt(state.VERSION,plan.selection,resources,plan.changes.ui,previous.ui_snapshots if ui_snapshots is None else ui_snapshots)
+            receipt = Receipt(state.VERSION,plan.selection,resources,plan.changes.ui,copy.deepcopy(previous.legacy_cleanup))
             ok,failed = _transaction(changes,receipt,context,runner)
             return Outcome(receipt if ok else previous,findings+failed)
     except Exception:
@@ -576,6 +586,8 @@ def apply(plan: Plan, context: Context, runner: Runner, *, ui_snapshots=None, re
 
 def revert(receipt: Receipt, context: Context, runner: Runner, owners: frozenset[str]) -> Outcome:
     findings = []
+    if isinstance(receipt, legacy_state.LegacyReceipt):
+        return Outcome(receipt,[_finding('migration_required','Historical ownership must be migrated before uninstalling.')])
     try:
         state.validate(receipt)
         if not owners:
@@ -604,7 +616,7 @@ def revert(receipt: Receipt, context: Context, runner: Runner, owners: frozenset
                     findings.append(_finding('uninstall_changed','User-changed value was preserved; ownership remains unresolved.',r['owners'][0]))
                     continue
                 changes.append(dict(r,before=r['installed'],installed=r['before']))
-            result = Receipt(state.VERSION,receipt.selection,remaining,receipt.pending_ui,receipt.ui_snapshots)
+            result = Receipt(state.VERSION,receipt.selection,remaining,receipt.pending_ui,copy.deepcopy(receipt.legacy_cleanup))
             ok,failed = _transaction(changes,result,context,runner)
             return Outcome(result if ok else receipt,findings+failed)
     except Exception:

@@ -6,7 +6,8 @@ The regular CAS transaction engine maintains its own bootstrap receipt.
 import base64
 from dataclasses import replace
 from . import engine, state
-from .models import ChangeSet, Context, FileEdit, Finding, Plan, Selection
+from .models import ChangeSet, Context, FileEdit, Finding, Plan
+from .legacy_state import LegacySelection
 
 AGENTS = frozenset({'codex', 'claude'})
 OWNER = 'bootstrap-skill'
@@ -96,6 +97,6 @@ def install(context, agents, runner, *, dry_run=False, skill='iterm2-setup') -> 
         selected = agents | (receipt.selection.agents if receipt else frozenset())
     except (ValueError, OSError):
         return [_conflict(None, 'skill_ownership_unavailable', 'Bootstrap ownership is unavailable.')]
-    selection = Selection(selected, frozenset({OWNER}), frozenset(), 'Default')
+    selection = LegacySelection(selected, frozenset({OWNER}), frozenset(), 'Default')
     result = engine.apply(Plan(selection, changes, 'skill-bootstrap'), isolated, runner, expected_receipt=receipt)
     return result.findings

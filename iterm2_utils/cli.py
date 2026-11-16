@@ -6,7 +6,8 @@ from dataclasses import asdict
 from runtime.codex_restore.codexlib.transcripts import normalize_uuid
 from .commands import Runner
 from .discovery import discover, resolve_paths, live_status
-from .models import Selection, Finding, Context
+from .models import Selection, Finding, Context, Outcome
+from .legacy_state import LegacyReceipt, LegacySelection
 from . import lifecycle, migration, state
 from .planner import AGENTS, FEATURES, SHORTCUTS, plan
 
@@ -22,6 +23,11 @@ def _exit(findings):
 
 
 def _selection(selection):
+    if isinstance(selection, Selection):
+        return dict(features=sorted(selection.features), shortcuts=sorted(selection.shortcuts),
+                    parent_profile=selection.parent_profile,
+                    omp_profile=dict(name=selection.omp_profile.name, agent_dir=str(selection.omp_profile.agent_dir)),
+                    resume_key=selection.resume_key, notify_errors=selection.notify_errors)
     return dict(agents=sorted(selection.agents),features=sorted(selection.features),
                 shortcuts=sorted(selection.shortcuts),parent_profile=selection.parent_profile,
                 agent_features={a: sorted(selection.features_for(a)) for a in sorted(selection.agents)},
@@ -35,6 +41,19 @@ def _outcome(mode, result):
     return dict(mode=mode,selection=_selection(result.receipt.selection),
                 completed=sorted(result.receipt.selection.features-pending),pending=sorted(pending),
                 findings=[asdict(f) for f in result.findings],ui=[asdict(s) for s in result.receipt.pending_ui])
+
+
+def _receipt_boundary(receipt, args):
+    """Stop old consumer dispatch before discovery when state has crossed versions."""
+    if receipt is None:
+        return False
+    historical = isinstance(receipt, LegacyReceipt)
+    finding = Finding('selection', None, 'migration_required' if historical else 'invalid_selection', 'conflict',
+                      'Historical ownership requires explicit migration.' if historical else
+                      'Current omp ownership cannot be used with a historical agent selection.')
+    output = _outcome(args.command, Outcome(receipt, [finding]))
+    print(json.dumps(output, sort_keys=True) if args.json else finding.message)
+    return True
 
 
 def main(argv=None):
@@ -118,10 +137,12 @@ def main(argv=None):
             previous = state.load(paths.data/'receipt.json')
         except (OSError, ValueError):
             previous = None
+        if _receipt_boundary(previous, args):
+            return 2
         context = discover(paths,runner,agents=agents | (previous.selection.agents if previous else frozenset()))
         context.appearance_config = args.appearance_config
         context.project_launcher_config = args.project_launcher_config
-        selection = Selection(agents,features,shortcuts,args.parent_profile if args.parent_profile is not None else previous.selection.parent_profile if previous else 'Default',args.adopt_legacy,coexist_notifications=args.coexist_notifications)
+        selection = LegacySelection(agents,features,shortcuts,args.parent_profile if args.parent_profile is not None else previous.selection.parent_profile if previous else 'Default',args.adopt_legacy,coexist_notifications=args.coexist_notifications)
         if args.command == 'plan':
             # Preview the same cumulative intent as install, with new choices
             # applied only to their explicitly requested agents.
@@ -143,6 +164,23 @@ def main(argv=None):
         except (ValueError,OSError):
             receipt = None
             receipt_error = True
+        if isinstance(receipt, LegacyReceipt):
+            if _receipt_boundary(receipt, args):
+                return 2
+        if receipt is not None and not isinstance(receipt, LegacyReceipt):
+            context = Context(paths, {}, {}, frozenset(), {}, {}, omp_profile=receipt.selection.omp_profile)
+            if args.command == 'doctor':
+                findings = lifecycle.doctor(context, receipt, runner)
+                output = dict(mode='read_only_discovery', selection=_selection(receipt.selection),
+                              findings=[asdict(f) for f in findings])
+            else:
+                result = (lifecycle.update(context, runner, dry_run=args.dry_run) if args.command == 'update' else
+                          lifecycle.uninstall(context, features, runner, dry_run=args.dry_run) if args.command == 'uninstall' else
+                          lifecycle.reconcile_ui(context, args.step, runner))
+                findings = result.findings
+                output = _outcome(args.command, result)
+            print(json.dumps(output, sort_keys=True) if args.json else '\n'.join(f.message for f in findings))
+            return _exit(findings)
         agents = receipt.selection.agents if receipt else AGENTS
         context = discover(paths,runner,agents=agents)
         if args.command == 'doctor':

@@ -10,7 +10,9 @@ import subprocess
 from pathlib import Path
 
 from .commands import Runner
-from .models import Context, Paths
+from .models import Context
+from .legacy_state import LegacyPaths
+from .omp_profile import resolve_omp_profile
 
 NATIVE_STATUS_FLAGS = frozenset({
     '--background-tasks', '--background-tasks-delta', '--turn-open',
@@ -35,7 +37,7 @@ def _native_version(info):
     return (parts + (0,) * (3 - len(parts))) >= (3, 7, 6)
 
 
-def resolve_paths() -> Paths:
+def resolve_paths() -> LegacyPaths:
     home = Path.home().absolute()
 
     def location(key, default):
@@ -43,7 +45,7 @@ def resolve_paths() -> Paths:
         # Relative XDG overrides are invalid; never resolve them against caller cwd.
         return value if value.is_absolute() else default
 
-    return Paths(home, location('ZDOTDIR', home) / '.zshrc',
+    return LegacyPaths(home, location('ZDOTDIR', home) / '.zshrc',
                  location('CODEX_HOME', home / '.codex'),
                  home / '.claude/settings.json',
                  location('XDG_CONFIG_HOME', home / '.config') / 'iterm2-utils',
@@ -86,7 +88,7 @@ def _iterm(paths):
     return None, {}
 
 
-def discover(paths: Paths, runner: Runner, *, agents: frozenset[str] = frozenset({'codex', 'claude'})) -> Context:
+def discover(paths: LegacyPaths, runner: Runner, *, agents: frozenset[str] = frozenset({'codex', 'claude'})) -> Context:
     executables, versions, capabilities = {}, {}, set()
     if platform.system() == 'Darwin':
         capabilities.add('macos')
@@ -165,7 +167,8 @@ def discover(paths: Paths, runner: Runner, *, agents: frozenset[str] = frozenset
                 continue
     # External integration readiness is allowlisted; ownership remains in receipts.
     # Foreign env/MCP/auth values are never retained in Context or diagnostics.
-    return Context(paths, executables, versions, frozenset(capabilities), profiles, status_installations(paths, app), preferences)
+    return Context(paths, executables, versions, frozenset(capabilities), profiles, status_installations(paths, app),
+                   preferences, omp_profile=resolve_omp_profile(paths.home, dict(os.environ)))
 
 
 def _legacy_codex_status(paths):
@@ -351,7 +354,7 @@ def _status_command_roles(command, depth=0):
     return roles
 
 
-def native_codex_hook_state(paths: Paths, app: Path) -> str:
+def native_codex_hook_state(paths: LegacyPaths, app: Path) -> str:
     """Inspect external direct hooks; never execute hooks or read executable bodies."""
     from runtime.events import CODEX_EVENTS
     required = set(CODEX_EVENTS) - {'PreCompact', 'PostCompact'}
@@ -408,7 +411,7 @@ def native_codex_hook_state(paths: Paths, app: Path) -> str:
     return 'complete'
 
 
-def status_installations(paths: Paths, app: Path | None = None) -> dict:
+def status_installations(paths: LegacyPaths, app: Path | None = None) -> dict:
     """Return booleans only; never expose foreign hooks/env/settings bodies."""
     installed={}
     if _legacy_codex_status(paths):

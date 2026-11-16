@@ -11,7 +11,8 @@ import shlex
 from pathlib import Path
 from .. import __version__
 from ..config import zshrc
-from ..models import ChangeSet, Context, Selection, FileEdit, SymlinkEdit, Finding
+from ..models import ChangeSet, Context, FileEdit, SymlinkEdit, Finding
+from ..legacy_state import LegacySelection
 
 OWNER = 'shared:shell'
 RUNTIME_OWNER = 'shared:runtime'
@@ -34,7 +35,7 @@ def _consumers(selection):
                      or a=='claude' and feature=='notifications')
 
 
-def runtime_payload(context: Context, selection: Selection) -> ChangeSet:
+def runtime_payload(context: Context, selection: LegacySelection) -> ChangeSet:
     """Copy validated source trees before switching the stable current symlink.
 
     Only runtime Python/zsh, vendor Python/zsh/license, package helpers and
@@ -93,7 +94,7 @@ def runtime_payload(context: Context, selection: Selection) -> ChangeSet:
     return changes
 
 
-def build(context: Context, selection: Selection) -> ChangeSet:
+def build(context: Context, selection: LegacySelection) -> ChangeSet:
     changes = ChangeSet([], [], [])
     marks = 'shell' in selection.features
     dispatch = _dispatcher(selection)
