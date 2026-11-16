@@ -166,12 +166,15 @@ class FakeAPI:
         self.reset = AsyncMock(side_effect=self._reset)
         self.close = AsyncMock()
         self.main = 'zsh'
+        self.generation = 'first'
+        self.process_pid = 42
         self.events = asyncio.Queue()
         self.watching = False
         self.current = {'Tab Color': {'Red Component': .4}, 'Use Tab Color': True,
                         'Custom Icon Path': '/fixture/manual.png', 'Icon': 2}
         self.saved = None
         self.snapshot = AsyncMock(side_effect=lambda session: dict(self.current))
+        self.baseline = None
         self.save_snapshot = AsyncMock(side_effect=self._save_snapshot)
         self.invalidate_snapshot = AsyncMock(side_effect=self._invalidate_snapshot)
         self.take_snapshot = AsyncMock(side_effect=self._take_snapshot)
@@ -183,11 +186,14 @@ class FakeAPI:
         self.current.update({'Use Tab Color': False, 'Use Tab Color (Light)': False,
                              'Use Tab Color (Dark)': False, 'Icon': 0, 'Custom Icon Path': ''})
 
-    async def _save_snapshot(self, session, properties, launch_id=None):
+    async def _save_snapshot(self, session, properties, launch_id=None, owner=None):
         self.saved = (launch_id, None if properties is None else dict(properties))
+        self.main_owner = owner
 
-    async def _invalidate_snapshot(self, session):
+    async def _invalidate_snapshot(self, session, *, keep_baseline=True):
         self.saved = None
+        if not keep_baseline:
+            self.baseline = None
 
     async def _write_if_current(self, session, color, icon, launch_id=None):
         if self.saved is None or self.saved[0] != launch_id:
@@ -211,7 +217,29 @@ class FakeAPI:
         return True
 
     async def main_identity(self, session, registry):
-        return {'generation': 'actual-main'} if self.main == 'omp' else None
+        return {'terminal_id': UUID, 'pid': self.process_pid, 'process_start': 'birth',
+                'generation': self.generation} if self.main == 'omp' else None
+
+    async def save_baseline(self, session, properties, owner, image, cwd, **claim):
+        self.baseline = (owner, dict(properties), image, cwd)
+
+    async def take_baseline(self, session, owner, cwd):
+        return dict(self.baseline[1]) if self.baseline and self.baseline[0] == owner and self.baseline[3] == cwd else None
+
+    async def baseline_image(self, session, owner):
+        return self.baseline[2] if self.baseline and self.baseline[0] == owner else None
+
+    async def can_refresh_baseline(self, session, launch_id, owner):
+        return self.saved is None or (owner is not None and self.saved[0] == launch_id
+                                     and owner == self.main_owner)
+
+    async def take_owner(self, session, launch_id):
+        if self.saved is None or self.saved[0] != launch_id:
+            return None
+        return getattr(self, 'main_owner', None) or (UUID, 42, 'birth')
+
+    async def departed(self, owner, tty):
+        return self.main != 'omp'
 
     @asynccontextmanager
     async def watch(self, terminal):
@@ -344,12 +372,13 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
     async def test_ownership_loss_only_at_final_cleanup_preserves_snapshot(self):
         self.api.saved = ('42-1', dict(self.api.current))
         original = self.api.saved
-        self.api.main = 'omp'
-        self.api.owns_terminal.side_effect = [True, True, False]
+        self.api.main = 'zsh'
+        self.api.owns_terminal.side_effect = [True, True, True, False]
         with patch.object(appearance, '_WATCH_SECONDS', .001):
             self.assertEqual(await appearance._operate({**self.request, 'phase': 'return',
                              'preserve': True, 'launch_id': '42-1'}), 'ignored')
         self.api.clear_snapshot.assert_not_called()
+        self.api.restore.assert_awaited_once()
         self.assertEqual(self.api.saved, original)
 
     async def test_tty_read_deadline_is_quiet_and_never_mutates(self):
@@ -466,6 +495,152 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
     async def test_launch_reapplies_after_aps_profile_change(self):
         self.assertEqual(await self.run_event_case('launch', 'zsh', ['omp', 'omp']), 'applied')
         self.assertEqual(self.api.write.await_count, 2)
+
+    async def test_same_process_switch_generation_reapplies_after_profile_reset(self):
+        self.api.main = 'omp'
+        reset = asyncio.Event()
+        async def write(session, color, icon):
+            self.api.current = {'color': color, 'icon': icon}
+            reset.set()
+        self.api.write.side_effect = write
+        request = {**self.request, 'phase': 'launch', 'launch_id': '42-1'}
+        async def switch():
+            await reset.wait()
+            reset.clear()
+            self.api.generation = 'second-dialog-generation'
+            self.api.current = {'profile-reset': True}
+            await self.api.events.put(None)
+            await reset.wait()
+        driver = asyncio.create_task(switch())
+        try:
+            with patch.object(appearance, '_WATCH_SECONDS', .05):
+                self.assertEqual(await appearance._operate(request), 'applied')
+            await asyncio.wait_for(driver, 1)
+            self.assertEqual(self.api.current, {'color': '#65A85A', 'icon': '/fixture/a.png'})
+            self.assertEqual(self.api.write.await_count, 2)
+            self.assertEqual(self.api.save_snapshot.await_count, 1)
+        finally:
+            driver.cancel()
+            await asyncio.gather(driver, return_exceptions=True)
+
+    async def test_replacement_process_cannot_inherit_the_original_launch_claim(self):
+        self.api.main = 'omp'
+        first = asyncio.Event()
+        self.api.write.side_effect = lambda *args: first.set()
+        async def replace():
+            await first.wait()
+            self.api.process_pid = 43
+            self.api.generation = 'replacement'
+            self.api.current = {'replacement-aps': True}
+            await self.api.events.put(None)
+        driver = asyncio.create_task(replace())
+        with patch.object(appearance, '_WATCH_SECONDS', .02):
+            self.assertEqual(await appearance._operate({**self.request, 'phase': 'launch'}), 'applied')
+        await driver
+        self.assertEqual(self.api.write.await_count, 1)
+        self.assertEqual(self.api.current, {'replacement-aps': True})
+        self.assertEqual(self.api.main_owner, (UUID, 42, 'birth'))
+
+    async def test_publication_gap_is_not_positive_foreground_departure(self):
+        original = dict(self.api.current)
+        self.api.saved = ('42-1', original)
+        self.api.main = 'omp'
+        self.api.current = {'during-switch': True}
+        with patch.object(self.api, 'main_identity', new=AsyncMock(return_value=None)), \
+             patch.object(appearance, '_WATCH_SECONDS', .001):
+            result = await appearance._operate(dict(terminal=UUID, device=DEVICE, phase='return',
+                                                    preserve=True, launch_id='42-1'))
+        self.assertEqual(result, 'ignored')
+        self.assertEqual(self.api.current, {'during-switch': True})
+        self.api.restore.assert_not_awaited()
+        self.api.clear_snapshot.assert_not_awaited()
+        self.assertEqual(self.api.saved, ('42-1', original))
+
+    async def test_immediate_main_uses_only_a_proven_matching_shell_baseline(self):
+        original = dict(self.api.current)
+        for birth, expected in (('shell-birth', 'applied'), ('foreign-birth', 'ignored')):
+            self.api.main = 'omp'
+            self.api.current = {'agent-aps': True}
+            self.api.baseline = ([UUID, 42, birth, DEVICE], original, '/fixture/zsh', '/fixture/cwd')
+            with patch.object(appearance, 'process_start', return_value='shell-birth'), \
+                 patch.object(appearance, 'process_image', return_value='/fixture/zsh'), \
+                 patch.object(appearance, 'foreground_process', return_value=False), \
+                 patch.object(appearance, '_WATCH_SECONDS', .001):
+                result = await appearance._operate(dict(terminal=UUID, device=DEVICE, tty='/dev/null',
+                    phase='launch', command_scope=True, cwd='/fixture/cwd', shell_pid=42, preserve=True, launch_id='42-1'))
+            self.assertEqual(result, expected)
+            self.assertEqual(self.api.current, original if expected == 'applied' else {'agent-aps': True})
+        self.api.snapshot.assert_not_awaited()
+
+    async def test_exec_replacement_does_not_refresh_a_shell_baseline_in_publication_gap(self):
+        original = dict(self.api.current)
+        self.api.baseline = ([UUID, 42, 'shell-birth', DEVICE], original, '/fixture/zsh', '/fixture/cwd')
+        self.api.current = {'agent-aps': True}
+        with patch.object(appearance, 'process_start', return_value='shell-birth'), \
+             patch.object(appearance, 'process_image', return_value='/fixture/other-executable'), \
+             patch.object(appearance, 'foreground_process', return_value=True):
+            self.assertEqual(await appearance._operate(dict(terminal=UUID, device=DEVICE, tty='/dev/null',
+                             phase='return', shell_pid=42, preserve=True, launch_id='42-1')), 'ignored')
+        self.api.snapshot.assert_not_awaited()
+        self.assertEqual(self.api.baseline[1], original)
+
+    async def test_pending_previous_return_cannot_become_a_new_shell_original(self):
+        original = dict(self.api.current)
+        self.api.baseline = ([UUID, 42, 'shell-birth', DEVICE], original, '/fixture/zsh', '/fixture/cwd')
+        self.api.saved = ('old-command', original)
+        self.api.main_owner = (UUID, 91, 'birth')
+        self.api.current = {'previous-agent-aps': True}
+        with patch.object(appearance, 'process_start', return_value='shell-birth'), \
+             patch.object(appearance, 'process_image', return_value='/fixture/zsh'), \
+             patch.object(appearance, 'foreground_process', return_value=True):
+            self.assertEqual(await appearance._operate(dict(terminal=UUID, device=DEVICE, tty='/dev/null',
+                cwd='/fixture/cwd', phase='return', shell_pid=42, preserve=True, launch_id='new-command')), 'ignored')
+        self.api.snapshot.assert_not_awaited()
+        self.assertEqual(self.api.baseline[1], original)
+        self.assertEqual(self.api.saved, ('old-command', original))
+
+    async def delayed_publication_case(self, delay, armed=False):
+        original = dict(self.api.current)
+        self.api.process_pid = 91
+        if not armed:
+            self.api.baseline = ([UUID, 42, 'shell-birth', DEVICE], original, '/fixture/zsh', '/fixture/cwd')
+        read_fd, write_fd = os.pipe()
+        request = dict(terminal=UUID, device=DEVICE, tty='/dev/null', phase='launch',
+                       command_scope=True, cwd='/fixture/cwd', shell_pid=42, preserve=True, launch_id='42-1',
+                       ready_fd=write_fd)
+        if armed:
+            request['armed'] = True
+        with patch.object(appearance, 'process_start', return_value='shell-birth'), \
+             patch.object(appearance, 'process_image', return_value='/fixture/zsh'), \
+             patch.object(appearance, 'foreground_process', side_effect=lambda *a: self.api.main != 'omp'), \
+             patch.object(appearance, '_WATCH_SECONDS', .001):
+            task = asyncio.create_task(appearance._operate(request))
+            try:
+                self.assertEqual(await asyncio.to_thread(os.read, read_fd, 6), b'ready\n')
+                # Actual publication is deliberately later than the old pre-command window.
+                await asyncio.sleep(delay)
+                self.assertFalse(task.done())
+                self.api.current = {'agent-aps': True}
+                self.api.main = 'omp'
+                await self.api.events.put(None)
+                self.assertEqual(await asyncio.wait_for(task, 2), 'applied')
+                self.assertEqual(self.api.current, original)
+                self.api.main = 'zsh'
+                self.api.current = {'return-aps': True}
+                returned = {key: value for key, value in request.items()
+                            if key not in {'command_scope', 'ready_fd', 'armed'}}
+                self.assertEqual(await appearance._operate({**returned, 'phase': 'return'}), 'applied')
+                self.assertEqual(self.api.current, original)
+            finally:
+                task.cancel()
+                await asyncio.gather(task, return_exceptions=True)
+                os.close(read_fd)
+
+    async def test_delayed_command_start_preserves_styling_and_outside_originals(self):
+        await self.delayed_publication_case(2)
+
+    async def test_delayed_identity_publication_preserves_styling_and_outside_originals(self):
+        await self.delayed_publication_case(3, armed=True)
 
     async def test_return_observes_shell_aps_reversal(self):
         self.assertEqual(await self.run_event_case('return', 'omp', ['zsh', 'zsh']), 'applied')
@@ -638,10 +813,10 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(ownership_at_write, [('43-1', None)])
             self.api.main = 'zsh'
             self.assertEqual(await appearance._operate({**request, 'phase': 'return'}), 'applied')
-        self.api.save_snapshot.assert_awaited_once_with(self.api.session, None, '43-1')
+        self.api.save_snapshot.assert_awaited_once_with(self.api.session, None, '43-1', (UUID, 42, 'birth'))
         self.assertIsNone(self.api.saved)
 
-    async def test_cancelled_return_clears_only_its_reserved_snapshot(self):
+    async def test_cancelled_return_preserves_still_foreground_main_claim(self):
         self.api.saved = ('42-1', dict(self.api.current))
         self.api.main = 'omp'
         request = {'terminal': UUID, 'device': DEVICE, 'phase': 'return', 'preserve': True, 'launch_id': '42-1'}
@@ -654,8 +829,8 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
             observer.cancel()
             with self.assertRaises(asyncio.CancelledError):
                 await observer
-        self.api.clear_snapshot.assert_awaited_once_with(self.api.session, '42-1')
-        self.assertIsNone(self.api.saved)
+        self.api.clear_snapshot.assert_not_awaited()
+        self.assertIsNotNone(self.api.saved)
         self.assertFalse(self.api.watching)
         self.api.close.assert_awaited_once()
 
@@ -780,10 +955,97 @@ class OmpIdentityTests(unittest.IsolatedAsyncioTestCase):
                 session.async_set_profile_properties.reset_mock()
                 with patch.dict(sys.modules, {'iterm2': sdk}), \
                      patch.object(terminal_identity, 'process_start', return_value=birth), \
+                     patch.object(appearance, 'foreground_process', return_value=True), \
                      patch.object(appearance, '_WATCH_SECONDS', .001):
                     self.assertEqual(await appearance._operate(request), expected)
                 self.assertEqual(session.async_set_profile_properties.await_count,
                                  1 if expected == 'applied' else 0)
+
+    async def test_appearance_foreground_check_is_separate_from_live_birth(self):
+        from runtime import terminal_identity
+        for state, group, foreground, expected in ((3, 42, 42, True),
+                                                   (4, 42, 42, False),
+                                                   (3, 42, 17, False)):
+            info = terminal_identity._ProcBSDInfo(pbi_pid=42, pbi_status=state,
+                pbi_start_tvsec=123, pbi_start_tvusec=456, pbi_pgid=group,
+                e_tpgid=foreground, e_tdev=DEVICE & 0xffffffff)
+            with patch.object(terminal_identity, '_read_bsdinfo', return_value=info):
+                self.assertEqual(terminal_identity.foreground_process(42, 'darwin-bsd:123:000456', '/dev/null'), expected)
+                self.assertEqual(terminal_identity.process_start(42), 'darwin-bsd:123:000456')
+        with patch.object(terminal_identity, '_read_bsdinfo', return_value=None), \
+             patch.object(os, 'getpgid', return_value=42):
+            self.assertEqual(terminal_identity.foreground_state(42, 'birth', '/dev/null'), 'unknown')
+
+    async def test_suspend_to_shell_restores_original_without_removing_live_dialog(self):
+        script = r"""import asyncio,fcntl,json,os,pathlib,signal,subprocess,sys,termios
+from unittest.mock import patch
+from runtime import appearance,terminal_identity
+from iterm2_utils.omp_sessions import read_bindings
+from tests.test_appearance_runtime import FakeAPI,UUID
+root=pathlib.Path(sys.argv[1]); tty=os.ttyname(0)
+registry=root/'identity'; registry.mkdir(mode=0o700)
+ready_read,ready_write=os.pipe()
+child=os.fork()
+if child==0:
+    os.close(ready_read); os.setpgid(0,0); os.write(ready_write,b'ready'); os.close(ready_write)
+    signal.pause(); os._exit(0)
+os.close(ready_write); os.read(ready_read,5); os.close(ready_read)
+signal.signal(signal.SIGTTOU,signal.SIG_IGN)
+try:
+    os.tcsetpgrp(0,child)
+    birth=terminal_identity.process_start(child)
+    assert birth is not None
+    image=terminal_identity.process_image(os.getpid())
+    assert image is not None and pathlib.Path(image).samefile(sys.executable)
+    def detached_state():
+        code='import sys; from runtime.terminal_identity import foreground_state; print(foreground_state(int(sys.argv[1]),sys.argv[2],sys.argv[3]))'
+        result=subprocess.run([sys.executable,'-c',code,str(child),birth,tty],stdin=subprocess.DEVNULL,
+                              start_new_session=True,capture_output=True,text=True,timeout=3)
+        assert result.returncode==0,result.stderr
+        return result.stdout.strip()
+    assert detached_state()=='foreground'
+    record=dict(schema=1,terminal_id=UUID,tab_id='tab',window_id='window',session_file=None,
+                session_id='suspended-dialog',cwd=str(root),profile=dict(name=None,agent_dir=str(root)),
+                pid=child,process_start=birth,generation='generation')
+    path=registry/'instance-generation.json'; path.write_text(json.dumps(record)); path.chmod(0o600)
+    api=FakeAPI()
+    async def main_identity(*args):
+        live=terminal_identity.verified_identity(registry,record)
+        return live if live and terminal_identity.foreground_process(child,birth,tty) else None
+    api.main_identity=main_identity
+    async def departed(owner,actual_tty):
+        return terminal_identity.foreground_state(owner[1],owner[2],actual_tty)=='departed'
+    api.departed=departed
+    original=dict(api.current)
+    request=dict(terminal=UUID,device=os.fstat(0).st_rdev,tty=tty,phase='launch',preserve=True,launch_id='42-1')
+    with patch.object(appearance,'_API',return_value=api),patch.object(appearance,'_WATCH_SECONDS',.001):
+        assert asyncio.run(appearance._operate(request))=='applied'
+        os.kill(child,signal.SIGSTOP); os.waitpid(child,os.WUNTRACED)
+        os.tcsetpgrp(0,os.getpgrp())
+        assert detached_state()=='departed'
+        api.current={'profile-reset':True}
+        assert asyncio.run(appearance._operate({**request,'phase':'return'}))=='applied'
+    print(json.dumps(dict(restored=api.current==original,live=terminal_identity.process_start(child)==birth,
+                          binding=read_bindings(registry)[0].session_id,record=path.exists(),
+                          foreground=terminal_identity.foreground_process(child,birth,tty))))
+finally:
+    os.tcsetpgrp(0,os.getpgrp()); os.kill(child,signal.SIGKILL); os.waitpid(child,0)
+"""
+        with tempfile.TemporaryDirectory() as root:
+            master, slave = pty.openpty()
+            try:
+                def own_terminal():
+                    os.setsid()
+                    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
+                result = subprocess.run([sys.executable, '-c', script, root],
+                                        cwd=Path(appearance.__file__).resolve().parents[1],
+                                        env={**os.environ, 'HOME': root}, stdin=slave,
+                                        preexec_fn=own_terminal, capture_output=True, text=True, timeout=10)
+            finally:
+                os.close(master); os.close(slave)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(json.loads(result.stdout), dict(restored=True, live=True,
+                             binding='suspended-dialog', record=True, foreground=False))
 
     async def test_actual_identity_requires_registry_birth_and_independent_addresses(self):
         from runtime import terminal_identity
@@ -984,6 +1246,33 @@ class NativeAdapterTests(unittest.IsolatedAsyncioTestCase):
         await api.clear_snapshot(session, '42-1')
         session.async_set_variable.assert_awaited_with(saved.args[0], None)
 
+    async def test_shell_baseline_survives_launch_claim_and_return_cleanup(self):
+        api, session, record, newer = self.snapshot_fixture()
+        owner = [UUID, 42, 'shell-birth', DEVICE]
+        await api.save_baseline(session, record['properties'], owner, '/fixture/zsh', '/fixture/cwd')
+        await api.save_snapshot(session, record['properties'], '42-1', (UUID, 91, 'main-birth'))
+        self.assertEqual(await api.take_owner(session, '42-1'), (UUID, 91, 'main-birth'))
+        self.assertEqual(await api.take_baseline(session, owner, '/fixture/cwd'), record['properties'])
+        self.assertIsNone(await api.take_baseline(session, owner, '/fixture/another-root'))
+        for index, value in enumerate(('foreign-terminal', 43, 'foreign-birth', DEVICE + 1)):
+            foreign = list(owner)
+            foreign[index] = value
+            self.assertIsNone(await api.take_baseline(session, foreign, '/fixture/cwd'))
+        manual = {**record['properties'], 'Custom Icon Path': '/fixture/new-manual.png'}
+        await api.save_baseline(session, manual, owner, '/fixture/zsh', '/fixture/cwd',
+                                launch_id='42-1', restored_owner=(UUID, 91, 'main-birth'))
+        self.assertEqual(await api.take_snapshot(session, '42-1'), record['properties'])
+        await api.clear_snapshot(session, '42-1')
+        self.assertIsNone(await api.take_owner(session, '42-1'))
+        self.assertEqual(await api.take_baseline(session, owner, '/fixture/cwd'), manual)
+        await api.save_snapshot(session, newer['properties'], '43-1', (UUID, 92, 'new-main'))
+        self.assertFalse(await api.save_baseline(session, record['properties'], owner, '/fixture/zsh', '/fixture/cwd',
+                                                launch_id='42-1', restored_owner=(UUID, 91, 'main-birth')))
+        self.assertEqual(await api.take_baseline(session, owner, '/fixture/cwd'), manual)
+        self.assertEqual(await api.take_owner(session, '43-1'), (UUID, 92, 'new-main'))
+        await api.invalidate_snapshot(session, keep_baseline=False)
+        self.assertIsNone(await api.take_baseline(session, owner, '/fixture/cwd'))
+
     async def test_corrupt_or_foreign_snapshot_cannot_restore_other_properties(self):
         with patch.dict(sys.modules, {'iterm2': Mock()}):
             api = appearance._API()
@@ -1002,7 +1291,7 @@ class NativeAdapterTests(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(await api.take_snapshot(session, '42-2'))
         session.async_set_variable.assert_not_called()
 
-    async def test_subscription_uses_both_variables_and_explicit_id_and_cleans_up(self):
+    async def test_subscription_uses_identity_profile_and_foreground_wakeups_with_explicit_id(self):
         sdk = Mock()
         monitors = []
 
@@ -1031,7 +1320,8 @@ class NativeAdapterTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.wait_for(events.get(), .1)
         self.assertEqual([monitor.args for monitor in monitors], [
             (api.connection, sdk.VariableScopes.SESSION, 'user.iterm2_utils_omp', UUID),
-            (api.connection, sdk.VariableScopes.SESSION, 'profileName', UUID)])
+            (api.connection, sdk.VariableScopes.SESSION, 'profileName', UUID),
+            (api.connection, sdk.VariableScopes.SESSION, 'jobName', UUID)])
         self.assertTrue(all(monitor.closed for monitor in monitors))
 
     async def test_only_color_and_icon_properties_including_light_dark(self):
@@ -1052,6 +1342,42 @@ class NativeAdapterTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SupervisorTests(unittest.TestCase):
+    def test_command_observer_outlives_cold_deadline_and_is_reaped_on_cancel(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            helper = root/'command-worker.py'
+            helper.write_text("""import json,os,pathlib,signal,sys
+root=pathlib.Path(__file__).parent
+if sys.argv[1:]==['--worker']:
+    request=json.load(sys.stdin)
+    os.write(request['ready_fd'],b'ready\\n'); os.close(request['ready_fd'])
+    (root/'worker.pid').write_text(str(os.getpid()))
+    signal.pause()
+else:
+    sys.path.insert(0,sys.argv[1])
+    from runtime import appearance
+    appearance.__file__=__file__
+    print(appearance._supervise(dict(phase='launch',command_scope=True,shell_pid=os.getppid()),dict(os.environ)))
+""")
+            with subprocess.Popen([sys.executable, str(helper), str(Path(appearance.__file__).resolve().parents[1])],
+                                  env={**os.environ, 'HOME': directory},
+                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True) as supervisor:
+                try:
+                    marker = root/'worker.pid'
+                    deadline = time.monotonic()+4
+                    while not marker.exists() and supervisor.poll() is None and time.monotonic()<deadline:
+                        time.sleep(.01)
+                    self.assertTrue(marker.exists(), 'worker never acknowledged startup')
+                    time.sleep(appearance._HARD_SECONDS+.3)
+                    self.assertIsNone(supervisor.poll(), 'command lifetime was incorrectly an idle deadline')
+                    supervisor.terminate()
+                    self.assertEqual(supervisor.communicate(timeout=3), ('unavailable\n', ''))
+                    self.assert_process_gone(int(marker.read_text()))
+                finally:
+                    if supervisor.poll() is None:
+                        supervisor.terminate()
+                        supervisor.wait(timeout=3)
+
     def test_signal_around_ready_duplicate_close_still_reaps_and_restores_handlers(self):
         for signum, timing in ((sig, when) for sig in (signal.SIGTERM, signal.SIGINT)
                                for when in ('before', 'after')):

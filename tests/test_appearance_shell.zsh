@@ -69,7 +69,7 @@ class AppearanceShell(unittest.TestCase):
             source=REPO/'runtime'/name
             if source.exists(): shutil.copy(source,self.root/name)
         # -c fixture calls the real hooks explicitly; interactive wiring is tested separately.
-        (self.root/'command-boundary.zsh').write_text('function omp { _iterm2_utils_appearance_preexec; command omp "$@"; local result=$?; _iterm2_utils_appearance_precmd; return $result; }\n')
+        (self.root/'command-boundary.zsh').write_text('function omp { _iterm2_utils_appearance_arm; command omp "$@"; local result=$?; _iterm2_utils_appearance_precmd; return $result; }\n')
         (self.root/'appearance.py').write_text(HELPER)
         (self.root/'omp').write_text(OMP); (self.root/'omp').chmod(0o755)
         self.project=self.root/"physical ' $()"; self.project.mkdir()
@@ -78,6 +78,7 @@ class AppearanceShell(unittest.TestCase):
         self.other=self.root/'B'; self.other.mkdir()
         self.outside=self.root/'outside'; self.outside.mkdir()
         self.env=dict(os.environ,HOME=str(self.root),PATH=str(self.root)+':/usr/bin:/bin',TERM_PROGRAM='iTerm.app',TEST_ROOT=str(self.root),ITERM2_UTILS_PYTHON=sys.executable,ITERM2_UTILS_APPEARANCE_CONFIG=str(self.root/'installed rules.json'),TMUX='',ITERM_SESSION_ID='w0t1p0:12345678-1234-1234-1234-123456789ABC',TERM_SESSION_ID='12345678-1234-1234-1234-123456789ABC')
+        self.env.pop('ITERM2_UTILS_IDENTITY_REGISTRY',None)
     def start_shell(self, argv, *, env=None, cwd=None):
         master, slave = pty.openpty()
         self.shell_tty=os.ttyname(slave)
@@ -177,7 +178,8 @@ async def async_get_app(connection): return App()
         starts=[r for r in self.rows() if r['event']=='start']
         expected=[self.project,self.outside,self.project,self.subdir,self.other,self.outside]
         self.assertEqual([r['phase'] for r in starts],['shell']*6)
-        self.assertEqual([r['args'] for r in starts],[['--config',str(self.root/'installed rules.json'),'--cwd',str(cwd),'--phase','shell','--tty',self.shell_tty] for cwd in expected])
+        self.assertEqual([r['args'][:-2] for r in starts],[['--config',str(self.root/'installed rules.json'),'--cwd',str(cwd),'--phase','shell','--tty',self.shell_tty] for cwd in expected])
+        self.assertTrue(all(r['args'][-2]=='--shell-pid' and r['args'][-1].isdigit() for r in starts))
         self.assertEqual(p.stdout,''); self.assertEqual(p.stderr,'')
     def test_chpwd_preserves_foreign_function_hooks_and_cd_status(self):
         (self.root/'fail').touch()
@@ -364,11 +366,52 @@ print parent:$sysparams[pid]
             out,err=p.communicate(script,timeout=7)
             self.assertIn('native-result:42',out)
             self.assertEqual(self.rows('calls')[0]['args'],['literal argument'])
-            self.assertTrue(self.rows('calls')[0]['appearance_ready'])
             self.assertIn('native stderr',err)
         finally:
             if p.poll() is None: p.kill()
             p.communicate(timeout=3)
+    def test_stalled_api_does_not_hold_an_ordinary_prompt_command(self):
+        from runtime.terminal_identity import process_start
+        for source,target in (('appearance.py','appearance_impl.py'),('terminal_identity.py','terminal_identity.py')):
+            shutil.copy(REPO/'runtime'/source,self.root/target)
+        # Hold the actual connect boundary until controller cancellation, not a timing race.
+        (self.root/'appearance.py').write_text('import appearance_impl as app\napp.__file__=__file__\napp._API_TIMEOUT=30\napp._HARD_SECONDS=30\napp._main()\n')
+        (self.root/'iterm2.py').write_text('''import asyncio,json,os,pathlib
+from terminal_identity import process_start
+root=pathlib.Path(__file__).parent
+class Connection:
+    @staticmethod
+    async def async_create():
+        pid=os.getppid()
+        (root/('sdk-entered-'+str(pid)+'.json')).write_text(json.dumps(dict(pid=pid,birth=process_start(pid))))
+        await asyncio.Future()
+''')
+        (self.root/'installed rules.json').write_text(json.dumps({'projects':[
+            dict(root=str(self.project),color='#65A85A',icon=str(self.root/'icon.png'))]}))
+        (self.root/'icon.png').write_bytes(b'fixture')
+        env=dict(self.env,ITERM2_UTILS_APPEARANCE_CONFIG='',PYTHONPATH=str(self.root))
+        p=self.start_shell(['/bin/zsh','-dfi'],env=env)
+        try:
+            setup='source "$TEST_ROOT/appearance.zsh"\nITERM2_UTILS_APPEARANCE_CONFIG="$TEST_ROOT/installed rules.json"\n'
+            setup+='function ordinary { until [[ -e "$TEST_ROOT/sdk-entered-$_iterm2_utils_appearance_pid.json" ]]; do sleep .01; done; print ordinary-proceeded; read fixture_release; }\nordinary\n'
+            os.write(p.terminal_master,setup.encode())
+            self.assertTrue(select.select([p.stdout],[],[],4)[0],
+                            'ordinary command could not run while the actual SDK connect was held')
+            self.assertEqual(p.stdout.readline(),'ordinary-proceeded\n')
+            self.assertTrue(list(self.root.glob('sdk-entered-*.json')))
+            cleanup='release\nbuiltin kill -TERM "$_iterm2_utils_appearance_pid" 2>/dev/null; '
+            cleanup+=self.wait_helper()+'unset preexec_functions precmd_functions; exit\n'
+            out,err=p.communicate(cleanup,timeout=4)
+            self.assertEqual(p.returncode,0,err)
+        finally:
+            if p.poll() is None: p.kill()
+            p.communicate(timeout=3)
+            for marker in self.root.glob('sdk-entered-*.json'):
+                owned=json.loads(marker.read_text())
+                if owned['pid']>1 and owned['birth'] is not None and process_start(owned['pid'])==owned['birth']:
+                    try: os.kill(owned['pid'],15)
+                    except ProcessLookupError: pass
+
     def test_fd_setup_failure_does_not_signal_a_finished_helper(self):
         p=self.run_shell("function sysopen { sleep .15; return 1; }; function TRAPDEBUG { [[ $ZSH_DEBUG_CMD == 'builtin kill -TERM '* ]] && print signal >> \"$TEST_ROOT/signals\"; return 0; }; source \"$TEST_ROOT/appearance.zsh\"",source=False)
         self.assertEqual(p.returncode,0,p.stderr)

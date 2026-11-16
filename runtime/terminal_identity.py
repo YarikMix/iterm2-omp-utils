@@ -59,6 +59,13 @@ def _read_bsdinfo(pid: int) -> _ProcBSDInfo | None:
         return None
 
 
+def _birth(pid, info):
+    if (info is None or info.pbi_pid != pid or info.pbi_start_tvsec <= 0
+            or not 0 <= info.pbi_start_tvusec < 1000000):
+        return None
+    return f'darwin-bsd:{info.pbi_start_tvsec}:{info.pbi_start_tvusec:06d}'
+
+
 def process_start(pid: int) -> str | None:
     """Live Darwin kernel birth at microsecond precision, or no authority.
 
@@ -68,10 +75,7 @@ def process_start(pid: int) -> str | None:
     if type(pid) is not int or not 0 < pid <= 0x7fffffff:
         return None
     info = _read_bsdinfo(pid)
-    if (info is None or info.pbi_pid != pid or info.pbi_status not in {2, 3, 4}
-            or info.pbi_start_tvsec <= 0 or not 0 <= info.pbi_start_tvusec < 1000000):
-        return None
-    return f'darwin-bsd:{info.pbi_start_tvsec}:{info.pbi_start_tvusec:06d}'
+    return _birth(pid, info) if info is not None and info.pbi_status in {2, 3, 4} else None
 
 
 def tty_device(path):
@@ -168,6 +172,53 @@ def verified_identity(registry, observed):
     matches = [record for record in read_identity_records(registry)
                if record == observed and process_start(record['pid']) == record['process_start']]
     return matches[0] if len(matches) == 1 else None
+
+
+def process_image(pid):
+    """Kernel executable identity for a previously observed shell, never name trust."""
+    if sys.platform != 'darwin' or type(pid) is not int or not 0 < pid <= 0x7fffffff:
+        return None
+    try:
+        probe = ctypes.CDLL('/usr/lib/libproc.dylib', use_errno=True).proc_pidpath
+        probe.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_uint32]
+        probe.restype = ctypes.c_int
+        buffer = ctypes.create_string_buffer(4096)
+        if probe(pid, buffer, len(buffer)) <= 0:
+            return None
+        path = buffer.value.decode('utf-8')
+        return path if path.startswith('/') and process_start(pid) is not None else None
+    except (OSError, AttributeError, UnicodeError, ctypes.ArgumentError):
+        return None
+
+
+def foreground_state(pid, birth, tty):
+    """One kernel BSD snapshot works even in the detached appearance worker."""
+    import os
+    device = tty_device(tty)
+    if device is None or type(pid) is not int or not 0 < pid <= 0x7fffffff:
+        return 'unknown'
+    info = _read_bsdinfo(pid)
+    if info is None:
+        try:
+            os.getpgid(pid)
+        except ProcessLookupError:
+            return 'departed'
+        except OSError:
+            pass
+        return 'unknown'
+    if _birth(pid, info) != birth:
+        return 'unknown'
+    if info.pbi_status in {4, 5} or info.e_tdev != (device & 0xffffffff):
+        return 'departed'
+    if (info.pbi_status not in {2, 3} or not 0 < info.pbi_pgid <= 0x7fffffff
+            or not 0 < info.e_tpgid <= 0x7fffffff):
+        return 'unknown'
+    return 'foreground' if info.pbi_pgid == info.e_tpgid else 'departed'
+
+
+def foreground_process(pid, birth, tty):
+    """Stopped dialogs stay live, but cannot authorize appearance writes."""
+    return foreground_state(pid, birth, tty) == 'foreground'
 
 
 def _main():

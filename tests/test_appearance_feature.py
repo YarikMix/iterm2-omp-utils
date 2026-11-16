@@ -27,9 +27,9 @@ class AppearanceTests(LifecycleFixture):
         identity = SimpleNamespace(executable=Path('/fixture/omp'), wrapper='')
         inspection = SimpleNamespace(zsh=Path('/bin/zsh'), identity=identity)
         command = build_command(request, inspection, ['/fixture/omp'])
-        self.assertIn('_iterm2_utils_appearance_preexec', shlex.split(command)[2])
+        self.assertIn('_iterm2_utils_appearance_arm', shlex.split(command)[2])
         request.mode = 'shell'
-        self.assertNotIn('_iterm2_utils_appearance_preexec', build_command(request, inspection, []))
+        self.assertNotIn('_iterm2_utils_appearance_arm', build_command(request, inspection, []))
 
     def test_transferred_appearance_retains_original_inverse_without_source_files(self):
         from dataclasses import replace

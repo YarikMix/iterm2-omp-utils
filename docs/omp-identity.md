@@ -105,9 +105,39 @@ imports this adjacent standalone helper, never the checkout package.
 
 Appearance obtains terminal/tab/window addresses from its own scoped SDK tree
 and merges them over decoded `user.iterm2_utils_omp` before validation. Each write
-also checks the caller's actual TTY device. Shell preexec captures a baseline and
-arms the bounded event observer for any command, without trusting its name;
-only verified main identity reserves a launch snapshot or writes appearance.
-Shell precmd cancels/reaps the old observer before the return observer; a live
-new main identity prevents return writes. Native `-ilc` launch explicitly arms
-the same installed callback before exec. Ordinary shell launch remains independent.
+also checks the caller's actual TTY device. `foreground_process(pid,birth,tty)`
+adds appearance-only foreground process/terminal-group evidence;
+`foreground_state -> foreground|departed|unknown` distinguishes positive departure
+from unavailable evidence. It uses the same kernel BSD snapshot's exact birth,
+`pbi_pgid`, `e_tpgid` and `e_tdev`; it does not use tcgetpgrp from a detached worker.
+Neither changes `process_start` or stopped-but-live duplicate-dialog detection.
+The frozen launch owner is `(terminal_id,pid,process_start)`, not a dialog generation.
+Every new generation must still pass complete independent identity validation.
+
+Shell preexec arms command-scoped observation without an API readiness wait.
+The last proven foreground-shell baseline is retained inside the same native
+snapshot variable under `shell_baseline`: `{owner:[terminal_id,shell_pid,birth,tty_device],
+properties:<existing allowlist>,image:<kernel executable path>,cwd:<physical shell cwd>}`. `process_image`
+uses public Darwin libproc `proc_pidpath`, not an executable-name classifier.
+Baseline refresh checks the previously observed shell image as well as foreground
+TTY/birth before and after reading original properties; an exec/publication gap
+cannot turn agent-era APS into a shell original. Late manual edits after the last
+observation are not an atomic guarantee.
+The baseline is invalid for another cwd/terminal/TTY/shell birth. Shell/cd clears
+the preceding baseline before assignment/reset; an incomplete update cannot reuse
+another root's original. Pending previous launch claims prohibit baseline refresh
+until a positively owned return write succeeds. That guard is rechecked atomically
+inside the native snapshot transaction before updating baseline metadata.
+
+Snapshot `main_owner` freezes process/terminal ownership for positive return proof.
+Precmd cancels/reaps the command observer before nonblocking return/baseline refresh.
+Temporary registry/user-variable disagreement never proves that owner departed.
+Native `-ilc` launch calls `_iterm2_utils_appearance_arm` for authorized pre-exec
+baseline readiness; ordinary prompt commands use `_iterm2_utils_appearance_preexec`
+without waiting. Both launch paths observe publication for that command's lifetime,
+then start the existing 1.5s APS window at the first verified main publication.
+Cold SDK startup remains bounded at2.8s and SDK operations at2.2s. The supervisor
+uses Darwin kqueue to end observation on shell exit or worker completion, in addition
+to the existing explicit cancel/reap lifetime pipe. No new runtime file, global
+daemon, polling service, identity producer modification or export-layout change.
+Ordinary shell launch remains independent of omp and this optional appearance API.

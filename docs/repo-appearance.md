@@ -36,15 +36,18 @@ helper безопасно пропускает назначение, сброс 
 а не от вредоносного процесса с доступом к тому же пользовательскому API.
 
 Generated startup передаёт приватный identity registry установленному runtime.
-Обычные интерактивные команды вооружают короткий observer через `preexec`, а
-`precmd` завершает его и запускает observer возврата, сохраняя код команды.
-Вооружение observer перед каждой prompt-командой тоже ограничено бюджетом 2.8
-секунды при недоступном API; executable/SDK агента для этого не запускается.
-Нативный launch вооружает тот же observer явно перед `exec`; argv omp не меняется.
+`preexec` запускает observer без ожидания SDK/API, а `precmd` отменяет и reap-ит
+его перед отдельным неблокирующим observer возврата/обновления baseline.
+Нативный launch явно вызывает `_iterm2_utils_appearance_arm` перед `exec`: только
+этот согласованный путь может ждать захвата исходного оформления, до 2.8 секунды.
+Обычная prompt-команда не ждёт API; её worker ждёт actual publication в течение
+этой команды. Завершение/следующая команда отменяет его через lifetime/cancel fence;
+выход shell дополнительно отслеживается Darwin kqueue, без polling и нового демона.
 Имя executable, `jobName`, Bun и read-only API probe не являются разрешением записи.
 Только совпадение приватного registry с независимо наблюдаемыми SDK-адресами,
-`user.iterm2_utils_omp`, generation и точным kernel birth живого процесса разрешает
-назначение. Источник identity — установленное расширение только `tui`/`main`;
+`user.iterm2_utils_omp`, generation, точным kernel birth и foreground process-group
+основного процесса на своём TTY разрешает назначение. Источник identity —
+установленное расширение только `tui`/`main`;
 subagents, RPC, help и обычные команды без такой identity не перекрашивают вкладку.
 Snapshot сохраняется для возврата только после подтверждения этой identity.
 
@@ -140,13 +143,31 @@ shell/runtime сохраняются для других функций; generic
 Helper меняет только сессионные Tab Color/use color и Custom Icon Path/mode,
 учитывая base/light/dark при назначении и сбросе и сохраняя профиль, фон, Default
 и заголовок. Event-driven observer отслеживает actual identity и profileName для
-APS; жёсткая граница supervisor — 2.8 секунды, окно наблюдения — 1.5 секунды.
-Перед запуском shell ждёт подписок и захвата исходного оформления. При отсутствии
-правила snapshot содержит только allowlisted цвет/иконку и восстанавливается
-после подтверждённого запуска/возврата. Возврат не пишет при живой основной
-identity; новая shell/cd и следующий запуск инвалидируют прежний launch token.
-Операции snapshot и назначения защищены native transaction и TTY-проверкой.
-Foreign/newer snapshot и чужие свойства не восстанавливаются поверх текущих.
+APS; cold SDK startup supervisor ограничен 2.8 секунды, каждая API-операция — 2.2.
+Окно APS в 1.5 секунды начинается после подтверждённой публикации main identity,
+а не перед выполнением команды; задержка wrapper/startup/publication не расходует его.
+PID/kernel birth/terminal задают владельца запуска отдельно от текущей generation:
+валидные session_switch/branch того же процесса допустимы, замена процесса — нет.
+Возврат требует положительного ухода прежнего foreground-владельца и собственного
+shell TTY; временный разрыв variable/registry при публикации не означает shell return.
+Ctrl+Z сохраняет живую dialog binding, но снимает foreground authority оформления.
+Операции snapshot и назначения защищены native transaction, launch token и TTY.
+
+В той же native snapshot-переменной хранится последняя положительно наблюдённая
+shell-baseline: allowlisted цвет/иконка, physical cwd, terminal/TTY device,
+shell PID/kernel birth и kernel executable path. После обычной команды refresh не блокирует prompt и
+принимает только тот же фактический shell executable в foreground; agent-era APS
+не становится original. Без доверенной baseline generic launch ничего не выдумывает:
+явно вооружённый native launch может захватить её до exec. Смена root/cd назначает
+новую пару/reset и обновляет baseline, не перенося старый original через новый запуск.
+Другой cwd не переиспользует старый original даже при незавершённом API reset.
+Pending claim прежнего запуска не позволяет записать его APS-значения как новую
+baseline: сначала нужен подтверждённый owned return write; проверка claim/token
+повторяется внутри native transaction. До этого сохраняется прежний trusted original.
+Это граница последнего подтверждённого наблюдения shell, не атомарная гарантия для
+ручной правки после него и непосредственно перед APS. Обычные ручные правки входят
+в последующий положительно проверенный shell refresh. Foreign/newer snapshots и
+чужие свойства не восстанавливаются поверх текущих.
 
 Нет демона, polling, MCP или доверия к имени процесса. Поздний APS вне короткого
 окна остаётся ограничением; недоступность identity/API безопасно пропускает запись,

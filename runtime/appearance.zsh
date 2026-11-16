@@ -5,11 +5,14 @@ function _iterm2_utils_appearance {
   [[ -o interactive && ${TERM_PROGRAM-} == iTerm.app && -z ${TMUX-} ]] || return 0
   [[ -n ${ITERM2_UTILS_PYTHON-} && ${ITERM2_UTILS_APPEARANCE_CONFIG-} == /* ]] || return 0
   zmodload zsh/system 2>/dev/null || return 0
-  local phase=$1 cwd=$2 tty=$TTY fd clean_fd child result discard
+  local phase=$1 cwd=$2 asynchronous=${3-} tty=$TTY fd clean_fd child result discard
   [[ -n $tty ]] || return 0
-  local -a ready_arguments=()
+  local -a ready_arguments=(--shell-pid "$sysparams[pid]")
   if [[ $phase == launch ]]; then
-    ready_arguments=(--ready-fd 3)
+    ready_arguments+=(--command-scope)
+    if [[ $asynchronous != command ]]; then
+      ready_arguments+=(--ready-fd 3)
+    fi
     typeset -gi +x _iterm2_utils_appearance_sequence=$(( ${_iterm2_utils_appearance_sequence:-0} + 1 ))
     typeset -g +x _iterm2_utils_appearance_launch_id="$sysparams[pid]-$_iterm2_utils_appearance_sequence"
   fi
@@ -45,7 +48,7 @@ function _iterm2_utils_appearance {
     read -r child <&$fd || return 0
     [[ $child == <-> ]] || return 0
     # EOF on error/timeout also releases launch within the supervisor's deadline.
-    [[ $phase != launch ]] || read -r discard <&$fd || true
+    [[ $phase != launch || $asynchronous == command ]] || read -r discard <&$fd || true
     # The read end must not be inherited by omp or nested external shells.
     sysopen -r -o cloexec -u clean_fd "/dev/fd/$fd" 2>/dev/null || return 0
     typeset -g +x _iterm2_utils_appearance_owner=$sysparams[pid]
@@ -89,6 +92,14 @@ function _iterm2_utils_appearance_preexec {
   emulate -L zsh
   [[ ${_iterm2_utils_appearance_hook_owner-} == $sysparams[pid] ]] || return 0
   # Arm observation, not executable-name trust: only actual main identity can write.
+  _iterm2_utils_appearance launch "$(builtin pwd -P)" command
+  return 0
+}
+
+function _iterm2_utils_appearance_arm {
+  emulate -L zsh
+  [[ ${_iterm2_utils_appearance_hook_owner-} == $sysparams[pid] ]] || return 0
+  # Explicit native launch may wait for a proven baseline before exec.
   _iterm2_utils_appearance launch "$(builtin pwd -P)"
   return 0
 }
