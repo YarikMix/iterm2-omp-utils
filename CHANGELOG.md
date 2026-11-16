@@ -12,6 +12,16 @@ Install/update checkpoints also derive mandatory shared consumers from the
 committed receipt: retained blockers cannot be filtered away, and incomplete
 shared recompositions cannot replace another selected feature's working values.
 
+Added profile-scoped native omp setting/keybinding adapters and address-level
+receipt resources. A bundled, pinned YAML document parser preserves unrelated
+values/comments; Python retains private atomic writes, bytes CAS and journal
+recovery. Completion/error notifications use native `on`/`off` enums. MCP now
+describes one atomic `mcpServers` JSON pointer instead of agent CLI registration.
+Named-profile binding conflicts and malformed/legacy storage fail without
+overwrite. Bun is needed only for native YAML operations; no startup install,
+agent initialization or personal-settings discovery is performed by the helper.
+Runtime verification remains queued to the final integrated task.
+
 Добавлен отдельный bootstrap-навык `iterm2-projects` для операций со списком
 проектов project-launcher; его receipt независим от receipts других skill/feature,
 а при `both` один receipt описывает оба выбранных host.

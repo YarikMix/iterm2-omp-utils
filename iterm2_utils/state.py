@@ -17,7 +17,7 @@ from .models import OmpProfile, Receipt, Selection, UiStep
 VERSION = '2'
 RESOURCE_VERSION = '1'
 FIELDS = {'kind','target','locator','before','installed','owners','version'}
-KINDS = {'file','json','toml','zsh','preference','registration','symlink','hook','profile_bar','status_bar_position'}
+KINDS = {'file','json','toml','zsh','preference','registration','symlink','hook','profile_bar','status_bar_position','omp_setting','omp_binding'}
 CURRENT_FEATURES = frozenset({'clipboard', 'status', 'notifications', 'mcp', 'shell', 'shortcuts',
                               'appearance', 'project-launcher', 'bootstrap-skill'})
 CURRENT_SHORTCUTS = frozenset({'ctrl-v-ru', 'alt-enter', 'ctrl-q', 'resume'})
@@ -86,6 +86,9 @@ def validate_resources(resources):
                         base64.b64decode(value['value'],validate=True)
                     except (ValueError,binascii.Error):
                         raise ValueError('Invalid receipt payload') from None
+        if r['kind'] in {'omp_setting','omp_binding'}:
+            from .config import omp
+            omp.validate_resource(r)
         if r['kind'] in {'profile_bar','status_bar_position'}:
             from .config import iterm
             if r['locator'] != {}:

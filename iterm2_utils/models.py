@@ -67,6 +67,17 @@ class FileEdit:
     owner: str
 
 
+@dataclass(frozen=True)
+class OmpEdit:
+    profile: OmpProfile
+    kind: str
+    key: str
+    before: dict
+    after: dict
+    owner: str
+    path: Path
+
+
 @dataclass
 class SymlinkEdit:
     path: Path
@@ -118,7 +129,7 @@ class UiStep:
 
 @dataclass
 class ChangeSet:
-    edits: list[FileEdit | SymlinkEdit | PreferenceEdit | RegistrationEdit | ProfileBarEdit | StatusBarPositionEdit]
+    edits: list[FileEdit | SymlinkEdit | PreferenceEdit | RegistrationEdit | ProfileBarEdit | StatusBarPositionEdit | OmpEdit]
     ui: list[UiStep]
     findings: list[Finding]
     consumers: dict[str, frozenset[str]] = field(default_factory=dict)

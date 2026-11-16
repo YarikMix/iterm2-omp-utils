@@ -362,9 +362,11 @@ class NativeResourceTests(unittest.TestCase):
         journal.mkdir(parents=True)
         (journal/'result.json').write_text(json.dumps(raw))
         (journal/'phase').write_bytes(b'commit')
-        with patch.object(engine.registration_adapter,'inspect',side_effect=AssertionError('old agent call')):
-            self.assertEqual(engine._recover(self.context,None),[])
-            result = engine.apply(self.plan([FileEdit(self.root/'next',None,b'new',0o600,'clipboard')]),self.context,None)
+        with patch.object(engine.Runner,'run',side_effect=AssertionError('old agent call')) as process:
+            runner = engine.Runner()
+            self.assertEqual(engine._recover(self.context,runner),[])
+            result = engine.apply(self.plan([FileEdit(self.root/'next',None,b'new',0o600,'clipboard')]),self.context,runner)
+        process.assert_not_called()
         self.assertTrue(any(f.code=='migration_required' for f in result.findings))
         self.assertIsInstance(state.load(self.context.paths.data/'receipt.json'),legacy_state.LegacyReceipt)
         self.assertFalse((self.root/'next').exists())
@@ -381,8 +383,9 @@ class NativeResourceTests(unittest.TestCase):
         journal = self.context.paths.data/'journal'
         journal.mkdir(parents=True)
         (journal/'intent.json').write_text(json.dumps(raw))
-        with patch.object(engine.registration_adapter,'inspect',side_effect=AssertionError('old agent call')):
-            findings = engine._recover(self.context,None)
+        with patch.object(engine.Runner,'run',side_effect=AssertionError('old agent call')) as process:
+            findings = engine._recover(self.context,engine.Runner())
+        process.assert_not_called()
         self.assertTrue(any(f.code=='rollback_unresolved' for f in findings))
         self.assertEqual(state.load(journal/'intent.json').resources,raw['resources'])
 

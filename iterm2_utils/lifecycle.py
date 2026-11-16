@@ -225,7 +225,7 @@ def reconcile_ui(context, code, runner):
                 findings = [live_appearance(context, runner)]
             elif code in {'mcp_authorize', 'python_api'}:
                 from .config import mcp
-                findings = [mcp.probe(context, runner, 'omp')]
+                findings = [mcp.probe(context, runner)]
             else:
                 return _problem(context, receipt, 'unknown_ui_step', 'This pending step has no automatic verifier.')
             if any(f.state != 'ready' for f in findings):
@@ -269,11 +269,11 @@ def doctor(context, receipt, runner):
     if 'mcp' in receipt.selection.features:
         from .config import mcp
         try:
-            actual = mcp.inspect('omp', mcp.NAME, context, runner)
-            if actual != mcp.definition():
-                findings.append(Finding('mcp', 'omp', 'registration_missing' if actual is None else 'registration_changed',
-                                        'conflict', 'Selected MCP registration is missing or differs from the pinned definition.'))
+            actual = mcp.read_server(context.omp_profile, runner)
+            if not engine._same(actual, {'exists':True, 'value':mcp.definition()}):
+                findings.append(Finding('mcp', 'omp', 'registration_missing' if not actual['exists'] else 'registration_changed',
+                                        'conflict', 'Selected MCP server entry is missing or differs from the pinned definition.'))
         except (ValueError, OSError, RuntimeError):
             findings.append(Finding('mcp', 'omp', 'registration_unavailable', 'unavailable',
-                                    'Selected MCP registration could not be verified.'))
+                                    'Selected MCP server entry could not be verified.'))
     return findings

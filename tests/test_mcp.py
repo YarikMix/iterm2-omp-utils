@@ -1,246 +1,141 @@
 import json
-import subprocess
+import os
 import unittest
 from pathlib import Path
+from tempfile import TemporaryDirectory
+from unittest.mock import patch
+
+from iterm2_utils import engine
 from iterm2_utils.config import mcp
-from iterm2_utils.features import mcp as feature
-from iterm2_utils.models import Context, Selection, RegistrationEdit
-from iterm2_utils.discovery import resolve_paths
-from tests.support import Fixture
+from iterm2_utils.models import ChangeSet, Context, OmpProfile, Paths, Plan, Selection
 
 
-class CLI:
-    def __init__(self):
-        self.calls=[]
-        self.value=None
-        self.timeout=False
-    def run(self, argv, *, timeout, stdin=None, env=None):
-        self.calls.append(argv)
-        if '--help' in argv:
-            return subprocess.CompletedProcess(argv,0,'--json --transport --scope stdio user','')
-        if 'get' in argv:
-            return subprocess.CompletedProcess(argv,0,json.dumps(self.value),'')
-        if 'add' in argv:
-            self.value={'enabled':True,'transport':{'type':'stdio','command':'uvx','args':mcp.ARGS,'env':{}}}
-            if self.timeout:
-                raise subprocess.TimeoutExpired(argv,timeout)
-        if 'remove' in argv:self.value=None
-        return subprocess.CompletedProcess(argv,0,'','')
-    def mcp_probe(self,argv,*,timeout,env=None):
-        return {'tools':sorted(mcp.TOOLS),'sessions':True}
+class NoAgentRunner:
+    def run(self, *args, **kwargs):
+        raise AssertionError('MCP storage adapters must not execute an agent')
 
 
 class MCPTests(unittest.TestCase):
     def setUp(self):
-        self.fixture=Fixture().__enter__()
-        self.addCleanup(self.fixture.__exit__,None,None,None)
-        self.context=Context(resolve_paths(),{'codex':Path('/fake/codex'),'claude':Path('/fake/claude'),'uvx':Path('/fake/uvx')},{},frozenset(),{}, {})
-        self.cli=CLI()
-    def build(self,features={'mcp'},agents={'codex'}):
-        return feature.build(self.context,Selection(frozenset(agents),frozenset(features),frozenset(),'Default'))
-    def test_pinned_server_argv(self):
-        edit=self.build().edits[0]
-        self.assertEqual(edit.after['command'],'uvx')
-        self.assertEqual(edit.after['args'],['--with','mcp<2','mcp-server-iterm2==0.1.1'])
-    def test_foreign_same_name_is_not_overwritten(self):
-        self.cli.value={'enabled':True,'transport':{'type':'stdio','command':'foreign','args':[],'env':{'TOKEN':'secret'}}}
-        with self.assertRaises(ValueError):mcp.apply(self.build().edits[0],self.context,self.cli)
-        self.assertFalse(any('add' in a for a in self.cli.calls))
-        self.assertNotIn('secret',repr(mcp.inspect('codex',mcp.NAME,self.context,self.cli)))
-    def test_disabled_or_other_scope_server_is_a_conflict(self):
-        self.cli.value={'enabled':False,'transport':{'type':'stdio','command':'uvx','args':mcp.ARGS,'env':{}}}
-        with self.assertRaises(ValueError):mcp.apply(self.build().edits[0],self.context,self.cli)
-    def test_claude_only_does_not_edit_codex(self):
-        self.assertEqual([e.agent for e in self.build(agents={'claude'}).edits],['claude'])
-    def test_installed_process_without_connection_is_not_ready(self):
-        mcp.apply(self.build().edits[0],self.context,self.cli)
-        self.cli.mcp_probe=lambda *a,**k: {'tools':['list_sessions'],'sessions':False}
-        self.assertEqual(mcp.probe(self.context,self.cli,'codex').state,'unavailable')
-    def test_timeout_after_add_is_reconciled_not_repeated(self):
-        self.cli.timeout=True
-        mcp.apply(self.build().edits[0],self.context,self.cli)
-        self.assertEqual(sum('add' in a and '--help' not in a for a in self.cli.calls),1)
-    def test_python_api_dependency_does_not_enable_mcp_for_status(self):
-        self.assertEqual(self.build(features={'status'}).edits,[])
-    def test_unknown_tool_is_incompatible(self):
-        mcp.apply(self.build().edits[0],self.context,self.cli)
-        self.cli.mcp_probe=lambda *a,**k: {'tools':['list_sessions','execute'],'sessions':True}
-        self.assertEqual(mcp.probe(self.context,self.cli,'codex').state,'unavailable')
+        self.tmp = TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.home = Path(self.tmp.name)
+        environment = patch.dict(os.environ, {'HOME': str(self.home)})
+        environment.start()
+        self.addCleanup(environment.stop)
+        self.profile = OmpProfile('work', self.home/'.omp/profiles/work/agent')
+        self.profile.agent_dir.mkdir(parents=True)
+        self.path = self.profile.agent_dir/'mcp.json'
+        self.runner = NoAgentRunner()
+        paths = Paths(self.home, self.home/'.zshrc', self.home/'config', self.home/'cache', self.home/'data', self.home/'profiles', Path(__file__).resolve().parents[1])
+        self.context = Context(paths, {}, {}, frozenset(), {}, {}, omp_profile=self.profile)
+        self.selection = Selection(frozenset({'mcp'}), frozenset(), 'Default', self.profile)
 
-    def test_claude_known_labels_and_exact_argv(self):
-        calls=[]
-        registered=False
-        def run(argv,**kwargs):
-            nonlocal registered
-            calls.append(argv)
-            if '--help' in argv:return subprocess.CompletedProcess(argv,0,'--scope --transport','')
-            if 'get' in argv:
-                if not registered:return subprocess.CompletedProcess(argv,1,'','No MCP server found with name: iterm2-observe')
-                return subprocess.CompletedProcess(argv,0,"iterm2-observe:\nScope: User config (available in all your projects)\nStatus: ✓ Connected\nType: stdio\nCommand: uvx\nArgs: --with mcp<2 mcp-server-iterm2==0.1.1\n",'')
-            registered=True
-            return subprocess.CompletedProcess(argv,0,'','')
-        self.cli.run=run
-        mcp.apply(self.build(agents={'claude'}).edits[0],self.context,self.cli)
-        self.assertIn(['/fake/claude','mcp','add','--transport','stdio','--scope','user',mcp.NAME,'--','uvx',*mcp.ARGS],calls)
-        self.assertFalse(any('--json' in a or a[0]=='/fake/codex' for a in calls))
+    def install(self):
+        edit = mcp.server_edit(self.profile, self.runner)
+        return engine.apply(Plan(self.selection, ChangeSet([edit], [], []), ''), self.context, self.runner)
 
-    def test_claude_scope_env_disabled_and_unknown_formats_conflict(self):
-        base="iterm2-observe:\nScope: User config (available in all your projects)\nStatus: ✓ Connected\nType: stdio\nCommand: uvx\nArgs: --with mcp<2 mcp-server-iterm2==0.1.1\n"
-        variants=[base.replace('User config (available in all your projects)','Local config'),base+'Environment: TOKEN=secret\n',base.replace('✓ Connected','Disabled'),base+'Unknown: secret\n']
-        for output in variants:
-            self.assertEqual(mcp._claude(output,mcp.NAME),{'conflict':True})
-
-    def test_arbitrary_failure_is_not_absence(self):
-        self.cli.run=lambda argv,**kw:subprocess.CompletedProcess(argv,1,'','Authentication secret failure')
-        with self.assertRaisesRegex(ValueError,'MCP inspection'):
-            mcp.apply(self.build().edits[0],self.context,self.cli)
-
-    def test_engine_receipt_and_inverse_context(self):
-        from iterm2_utils import engine
-        from iterm2_utils.models import Plan
-        changes=self.build()
-        self.assertFalse(changes.findings)
-        selection=Selection(frozenset({'codex'}),frozenset({'mcp'}),frozenset(),'Default')
-        outcome=engine.apply(Plan(selection,changes,'test'),self.context,self.cli)
-        self.assertFalse(outcome.findings)
-        self.assertEqual(len(outcome.receipt.resources),1)
-        reverted=engine.revert(outcome.receipt,self.context,self.cli,frozenset({'mcp'}))
+    def test_owned_server_is_one_json_pointer_and_preserves_foreign_servers(self):
+        original = {'$schema': 'keep', 'mcpServers': {'foreign': {'command': 'private', 'env': {'TOKEN': 'secret'}}}, 'foreignRoot': [1, 2]}
+        self.path.write_text(json.dumps(original))
+        result = self.install()
+        self.assertFalse(result.findings)
+        self.assertEqual(len(result.receipt.resources), 1)
+        resource = result.receipt.resources[0]
+        self.assertEqual(resource['kind'], 'json')
+        self.assertEqual(resource['locator']['pointer'], ['mcpServers', mcp.NAME])
+        current = json.loads(self.path.read_text())
+        self.assertEqual(current['mcpServers'][mcp.NAME], mcp.definition())
+        self.assertEqual(current['mcpServers']['foreign'], original['mcpServers']['foreign'])
+        self.assertEqual(current['foreignRoot'], original['foreignRoot'])
+        reverted = engine.revert(result.receipt, self.context, self.runner, frozenset({'mcp'}))
         self.assertFalse(reverted.findings)
-        self.assertIsNone(self.cli.value)
+        self.assertEqual(json.loads(self.path.read_text()), original)
 
-    def test_probe_real_fake_protocol(self):
-        import sys
-        from iterm2_utils.commands import Runner
-        script=self.fixture.home/'server.py'
-        script.write_text("tools="+repr(sorted(mcp.TOOLS))+"\n"+"""import sys,json
-for line in sys.stdin:
-    request=json.loads(line)
-    method=request['method']
-    if method=='notifications/initialized':continue
-    if method=='initialize':result={'protocolVersion':'2024-11-05','capabilities':{}}
-    elif method=='tools/list':result={'tools':[{'name':name} for name in tools]}
-    else:result={'content':[{'type':'text','text':'{"windows": [], "buried_sessions": []}'}]}
-    print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}),flush=True)
-""")
-        self.assertEqual(Runner().mcp_probe([sys.executable,str(script)],timeout=2),{'tools':sorted(mcp.TOOLS),'sessions':True})
+    def test_equivalent_foreign_server_reuses_without_ownership(self):
+        self.path.write_text(json.dumps({'mcpServers': {mcp.NAME: mcp.definition()}}))
+        before = self.path.read_bytes()
+        result = self.install()
+        self.assertFalse(result.findings)
+        self.assertEqual(result.receipt.resources, [])
+        self.assertEqual(self.path.read_bytes(), before)
 
-    def test_probe_process_without_protocol_times_out(self):
-        import sys
-        from iterm2_utils.commands import Runner
-        self.assertEqual(Runner().mcp_probe([sys.executable,'-c','import time; time.sleep(20)'],timeout=.05),{'tools':[],'sessions':False})
+    def test_foreign_name_collision_is_not_overwritten(self):
+        for value in ({'command': 'other'}, None, {'command': 'uvx', 'args': mcp.ARGS, 'env': {'TOKEN': 'secret'}}):
+            self.path.write_text(json.dumps({'mcpServers': {mcp.NAME: value}}))
+            before = self.path.read_bytes()
+            with self.assertRaises(ValueError):
+                mcp.server_edit(self.profile, self.runner)
+            self.assertEqual(self.path.read_bytes(), before)
 
-    def test_custom_codex_home_child_environment(self):
-        self.context.paths.codex_home=self.fixture.home/'isolated-codex'
-        observed=[]
-        original=self.cli.run
-        def run(argv,**kwargs):
-            observed.append({k:kwargs['env'][k] for k in ('HOME','CODEX_HOME')})
-            return original(argv,**kwargs)
-        self.cli.run=run
-        mcp.apply(self.build().edits[0],self.context,self.cli)
-        self.assertTrue(observed)
-        self.assertTrue(all(e=={'HOME':str(self.fixture.home),'CODEX_HOME':str(self.context.paths.codex_home)} for e in observed))
+    def test_malformed_storage_and_disabled_server_block_without_mutation(self):
+        for content in ('null', '[]', '{', '{"mcpServers":null}', '{"mcpServers":{},"mcpServers":{}}', json.dumps({'disabledServers': [mcp.NAME]})):
+            self.path.write_text(content)
+            with self.assertRaises(ValueError):
+                mcp.server_edit(self.profile, self.runner)
+            self.assertEqual(self.path.read_text(), content)
 
-    def test_claude_config_dir_mismatch_preserved(self):
-        from unittest.mock import patch
-        with patch.dict('os.environ',{'CLAUDE_CONFIG_DIR':str(self.fixture.home/'foreign')}):
-            with self.assertRaisesRegex(ValueError,'differs'):
-                mcp.inspect('claude',mcp.NAME,self.context,self.cli)
-        self.assertEqual(self.cli.calls,[])
-
-    def test_existing_exact_registration_is_reused_without_adoption(self):
-        from iterm2_utils import engine
-        from iterm2_utils.models import Plan
-        self.cli.value={'enabled':True,'transport':{'type':'stdio','command':'uvx','args':mcp.ARGS,'env':{}}}
-        selection=Selection(frozenset({'codex'}),frozenset({'mcp'}),frozenset(),'Default')
-        outcome=engine.apply(Plan(selection,self.build(),'test'),self.context,self.cli)
-        self.assertFalse(outcome.findings)
-        self.assertEqual(outcome.receipt.resources,[])
-        self.assertFalse(any('add' in a or 'remove' in a for a in self.cli.calls))
-
-    def test_changed_registration_is_preserved_on_uninstall(self):
-        from iterm2_utils import engine
-        from iterm2_utils.models import Plan
-        selection=Selection(frozenset({'codex'}),frozenset({'mcp'}),frozenset(),'Default')
-        outcome=engine.apply(Plan(selection,self.build(),'test'),self.context,self.cli)
-        self.cli.value['transport']['env']={'TOKEN':'private'}
-        reverted=engine.revert(outcome.receipt,self.context,self.cli,frozenset({'mcp'}))
+    def test_changed_server_is_retained_on_uninstall(self):
+        result = self.install()
+        data = json.loads(self.path.read_text())
+        data['mcpServers'][mcp.NAME]['args'].append('--foreign')
+        data['mcpServers']['neighbour'] = {'command': 'keep'}
+        self.path.write_text(json.dumps(data))
+        reverted = engine.revert(result.receipt, self.context, self.runner, frozenset({'mcp'}))
         self.assertTrue(reverted.findings)
-        self.assertNotIn('private',repr(reverted))
-        self.assertFalse(any('remove' in a for a in self.cli.calls))
+        self.assertEqual(json.loads(self.path.read_text()), data)
+        self.assertEqual(len(reverted.receipt.resources), 1)
 
-    def test_timeout_unknown_does_not_repeat(self):
-        def run(argv,**kwargs):
-            self.cli.calls.append(argv)
-            if '--help' in argv:return subprocess.CompletedProcess(argv,0,'--json','')
-            if 'add' in argv:raise subprocess.TimeoutExpired(argv,5)
-            return subprocess.CompletedProcess(argv,0,'null','')
-        self.cli.run=run
-        with self.assertRaisesRegex(ValueError,'outcome unknown'):
-            mcp.apply(self.build().edits[0],self.context,self.cli)
-        self.assertEqual(sum('add' in a and '--help' not in a for a in self.cli.calls),1)
+    def test_server_replacement_does_not_remove_user_added_field(self):
+        result = self.install()
+        data = json.loads(self.path.read_text())
+        data['mcpServers'][mcp.NAME]['timeout'] = 1234
+        self.path.write_text(json.dumps(data))
+        reverted = engine.revert(result.receipt, self.context, self.runner, frozenset({'mcp'}))
+        self.assertTrue(reverted.findings)
+        self.assertEqual(json.loads(self.path.read_text()), data)
 
-    def test_ready_requires_exact_registration_and_protocol(self):
-        self.assertEqual(mcp.probe(self.context,self.cli,'codex').state,'unavailable')
-        mcp.apply(self.build().edits[0],self.context,self.cli)
-        self.assertEqual(mcp.probe(self.context,self.cli,'codex').state,'ready')
+    def test_pinned_definition_is_native_stdio_not_agent_cli_metadata(self):
+        definition = mcp.definition()
+        self.assertEqual(definition, {'command': 'uvx', 'args': ['--with', 'mcp<2', 'mcp-server-iterm2==0.1.1'], 'env': {}, 'enabled': True})
+        self.assertNotIn('scope', definition)
+        self.assertNotIn('environment_empty', definition)
 
-    def test_probe_rejects_generic_error_payload_and_unknown_tools(self):
-        import sys
-        from iterm2_utils.commands import Runner
-        script=self.fixture.home/'bad-server.py'
-        for tools,content in [(sorted(mcp.TOOLS),'unavailable: denied'),(['execute'],'{}')]:
-            script.write_text("import sys,json\nfor line in sys.stdin:\n r=json.loads(line)\n if 'id' not in r:continue\n m=r['method']\n v={'protocolVersion':'2024-11-05','capabilities':{}} if m=='initialize' else {'tools':[{'name':name} for name in "+repr(tools)+"]} if m=='tools/list' else {'content':[{'type':'text','text':"+repr(content)+"}]}\n print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':v}),flush=True)\n")
-            result=Runner().mcp_probe([sys.executable,str(script)],timeout=1)
-            self.assertFalse(result['sessions'])
-            self.assertNotIn('denied',repr(result))
+    def test_probe_checks_exact_tool_allowlist_and_session_evidence(self):
+        self.path.write_text(json.dumps({'mcpServers': {mcp.NAME: mcp.definition()}}))
+        class Probe(NoAgentRunner):
+            extra = False
+            def mcp_probe(inner, argv, *, timeout, env=None):
+                self.assertEqual(argv, ['uvx', *mcp.ARGS])
+                self.assertEqual(timeout, 5)
+                self.assertEqual(env['HOME'], str(self.home))
+                return {'tools': sorted(mcp.TOOLS | ({'dangerous'} if inner.extra else set())), 'sessions': True}
+        runner = Probe()
+        self.assertEqual(mcp.probe(self.context, runner).state, 'ready')
+        runner.extra = True
+        self.assertNotEqual(mcp.probe(self.context, runner).state, 'ready')
 
-    def test_real_fake_cli_targets_only_custom_codex_home(self):
-        import sys
-        from iterm2_utils.commands import Runner
-        script=self.fixture.home/'fake-codex'
-        script.write_text('#!'+sys.executable+'\n'+'''import json,os,sys
-from pathlib import Path
-args=sys.argv[1:]
-path=Path(os.environ['CODEX_HOME'])/'registration.json'
-if '--help' in args:print('--json --scope --transport')
-elif 'get' in args:print(path.read_text() if path.exists() else 'null')
-elif 'add' in args:
- path.parent.mkdir(parents=True,exist_ok=True)
- path.write_text(json.dumps({'enabled':True,'transport':{'type':'stdio','command':'uvx','args':['--with','mcp<2','mcp-server-iterm2==0.1.1'],'env':{}}}))
-elif 'remove' in args:path.unlink()
-''')
-        script.chmod(0o755)
-        self.context.executables['codex']=script
-        self.context.paths.codex_home=self.fixture.home/'custom-target'
-        mcp.apply(self.build().edits[0],self.context,Runner())
-        self.assertTrue((self.context.paths.codex_home/'registration.json').exists())
-        self.assertFalse((self.fixture.home/'.codex').exists())
-        mcp.apply(RegistrationEdit('codex',mcp.NAME,mcp.definition(),None,'mcp'),self.context,Runner())
-        self.assertFalse((self.context.paths.codex_home/'registration.json').exists())
-
-    def test_adapter_rejects_incomplete_duplicate_or_unknown_inventory(self):
-        mcp.apply(self.build().edits[0],self.context,self.cli)
-        complete=sorted(mcp.TOOLS)
-        self.assertEqual(len(complete),13)
-        inventories=[['list_sessions'],complete[:-1],complete+[complete[0]],complete[:-1]+[complete[0]],complete+['execute']]
-        for inventory in inventories:
-            with self.subTest(inventory=inventory):
-                self.cli.mcp_probe=lambda *a,**k: {'tools':inventory,'sessions':True}
-                self.assertEqual(mcp.probe(self.context,self.cli,'codex').state,'unavailable')
+    def test_adapter_rejects_incomplete_duplicate_or_unknown_tool_inventory(self):
+        self.path.write_text(json.dumps({'mcpServers': {mcp.NAME: mcp.definition()}}))
+        complete = sorted(mcp.TOOLS)
+        class Probe(NoAgentRunner):
+            tools = []
+            def mcp_probe(inner, *args, **kwargs):
+                return {'tools': inner.tools, 'sessions': True}
+        runner = Probe()
+        for inventory in ([complete[0]], complete[:-1], complete + [complete[0]], complete[:-1] + [complete[0]], complete + ['execute']):
+            runner.tools = inventory
+            self.assertEqual(mcp.probe(self.context, runner).state, 'unavailable')
 
     def test_protocol_rejects_invalid_inventory_before_sessions_call(self):
         import sys
         from iterm2_utils.commands import Runner
-        complete=sorted(mcp.TOOLS)
-        self.assertEqual(len(complete),13)
-        script=self.fixture.home/'inventory-server.py'
-        marker=self.fixture.home/'sessions-called'
-        inventories=[['list_sessions'],complete[:-1],complete+[complete[0]],complete[:-1]+[complete[0]],complete+['execute']]
-        for inventory in inventories:
-            with self.subTest(inventory=inventory):
-                marker.unlink(missing_ok=True)
-                script.write_text('tools='+repr(inventory)+'\nmarker='+repr(str(marker))+'\n'+"""import sys,json
+        complete = sorted(mcp.TOOLS)
+        script = self.home/'inventory-server.py'
+        marker = self.home/'sessions-called'
+        for inventory in ([complete[0]], complete[:-1], complete + [complete[0]], complete[:-1] + [complete[0]], complete + ['execute']):
+            marker.unlink(missing_ok=True)
+            script.write_text('tools=' + repr(inventory) + '\nmarker=' + repr(str(marker)) + '\n' + """import sys,json
 from pathlib import Path
 for line in sys.stdin:
  request=json.loads(line)
@@ -253,6 +148,77 @@ for line in sys.stdin:
   result={'content':[{'type':'text','text':'{"windows": [], "buried_sessions": []}'}]}
  print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}),flush=True)
 """)
-                result=Runner().mcp_probe([sys.executable,str(script)],timeout=2)
-                self.assertFalse(result['sessions'])
-                self.assertFalse(marker.exists())
+            result = Runner().mcp_probe([sys.executable, str(script)], timeout=2)
+            self.assertFalse(result['sessions'])
+            self.assertFalse(marker.exists())
+
+    def test_protocol_error_payload_does_not_claim_session_evidence(self):
+        import sys
+        from iterm2_utils.commands import Runner
+        script = self.home/'error-server.py'
+        script.write_text('tools=' + repr(sorted(mcp.TOOLS)) + '\n' + """import sys,json
+for line in sys.stdin:
+ request=json.loads(line)
+ if 'id' not in request:continue
+ method=request['method']
+ if method=='initialize':result={'protocolVersion':'2024-11-05','capabilities':{}}
+ elif method=='tools/list':result={'tools':[{'name':name} for name in tools]}
+ else:result={'isError':True,'content':[{'type':'text','text':'private denied response'}]}
+ print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}),flush=True)
+""")
+        result = Runner().mcp_probe([sys.executable, str(script)], timeout=2)
+        self.assertFalse(result['sessions'])
+        self.assertNotIn('private denied response', repr(result))
+
+    def test_native_reconcile_uses_receipt_profile_and_new_probe_signature(self):
+        from dataclasses import replace
+        from iterm2_utils import lifecycle, state
+        from iterm2_utils.models import Receipt, UiStep
+        self.path.write_text(json.dumps({'mcpServers': {mcp.NAME: mcp.definition()}}))
+        receipt = Receipt('2', self.selection, [], [UiStep('mcp_authorize', 'mcp', None, 'Authorize the selected server.')])
+        state.save(self.context.paths.data/'receipt.json', receipt)
+        class Probe(NoAgentRunner):
+            calls = 0
+            def mcp_probe(inner, argv, *, timeout, env=None):
+                inner.calls += 1
+                return {'tools': sorted(mcp.TOOLS), 'sessions': True}
+        runner = Probe()
+        different = replace(self.context, omp_profile=OmpProfile(None, self.home/'foreign/agent'))
+        result = lifecycle.reconcile_ui(different, 'mcp_authorize', runner)
+        self.assertEqual(runner.calls, 1)
+        self.assertFalse(result.receipt.pending_ui)
+        self.assertTrue(any(f.code == 'mcp_connection' and f.state == 'ready' for f in result.findings))
+        self.assertEqual(state.load(self.context.paths.data/'receipt.json').selection.omp_profile, self.profile)
+
+    def test_cli_current_live_doctor_uses_current_receipt_mcp_scope(self):
+        import contextlib
+        import io
+        from iterm2_utils import cli, state
+        from iterm2_utils.models import Receipt
+        self.path.write_text(json.dumps({'mcpServers': {mcp.NAME: mcp.definition()}}))
+        state.save(self.context.paths.data/'receipt.json', Receipt('2', self.selection, [], []))
+        class Probe(NoAgentRunner):
+            calls = 0
+            def mcp_probe(inner, argv, *, timeout, env=None):
+                inner.calls += 1
+                return {'tools': sorted(mcp.TOOLS), 'sessions': True}
+        runner = Probe()
+        output = io.StringIO()
+        with patch.object(cli, 'resolve_paths', return_value=self.context.paths), patch.object(cli, 'Runner', return_value=runner), patch.object(cli, 'discover', side_effect=AssertionError('agent discovery')), contextlib.redirect_stdout(output):
+            cli.main(['doctor', '--live', '--json'])
+        self.assertEqual(runner.calls, 1)
+        self.assertTrue(any(f['code'] == 'mcp_connection' and f['state'] == 'ready' for f in json.loads(output.getvalue())['findings']))
+
+    def test_cli_historical_live_doctor_stops_before_native_or_legacy_probe(self):
+        import contextlib
+        import io
+        from iterm2_utils import cli
+        from tests.test_legacy_state import legacy_fixture
+        path = self.context.paths.data/'receipt.json'
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps(legacy_fixture(str(self.path))))
+        output = io.StringIO()
+        with patch.object(cli, 'resolve_paths', return_value=self.context.paths), patch.object(cli, 'discover', side_effect=AssertionError('agent discovery')), patch.object(mcp, 'probe', side_effect=AssertionError('unscoped probe')), contextlib.redirect_stdout(output):
+            status = cli.main(['doctor', '--live', '--json'])
+        self.assertEqual(status, 2)
+        self.assertTrue(any(f['code'] == 'migration_required' for f in json.loads(output.getvalue())['findings']))

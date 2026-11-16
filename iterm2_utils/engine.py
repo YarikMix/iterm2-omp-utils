@@ -15,12 +15,10 @@ import uuid
 from contextlib import contextmanager
 from pathlib import Path
 from . import state, legacy_state
-from .config import jsonfile, tomlfile, zshrc, preferences, mcp, iterm
-from .models import SymlinkEdit, FileEdit, PreferenceEdit, RegistrationEdit, ProfileBarEdit, StatusBarPositionEdit, Receipt, Outcome, Finding, Plan, Context, Selection
+from .config import jsonfile, tomlfile, zshrc, preferences, omp, iterm
+from .models import SymlinkEdit, FileEdit, PreferenceEdit, RegistrationEdit, ProfileBarEdit, StatusBarPositionEdit, Receipt, Outcome, Finding, Plan, Context, Selection, OmpProfile, OmpEdit
 from .commands import Runner
 
-# Registration backend uses the transaction Context for every inspection and write.
-registration_adapter = mcp
 
 
 def _finding(code, message, owner='transaction', status='conflict'):
@@ -93,24 +91,36 @@ def _lookup(root,pointer):
         return _value(exists=False)
 
 
-def _diff(before, after, prefix=()):
+def _diff(before, after, prefix=(), *, atomic_servers=False):
+    if atomic_servers and len(prefix) == 2 and prefix[0] == 'mcpServers':
+        if not _same(before,after):
+            yield prefix,_value(before),_value(after)
+        return
     if isinstance(before,dict) and isinstance(after,dict):
         for key in sorted(before.keys() | after.keys()):
             if key not in before:
                 # New objects are decomposed so later additions survive removal.
-                if isinstance(after[key],dict) and after[key]:
-                    yield from _diff({},after[key],prefix+(key,))
+                if atomic_servers and prefix == ('mcpServers',):
+                    yield prefix+(key,),_value(exists=False),_value(after[key])
+                elif isinstance(after[key],dict) and after[key]:
+                    yield from _diff({},after[key],prefix+(key,),atomic_servers=atomic_servers)
                 else:
                     yield prefix+(key,),_value(exists=False),_value(after[key])
             elif key not in after:
                 yield prefix+(key,),_value(before[key]),_value(exists=False)
             else:
-                yield from _diff(before[key],after[key],prefix+(key,))
+                yield from _diff(before[key],after[key],prefix+(key,),atomic_servers=atomic_servers)
     elif not _same(before,after):
         yield prefix,_value(before),_value(after)
 
 
 def _compile(edit):
+    if isinstance(edit,OmpEdit):
+        if omp.storage(edit.profile,edit.kind).resolve() != edit.path:
+            raise ValueError('Native configuration address changed since planning')
+        mode = stat.S_IMODE(edit.path.stat().st_mode) if edit.path.exists() else 0o600
+        locator = {'key':edit.key,'profile':edit.profile.name,'agent_dir':str(edit.profile.agent_dir),'mode':mode}
+        return [_resource('omp_'+edit.kind,edit.path,locator,edit.before,edit.after,edit.owner)]
     if isinstance(edit,ProfileBarEdit):
         iterm.identifier(edit.guid)
         iterm.validate_bar(edit.before); iterm.validate_bar(edit.after)
@@ -125,11 +135,7 @@ def _compile(edit):
         path = edit.path.parent.resolve() / edit.path.name
         return [_resource('symlink',path,{},_value(edit.before,edit.before is not None),_value(edit.after,edit.after is not None),edit.owner)]
     if isinstance(edit,RegistrationEdit):
-        if edit.agent != 'omp':
-            raise ValueError('Historical registrations require migration')
-        if registration_adapter is None:
-            raise ValueError('Registration backend unavailable')
-        return [_resource('registration',edit.agent,{'name':edit.name},_value(edit.before,edit.before is not None),_value(edit.after,edit.after is not None),edit.owner)]
+        raise ValueError('Registrations require receipt-authorized historical migration')
     if isinstance(edit,PreferenceEdit):
         return [_resource('preference',edit.domain,{'key':edit.key},_value(edit.before,edit.before is not None),_value(edit.after,edit.after is not None),edit.owner)]
     if not isinstance(edit,FileEdit) or not edit.path.is_absolute():
@@ -148,7 +154,7 @@ def _compile(edit):
         if not isinstance(before,dict) or not isinstance(after,dict):
             raise ValueError('Configuration root must be a table')
         result = []
-        for pointer,a,b in _diff(before,after):
+        for pointer,a,b in _diff(before,after,atomic_servers=kind == 'json' and edit.path.name == 'mcp.json'):
             if kind == 'json' and len(pointer) == 2 and pointer[0] == 'hooks':
                 old_entries = a['value'] if a['exists'] else []
                 new_entries = b['value'] if b['exists'] else []
@@ -208,12 +214,10 @@ def _read(r,runner,context):
     if kind == 'preference':
         return preferences.read(runner,r['target'],loc['key'])
     if kind == 'registration':
-        if r['target'] != 'omp':
-            raise ValueError('Historical registrations require migration')
-        if registration_adapter is None:
-            raise ValueError('Registration backend unavailable')
-        value = registration_adapter.inspect(r['target'],loc['name'],context,runner)
-        return _value(value,value is not None)
+        raise ValueError('Registrations require receipt-authorized historical migration')
+    if kind in {'omp_setting','omp_binding'}:
+        profile = OmpProfile(loc['profile'],Path(loc['agent_dir']))
+        return omp.read_address(profile,kind.removeprefix('omp_'),loc['key'],runner,path=r['target'])
     return _file_value(r,_bytes(Path(r['target'])))
 
 
@@ -277,9 +281,10 @@ def _set(r,value,runner,context, *, expected):
         preferences.write(runner,r['target'],loc['key'],value)
         return
     if kind == 'registration':
-        if registration_adapter is None:
-            raise ValueError('Registration backend unavailable')
-        registration_adapter.apply(RegistrationEdit(r['target'],loc['name'],expected['value'] if expected['exists'] else None,value['value'] if value['exists'] else None,'mcp'),context,runner)
+        raise ValueError('Registrations require receipt-authorized historical migration')
+    if kind in {'omp_setting','omp_binding'}:
+        profile = OmpProfile(loc['profile'],Path(loc['agent_dir']))
+        omp.set_address(profile,kind.removeprefix('omp_'),loc['key'],value,runner,expected=expected,path=r['target'])
         return
     path = Path(r['target'])
     raw = _bytes(path)
@@ -343,7 +348,7 @@ def _deletes_projects(r, context):
 
 
 def _backup(r,context):
-    if r['kind'] not in {'file','json','toml','zsh','hook'}:
+    if r['kind'] not in {'file','json','toml','zsh','hook','omp_setting','omp_binding'}:
         return
     raw = _bytes(Path(r['target']))
     if raw is not None:
@@ -550,9 +555,6 @@ def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozens
                     if own['kind'] == 'hook' and not own['installed']['exists'] and not own['before']['exists']:
                         resources.remove(own)
                 else:
-                    # Reuse an exact existing MCP registration without adopting it.
-                    if r['kind'] == 'registration' and _same(current,r['installed']):
-                        continue
                     if not _same(current,r['before']):
                         raise ValueError('Stale plan')
                     # Existing identical foreign values are not adopted.

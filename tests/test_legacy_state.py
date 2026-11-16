@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from iterm2_utils import legacy_state, state
-from iterm2_utils.models import Selection
+from iterm2_utils.models import OmpProfile, Receipt, Selection
 
 
 def legacy_fixture(target='/fixture/settings.json'):
@@ -74,3 +74,20 @@ class LegacyStateTests(unittest.TestCase):
         raw['selection'].update(agents=['omp'], features=['bootstrap-skill'])
         raw['resources'][0]['owners'] = ['bootstrap-skill']
         self.assertEqual(legacy_state.decode(raw).selection.agents, {'omp'})
+
+    def test_v1_rejects_native_only_resources_accepted_by_current_v2(self):
+        profile = OmpProfile(None, Path('/fixture/.omp/agent'))
+        for kind, key, value, owner, filename in (
+                ('omp_setting', 'terminal.programStatus', True, 'status', 'config.yml'),
+                ('omp_binding', 'app.session.resume', 'Alt+R', 'shortcuts', 'keybindings.yml')):
+            resource = dict(kind=kind, target=str(profile.agent_dir/filename),
+                locator={'key':key,'profile':None,'agent_dir':str(profile.agent_dir),'mode':0o600},
+                before={'exists':False,'value':None}, installed={'exists':True,'value':value},
+                owners=[owner], version='1')
+            current = Receipt('2', Selection(frozenset({owner}), frozenset(), 'Default', profile), [resource], [])
+            state.validate(current)
+            historical = legacy_fixture()
+            historical['selection']['features'] = [owner]
+            historical['resources'] = [resource]
+            with self.subTest(kind=kind), self.assertRaises(ValueError):
+                legacy_state.decode(historical)

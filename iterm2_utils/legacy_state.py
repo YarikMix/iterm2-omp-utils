@@ -10,6 +10,8 @@ AGENTS = frozenset({'codex', 'claude', 'omp'})
 FEATURES = frozenset({'clipboard', 'status', 'notifications', 'restore', 'mcp', 'shell',
                       'shortcuts', 'appearance', 'project-launcher', 'bootstrap-skill'})
 SHORTCUTS = frozenset({'ctrl-v-ru', 'alt-enter', 'ctrl-q', 'resume'})
+RESOURCE_KINDS = frozenset({'file','json','toml','zsh','preference','registration','symlink',
+                            'hook','profile_bar','status_bar_position'})
 
 
 @dataclass
@@ -137,6 +139,8 @@ def validate(receipt):
                 raise ValueError('Invalid UI snapshot entry')
             validate_native_entry(entry)
     validate_resources(receipt.resources)
+    if any(resource['kind'] not in RESOURCE_KINDS for resource in receipt.resources):
+        raise ValueError('Unknown historical resource kind')
     validate_ui(receipt.pending_ui)
     if any(step.agent not in AGENTS | {None} or step.feature not in FEATURES for step in receipt.pending_ui):
         raise ValueError('Unknown historical UI choice')

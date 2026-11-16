@@ -102,3 +102,18 @@ runtime releases and the public archive; installation and shell startup do not
 download images. The shared `runtime/codex.zsh` adaptation also adds optional
 appearance launch/return phases without changing its pinned source identity or
 the original restore classifier attribution above.
+
+`vendor/yaml/` contains the unmodified JavaScript `dist/` distributable,
+`package.json` and ISC license from Eemeli Aro's `yaml` 2.9.1 npm release
+([upstream](https://github.com/eemeli/yaml/tree/v2.9.1),
+[document/CST API](https://eemeli.org/yaml/)). The release identifies commit
+`1440ecd3d1bff41e4ac399f8f6839e810328bd16`. Its npm archive's SHA-512 integrity
+was checked before extraction; archive SHA-256, integrity, member names and each
+shipped member's SHA-256 are recorded in `sources.lock.json`. The original
+copyright and permission text is preserved verbatim in `vendor/yaml/LICENSE`.
+No parser source was modified and no dependency installation is performed.
+Only the document API is used by `runtime/omp_config.ts`: duplicate/ambiguous
+documents and unsupported tags are refused; alias expansion and input/output
+sizes are bounded. Selected values use source ranges where possible, with
+document edits for insertion/removal. Anchored or merged owned paths are
+rejected rather than changing foreign aliases or inherited content.

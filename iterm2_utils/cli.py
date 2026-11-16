@@ -171,6 +171,9 @@ def main(argv=None):
             context = Context(paths, {}, {}, frozenset(), {}, {}, omp_profile=receipt.selection.omp_profile)
             if args.command == 'doctor':
                 findings = lifecycle.doctor(context, receipt, runner)
+                if args.live and 'mcp' in receipt.selection.features:
+                    from .config.mcp import probe
+                    findings.append(probe(context, runner))
                 output = dict(mode='read_only_discovery', selection=_selection(receipt.selection),
                               findings=[asdict(f) for f in findings])
             else:
@@ -196,9 +199,6 @@ def main(argv=None):
                 if receipt and receipt.selection.agents_for('appearance'):
                     from .discovery import live_appearance
                     findings.append(live_appearance(context,runner))
-                if receipt and 'mcp' in receipt.selection.features:
-                    from .config.mcp import probe
-                    findings.extend(probe(context,runner,a) for a in sorted(receipt.selection.agents_for('mcp')))
             output = dict(mode='read_only_discovery',executables=sorted(context.executables),versions=context.versions,
                           capabilities=sorted(context.capabilities),features=sorted(FEATURES),
                           python_api='ready' if any(f.code=='status_api' and f.state=='ready' for f in findings) else 'not_verified',
