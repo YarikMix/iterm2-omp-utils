@@ -68,7 +68,7 @@ def discover(paths: Paths, runner: Runner, *, features: frozenset[str] = frozens
         names.add('omp')
     if features & {'status','notifications','shortcuts'}:
         names.add('bun')
-    if features & {'appearance','project-launcher'}:
+    if features & {'clipboard','shortcuts','appearance','project-launcher'}:
         names.add('python3')
     if 'mcp' in features:
         names.add('uvx')

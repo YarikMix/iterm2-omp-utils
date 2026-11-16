@@ -86,7 +86,7 @@ def install(context, selection, runner, *, dry_run=False):
         chosen = replace(selection, features=working.selection.features | {feature},
                          shortcuts=(working.selection.shortcuts | selection.shortcuts
                                     if feature == 'shortcuts' else working.selection.shortcuts),
-                         resume_key=(selection.resume_key if feature=='shortcuts'
+                         resume_key=(selection.resume_key if feature=='shortcuts' and 'resume' in selection.shortcuts
                                      else working.selection.resume_key),
                          notify_errors=(selection.notify_errors if feature=='notifications'
                                         else working.selection.notify_errors))

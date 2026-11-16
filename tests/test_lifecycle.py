@@ -195,6 +195,17 @@ class LifecycleTests(LifecycleFixture):
         self.assertTrue(any(f.state=='conflict' for f in result.findings))
         self.assertFalse(any('write_' in str(call[0]) or 'close' in str(call[0]) for call in self.runner.calls))
 
+    def test_incremental_shortcut_install_preserves_recorded_resume_key(self):
+        from iterm2_utils.config import omp
+        self.assertSuccess(self.install('shortcuts',shortcuts=('resume',),resume_key='F8'))
+        result = self.install('shortcuts',shortcuts=('alt-enter',))
+        self.assertSuccess(result)
+        self.assertEqual(result.receipt.selection.shortcuts,{'resume','alt-enter'})
+        self.assertEqual(result.receipt.selection.resume_key,'F8')
+        self.assertEqual(omp.read_binding(self.profile,'app.session.resume',self.runner),
+                         {'exists':True,'value':'F8'})
+        self.assertIn('ctrl+j',omp.read_binding(self.profile,'tui.input.newLine',self.runner)['value'])
+
 
 from tests.test_migration import MigrationFixture
 

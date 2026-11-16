@@ -84,3 +84,61 @@ class DiscoveryTests(unittest.TestCase):
                 {'TERM_SESSION_ID':terminal,'ITERM_SESSION_ID':'87654321-1234-4234-8234-123456789ABC'},
                 {'TERM_SESSION_ID':terminal,'ITERM_SESSION_ID':''}):
             self.assertIsNone(terminal_from_environment(environment))
+
+    def test_fresh_profile_contexts_retire_only_unreferenced_dedicated_profiles(self):
+        from iterm2_utils import lifecycle
+        from iterm2_utils.features.profiles import GUID, NAME
+        from iterm2_utils.models import Selection
+        from tests.test_lifecycle import NativeRunner
+        for feature in ('clipboard','shortcuts'):
+            for referenced in (False,True):
+                with self.subTest(feature=feature,referenced=referenced), Fixture() as f:
+                    runner = NativeRunner()
+                    runner.responses['defaults'] = plistlib.dumps({
+                        'New Bookmarks':[{'Name':'Default','Guid':'parent','Keyboard Map':{}}]}).decode()
+                    original_run = runner.run
+                    def run(argv, **kwargs):
+                        result = original_run(argv,**kwargs)
+                        if argv[1:]==['-c','import iterm2; print("iterm2-sdk-ready")']:
+                            return subprocess.CompletedProcess(argv,0,'iterm2-sdk-ready\n','')
+                        return result
+                    runner.run = run
+                    preferences = {}
+                    def read(runner,domain,key):
+                        return {'exists':key in preferences,'value':preferences.get(key)}
+                    def write(runner,domain,key,value):
+                        if value['exists']:
+                            preferences[key] = value['value']
+                        else:
+                            preferences.pop(key,None)
+                    features = frozenset({feature})
+                    paths = resolve_paths()
+                    with patch('iterm2_utils.engine.preferences.read',side_effect=read), \
+                            patch('iterm2_utils.engine.preferences.write',side_effect=write):
+                        initial_context = discover(paths,runner,features=features)
+                        selection = Selection(features,frozenset({'ctrl-q'}) if feature=='shortcuts' else frozenset(),
+                                              'Default',initial_context.omp_profile)
+                        installed = lifecycle.install(initial_context,selection,runner)
+                        self.assertFalse([f for f in installed.findings if f.state in {
+                            'conflict','unavailable','missing_dependency'}])
+                        target = paths.profiles/'iterm2-utils.json'
+                        before = target.read_bytes()
+                        if referenced:
+                            bar = {'Show Status Bar':False,'Status Bar Layout':{'components':[]}}
+                            runner.inventory['profiles'].append({'guid':GUID,'name':NAME,'bar':bar,
+                                'working_directory':None,'references':[]})
+                            runner.inventory['sessions'].append({'id':'live','profile_guid':GUID,
+                                'bar':bar,'references':[],'provenance':True})
+                        fresh_context = discover(paths,runner,features=features)
+                        self.assertIn('python3',fresh_context.executables)
+                        self.assertIn('python:iterm2',fresh_context.capabilities)
+                        result = lifecycle.uninstall(fresh_context,features,runner)
+                        if referenced:
+                            self.assertEqual(target.read_bytes(),before)
+                            self.assertEqual(result.receipt.selection.features,features)
+                            self.assertTrue(any(f.state=='conflict' for f in result.findings))
+                        else:
+                            self.assertFalse([f for f in result.findings if f.state in {
+                                'conflict','unavailable','missing_dependency'}])
+                            self.assertFalse(target.exists())
+                            self.assertFalse(result.receipt.selection.features)

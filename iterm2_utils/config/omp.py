@@ -183,6 +183,12 @@ def effective_binding(profile: OmpProfile, action: str, runner: Runner) -> dict:
     return read_binding(inherited, action, runner) if not local['exists'] and inherited is not None else local
 
 
+def canonical_chord(value: str):
+    """Compare native chord spelling independently of case/modifier order."""
+    parts = value.strip().lower().split('+')
+    return tuple(sorted(parts[:-1])), parts[-1]
+
+
 def _binding_guards(profile, action, value, runner):
     """Read inherited remaps without migration; reject cross-action collisions.
 
@@ -206,10 +212,10 @@ def _binding_guards(profile, action, value, runner):
     if value['exists']:
         wanted = value['value']
         chords = wanted if isinstance(wanted, list) else [] if wanted is None else [wanted]
-        normalized = {chord.strip().lower() for chord in chords if isinstance(chord, str)}
+        normalized = {canonical_chord(chord) for chord in chords if isinstance(chord, str)}
         for other, keys in merged.items():
             alternatives = keys if isinstance(keys, list) else [] if keys is None else [keys]
-            if other != action and normalized.intersection(key.strip().lower() for key in alternatives):
+            if other != action and normalized.intersection(canonical_chord(key) for key in alternatives):
                 raise ValueError('Selected binding conflicts with another native action')
     return sources
 

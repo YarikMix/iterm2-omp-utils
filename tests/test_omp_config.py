@@ -298,3 +298,21 @@ class NativeConfigTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             omp.set_setting(self.profile, 'terminal.programStatus', present(True), self.runner, expected=ABSENT)
         self.assertEqual(path.read_bytes(), raw)
+
+    def test_modifier_order_collision_refuses_planning_and_staging(self):
+        base = self.home/'.omp/agent'
+        base.mkdir(parents=True)
+        inherited = base/'keybindings.yml'
+        inherited.write_text('app.history.search: Shift+Ctrl+F8\n')
+        before = inherited.read_bytes()
+        with self.assertRaises(ValueError):
+            omp.binding_edit(self.profile,'app.session.resume',present('Ctrl+Shift+F8'),self.runner)
+        self.assertEqual(inherited.read_bytes(),before)
+        inherited.unlink()
+        edit = omp.binding_edit(self.profile,'app.session.resume',present('Ctrl+Shift+F8'),self.runner)
+        inherited.write_bytes(before)
+        result = engine.apply(Plan(self.selection,ChangeSet([edit],[],[]),'modifier-order'),
+                              self.context,self.runner)
+        self.assertTrue(any(f.state=='conflict' for f in result.findings))
+        self.assertEqual(inherited.read_bytes(),before)
+        self.assertFalse((self.profile.agent_dir/'keybindings.yml').exists())

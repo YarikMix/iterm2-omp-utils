@@ -53,6 +53,11 @@ keyboard, banner and identity acceptance remain unverified; all Task4 checks are
 queued to the final integrated verification.
 Immutable runtime JSON (including the bundled parser package metadata) is
 compiled as byte-owned files, not reconstructed configuration addresses.
+Clipboard/shortcut discovery also finds optional Python/SDK support for safe
+dedicated-profile retirement, without adding a shell/bootstrap prerequisite.
+Incremental shortcut installation preserves an existing resume key unless resume
+is explicitly selected again. Native binding guards compare canonical modifier
+order during both planning and staging, preserving conflicting inherited bindings.
 
 Добавлен отдельный bootstrap-навык `iterm2-projects` для операций со списком
 проектов project-launcher; его receipt независим от receipts других skill/feature,

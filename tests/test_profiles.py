@@ -81,3 +81,18 @@ class ProfileTests(NativeFixture):
         path.write_text('app.history.search: Ctrl+J\n')
         with self.assertRaises(ValueError):
             build(self.context,self.selection('shortcuts',shortcuts=('alt-enter',)))
+
+    def test_resume_refuses_inherited_modifier_order_collision(self):
+        from iterm2_utils import lifecycle
+        default = self.home/'.omp/agent'
+        default.mkdir(parents=True)
+        inherited = default/'keybindings.yml'
+        inherited.write_text('app.history.search: Shift+Ctrl+F8\n')
+        before = inherited.read_bytes()
+        selection = self.selection('shortcuts',shortcuts=('resume',),resume_key='Ctrl+Shift+F8')
+        result = lifecycle.install(self.context,selection,self.runner)
+        self.assertTrue(any(f.feature=='shortcuts' and f.state=='conflict' for f in result.findings))
+        self.assertFalse(result.receipt.selection.features)
+        self.assertEqual(inherited.read_bytes(),before)
+        self.assertFalse((self.profile.agent_dir/'keybindings.yml').exists())
+        self.assertFalse((self.context.paths.profiles/'iterm2-utils.json').exists())

@@ -23,6 +23,9 @@ but explicitly replaces the parent keyboard map and startup command. It has no
 automatic `&bun` or agent-name matching: select it explicitly when launching omp.
 Clipboard never sends Cmd+C as Ctrl+C; Ctrl+C remains omp clear/cancel. Only the
 clipboard feature changes shared `CopySelection`; shortcuts alone leave it alone.
+Clipboard/shortcut discovery also detects the optional selected Python/SDK used
+to prove profiles unreferenced before retirement. Missing inventory support
+prevents unsafe deletion, not ordinary shell/bootstrap or clipboard installation.
 
 `alt-enter` sends LF/Ctrl+J, never ESC+CR. `ctrl-v-ru` normalizes only the physical
 RU paste key to native Ctrl+V. `ctrl-q` explicitly retains native follow-up/tool
@@ -30,6 +33,9 @@ approval; no double-Ctrl+C mapping is installed. `resume` requires an explicit
 `--resume-key`, checks known native/default and inherited user-binding collisions,
 and edits literal `app.session.resume`, never injecting `/resume` text. New
 upstream default bindings and effective overlays still require live acceptance.
+Adding another shortcut preserves a recorded resume key unless resume itself is
+explicitly selected again. Binding collisions ignore modifier order and case in
+both planning and the transactional staging recheck.
 
 Selected newline/paste normalizations preserve inherited native alternatives and
 add only the required Ctrl+J/Ctrl+V action binding. Cross-action collisions block

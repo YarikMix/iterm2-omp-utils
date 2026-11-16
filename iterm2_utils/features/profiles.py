@@ -40,7 +40,7 @@ def _chord(value):
                 'enter','tab','escape','backspace','delete','space'} or
                 re.fullmatch(r'f(?:[1-9]|1[0-9]|2[0-4])',parts[-1]))):
         return None
-    return tuple(sorted(modifiers)),parts[-1]
+    return omp.canonical_chord(value)
 
 
 def resume_key_conflict(value):
