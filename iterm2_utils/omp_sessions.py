@@ -135,40 +135,14 @@ def find_open(target: ResumeTarget, transport) -> SessionBinding | None:
 
 
 def read_bindings(registry: Path) -> list[SessionBinding]:
-    """Only private schema-v1 records; invalid/stale records are not authority."""
-    from runtime.terminal_identity import terminal_id
-    result = []
-    try:
-        info = registry.lstat()
-        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o777 != 0o700 or info.st_uid != os.getuid():
-            return []
-        for path in registry.glob('*.json'):
-            try:
-                info = path.lstat()
-                if not stat.S_ISREG(info.st_mode) or info.st_mode & 0o777 != 0o600 or info.st_size > 65536 or info.st_uid != os.getuid():
-                    continue
-                raw = json.loads(path.read_bytes())
-                if not isinstance(raw,dict) or raw.pop('schema') != 1 or set(raw) != set(SessionBinding.__dataclass_fields__):
-                    continue
-                profile = raw['profile']
-                if (set(profile) != {'name','agent_dir'} or not Path(profile['agent_dir']).is_absolute() or
-                        profile['name'] is not None and not isinstance(profile['name'],str)):
-                    continue
-                if terminal_id(raw['terminal_id']) != raw['terminal_id'] or type(raw['pid']) is not int or raw['pid'] <= 0:
-                    continue
-                if any(not isinstance(raw[key],str) or not raw[key] for key in ('session_id','process_start','generation','cwd')):
-                    continue
-                if any(raw[key] is not None and not isinstance(raw[key],str) for key in ('tab_id','window_id','session_file')):
-                    continue
-                if not Path(raw['cwd']).is_absolute() or raw['session_file'] is not None and not Path(raw['session_file']).is_absolute():
-                    continue
-                result.append(SessionBinding(**{**raw, 'profile':OmpProfile(profile['name'],Path(profile['agent_dir'])),
-                    'cwd':Path(raw['cwd']), 'session_file':Path(raw['session_file']) if raw['session_file'] else None}))
-            except (ValueError, OSError, KeyError, TypeError):
-                continue
-    except OSError:
-        pass
-    return result
+    """Convert the shared standalone validator's records to the public type."""
+    from runtime.terminal_identity import read_identity_records
+    return [SessionBinding(**{key: value for key, value in raw.items()
+                              if key not in {'schema', 'profile', 'cwd', 'session_file'}},
+                           profile=OmpProfile(raw['profile']['name'], Path(raw['profile']['agent_dir'])),
+                           cwd=Path(raw['cwd']),
+                           session_file=Path(raw['session_file']) if raw['session_file'] else None)
+            for raw in read_identity_records(registry)]
 
 
 def _holds_latest_turn(parent: Path, child: Path) -> bool:

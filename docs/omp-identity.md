@@ -94,3 +94,20 @@ additions; obsolete event normalization is not imported by appearance/identity.
 
 No status/notification pipeline, daemon or completion inference is added.
 Runtime/live acceptance and RED/GREEN execution are explicitly queued to Task10.
+
+## Installed appearance consumer
+
+`runtime.terminal_identity.read_identity_records(registry)` is the single private
+schema reader; `omp_sessions.read_bindings` converts its dictionaries to the
+public dataclass. `verified_identity(registry, observed)` requires an exact
+record match and the same live kernel birth. The installed appearance release
+imports this adjacent standalone helper, never the checkout package.
+
+Appearance obtains terminal/tab/window addresses from its own scoped SDK tree
+and merges them over decoded `user.iterm2_utils_omp` before validation. Each write
+also checks the caller's actual TTY device. Shell preexec captures a baseline and
+arms the bounded event observer for any command, without trusting its name;
+only verified main identity reserves a launch snapshot or writes appearance.
+Shell precmd cancels/reaps the old observer before the return observer; a live
+new main identity prevents return writes. Native `-ilc` launch explicitly arms
+the same installed callback before exec. Ordinary shell launch remains independent.

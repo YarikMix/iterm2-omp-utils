@@ -77,6 +77,8 @@ def process_start(pid: int) -> str | None:
 def tty_device(path):
     import os
     import stat
+    if not isinstance(path, str) or not path.startswith('/') or '\x00' in path:
+        return None
     try:
         info = os.stat(path)
         return info.st_rdev if stat.S_ISCHR(info.st_mode) else None
@@ -112,6 +114,60 @@ async def observe_own_terminal(pid: int, tty: str, environment: dict[str, str], 
         return matches[0] if len(matches) == 1 else None
     finally:
         await connection.websocket.close()
+
+
+def read_identity_records(registry):
+    """Shared private schema reader, usable from an installed standalone runtime."""
+    import json
+    import os
+    from pathlib import Path
+    import stat
+    fields = {'schema', 'terminal_id', 'tab_id', 'window_id', 'session_file',
+              'session_id', 'cwd', 'profile', 'pid', 'process_start', 'generation'}
+    result = []
+    try:
+        info = registry.lstat()
+        if not stat.S_ISDIR(info.st_mode) or info.st_mode & 0o777 != 0o700 or info.st_uid != os.getuid():
+            return []
+        for path in registry.glob('*.json'):
+            try:
+                fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
+                with os.fdopen(fd, 'rb') as source:
+                    info = os.fstat(source.fileno())
+                    if (not stat.S_ISREG(info.st_mode) or info.st_mode & 0o777 != 0o600
+                            or info.st_size > 65536 or info.st_uid != os.getuid()):
+                        continue
+                    raw = json.loads(source.read(65537))
+                if type(raw) is not dict or set(raw) != fields or type(raw['schema']) is not int or raw['schema'] != 1:
+                    continue
+                profile = raw['profile']
+                if (type(profile) is not dict or set(profile) != {'name', 'agent_dir'}
+                        or not Path(profile['agent_dir']).is_absolute()
+                        or profile['name'] is not None and not isinstance(profile['name'], str)):
+                    continue
+                if terminal_id(raw['terminal_id']) != raw['terminal_id'] or type(raw['pid']) is not int or raw['pid'] <= 0:
+                    continue
+                if any(not isinstance(raw[key], str) or not raw[key] for key in ('session_id', 'process_start', 'generation', 'cwd')):
+                    continue
+                if any(raw[key] is not None and not isinstance(raw[key], str) for key in ('tab_id', 'window_id', 'session_file')):
+                    continue
+                if not Path(raw['cwd']).is_absolute() or raw['session_file'] is not None and not Path(raw['session_file']).is_absolute():
+                    continue
+                result.append(raw)
+            except (ValueError, OSError, KeyError, TypeError):
+                continue
+    except OSError:
+        pass
+    return result
+
+
+def verified_identity(registry, observed):
+    """Require independent SDK addresses/variable plus a private live birth match."""
+    if type(observed) is not dict:
+        return None
+    matches = [record for record in read_identity_records(registry)
+               if record == observed and process_start(record['pid']) == record['process_start']]
+    return matches[0] if len(matches) == 1 else None
 
 
 def _main():

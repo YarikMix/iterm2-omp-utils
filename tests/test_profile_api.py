@@ -30,7 +30,7 @@ class AdapterTests(unittest.TestCase):
     def setUp(self):
         self.fixture = Fixture().__enter__()
         self.addCleanup(self.fixture.__exit__, None, None, None)
-        self.context = discover(resolve_paths(), self.fixture.runner)
+        self.context = discover(resolve_paths(), self.fixture.runner, features=frozenset({'project-launcher'}))
         self.runner = FakeRunner()
         self.runner.responses['python3'] = json.dumps({'status': 'ok', 'value': inventory()})
 
@@ -44,6 +44,17 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(timeout, 10)
         self.assertEqual(json.loads(stdin), {'operation': 'inspect'})
         self.assertNotIn('parent-guid', ' '.join(argv))
+
+    def test_launcher_schema_is_evidence_not_application_version(self):
+        snapshot = inventory()
+        self.assertEqual(iterm.validate_launcher_inventory(snapshot), snapshot)
+        for components in (None, 'future-schema', [{}], [{'class': 27}]):
+            invalid = copy.deepcopy(snapshot)
+            invalid['profiles'][0]['bar']['Status Bar Layout']['components'] = components
+            with self.subTest(components=components), self.assertRaises(ValueError):
+                iterm.validate_launcher_inventory(invalid)
+            # The generic read/recovery protocol can still preserve opaque bars.
+            self.assertEqual(iterm.validate_inventory(invalid), invalid)
 
     def test_grouped_bar_and_position_are_existing_typed_values(self):
         for value in (None, {}, {'Show Status Bar': 1, 'Status Bar Layout': {}},

@@ -96,7 +96,7 @@ def prepare(context, selection, runner):
         _load(context)
         if ('python:iterm2' in context.capabilities and
                 {'iterm2','zsh','python3'} <= context.executables.keys()):
-            snapshot = iterm.inspect(context, runner)
+            snapshot = iterm.validate_launcher_inventory(iterm.inspect(context, runner))
     except (ValueError, OSError, TypeError, KeyError):
         pass
     return replace(context, project_launcher_snapshot=snapshot)
@@ -145,7 +145,7 @@ def build(context, selection):
     if 'python:iterm2' not in context.capabilities:
         return fail('project_launcher_sdk','Select an existing Python 3.11+ with iterm2 using ITERM2_UTILS_PYTHON; enable and authorize the iTerm2 Python API.','missing_dependency')
     try:
-        snapshot = iterm.validate_inventory(context.project_launcher_snapshot)
+        snapshot = iterm.validate_launcher_inventory(context.project_launcher_snapshot)
         profiles = {p['name']:p for p in snapshot['profiles']}
         parent = profiles[selection.parent_profile]
         targets = [profiles[name] for name in config['profiles']]

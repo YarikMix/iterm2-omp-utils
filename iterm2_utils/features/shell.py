@@ -112,6 +112,7 @@ def build(context: Context, selection: Selection) -> ChangeSet:
         if 'appearance' in consumers:
             lines.extend(['typeset -g ITERM2_UTILS_PYTHON='+quote(context.executables['python3']),
                           'typeset -g ITERM2_UTILS_APPEARANCE_CONFIG='+quote(context.paths.config/'appearance.json'),
+                          'typeset -g ITERM2_UTILS_IDENTITY_REGISTRY='+quote(context.paths.data/'identity'),
                           'source '+quote(current/'appearance.zsh')])
         if lines or 'root' in managed:
             changes.edits.append(FileEdit(path,before,zshrc.block(base,'root','\n'.join(lines) if lines else None),0o600,OWNER))

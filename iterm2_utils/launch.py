@@ -109,6 +109,8 @@ def build_command(request, inspection, argv):
                        ' == Path(sys.argv[2]) else 1)')
         guard+=shlex.join([sys.executable,'-c',profile_check,request.omp_profile.name or 'default',
                            str(request.omp_profile.agent_dir)])+' || exit 1; '
+        # -ilc does not read a prompt command; arm the installed observer explicitly.
+        guard+='if (( $+functions[_iterm2_utils_appearance_preexec] )); then _iterm2_utils_appearance_preexec; fi; '
         invocation=[str(inspection.zsh),'-ilc',guard+'exec '+shlex.join([
             '/usr/bin/env','OMP_PROFILE='+ (request.omp_profile.name or 'default'),
             'PI_CODING_AGENT_DIR='+str(request.omp_profile.agent_dir),*argv])]

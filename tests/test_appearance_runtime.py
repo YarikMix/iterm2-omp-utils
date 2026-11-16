@@ -165,7 +165,7 @@ class FakeAPI:
         self.write = AsyncMock()
         self.reset = AsyncMock(side_effect=self._reset)
         self.close = AsyncMock()
-        self.job = 'zsh'
+        self.main = 'zsh'
         self.events = asyncio.Queue()
         self.watching = False
         self.current = {'Tab Color': {'Red Component': .4}, 'Use Tab Color': True,
@@ -210,8 +210,8 @@ class FakeAPI:
         self.current = dict(properties)
         return True
 
-    async def job_name(self, session):
-        return self.job
+    async def main_identity(self, session, registry):
+        return {'generation': 'actual-main'} if self.main == 'omp' else None
 
     @asynccontextmanager
     async def watch(self, terminal):
@@ -311,7 +311,7 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
             for preserve in (False, True):
                 with self.subTest(phase=phase, preserve=preserve):
                     api = FakeAPI()
-                    api.job = 'zsh' if phase == 'launch' else 'codex'
+                    api.main = 'zsh' if phase == 'launch' else 'omp'
                     api.saved = ('42-1', dict(api.current) if preserve else None)
                     owned = True
                     api.owns_terminal.side_effect = lambda *args: owned
@@ -325,7 +325,7 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
                                   ('write', 'restore', 'write_if_current', 'clear_snapshot')]
                         saved = api.saved
                         owned = False
-                        api.job = 'codex' if phase == 'launch' else 'zsh'
+                        api.main = 'omp' if phase == 'launch' else 'zsh'
                         await api.events.put(None)
                         return counts, saved
                     driver = asyncio.create_task(drive())
@@ -344,8 +344,8 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
     async def test_ownership_loss_only_at_final_cleanup_preserves_snapshot(self):
         self.api.saved = ('42-1', dict(self.api.current))
         original = self.api.saved
-        self.api.job = 'codex'
-        self.api.owns_terminal.side_effect = [True, False]
+        self.api.main = 'omp'
+        self.api.owns_terminal.side_effect = [True, True, False]
         with patch.object(appearance, '_WATCH_SECONDS', .001):
             self.assertEqual(await appearance._operate({**self.request, 'phase': 'return',
                              'preserve': True, 'launch_id': '42-1'}), 'ignored')
@@ -435,14 +435,14 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
 
     async def run_event_case(self, phase, initial_job, events):
         self.request['phase'] = phase
-        self.api.job = initial_job
+        self.api.main = initial_job
         if phase == 'return':
             self.api.saved = (self.request.get('launch_id'), None)
         async def drive():
             while not self.api.watching:
                 await asyncio.sleep(0)
             for job in events:
-                self.api.job = job
+                self.api.main = job
                 await self.api.events.put(None)
                 # Wait for the event handler to observe the current job.
                 await asyncio.sleep(0)
@@ -455,26 +455,34 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
         self.api.close.assert_awaited_once()
         return result
 
+    async def test_bun_shell_names_and_stale_identity_never_authorize_launch_writes(self):
+        for unverified in ('bun', 'omp-name-only', 'stale-generation', 'zsh'):
+            self.api.main = unverified
+            with patch.object(appearance, '_WATCH_SECONDS', .001):
+                self.assertEqual(await appearance._operate({**self.request, 'phase': 'launch'}), 'timeout')
+            self.api.write.assert_not_called()
+            self.api.save_snapshot.assert_not_called()
+
     async def test_launch_reapplies_after_aps_profile_change(self):
-        self.assertEqual(await self.run_event_case('launch', 'zsh', ['codex']), 'applied')
+        self.assertEqual(await self.run_event_case('launch', 'zsh', ['omp', 'omp']), 'applied')
         self.assertEqual(self.api.write.await_count, 2)
 
     async def test_return_observes_shell_aps_reversal(self):
-        self.assertEqual(await self.run_event_case('return', 'codex', ['zsh', 'zsh']), 'applied')
+        self.assertEqual(await self.run_event_case('return', 'omp', ['zsh', 'zsh']), 'applied')
         self.assertEqual(self.api.write.await_count, 2)
 
     async def test_early_exit_stale_event_does_not_write(self):
-        self.assertEqual(await self.run_event_case('launch', 'zsh', ['zsh']), 'applied')
-        self.assertEqual(self.api.write.await_count, 1)
+        self.assertEqual(await self.run_event_case('launch', 'zsh', ['zsh']), 'timeout')
+        self.api.write.assert_not_called()
 
     async def test_no_match_preserves_manual_snapshot_across_launch_and_return(self):
         expected = dict(self.api.current)
         self.request = {'terminal': UUID, 'device': DEVICE, 'phase': 'launch', 'preserve': True}
         async def launch():
-            while self.api.saved is None:
+            while not self.api.watching:
                 await asyncio.sleep(0)
             self.api.current = {'Use Tab Color': False, 'Custom Icon Path': ''}
-            self.api.job = 'codex'
+            self.api.main = 'omp'
             await self.api.events.put(None)
         driver = asyncio.create_task(launch())
         try:
@@ -483,7 +491,7 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
             await driver
             self.assertEqual(self.api.current, expected)
             self.api.current = {'Use Tab Color': False, 'Custom Icon Path': ''}
-            self.api.job = 'zsh'
+            self.api.main = 'zsh'
             with patch.object(appearance, '_WATCH_SECONDS', .02):
                 self.assertEqual(await appearance._operate({**self.request, 'phase': 'return'}), 'applied')
             self.assertEqual(self.api.current, expected)
@@ -493,7 +501,7 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
             driver.cancel()
             await asyncio.gather(driver, return_exceptions=True)
 
-    async def test_default_survives_no_match_codex_aps_and_return(self):
+    async def test_default_survives_no_match_omp_aps_and_return(self):
         self.assertEqual(await appearance._operate({'terminal': UUID, 'device': DEVICE, 'phase': 'shell', 'reset': True}), 'applied')
         expected = {'Tab Color': {'Red Component': .4}, 'Use Tab Color': False,
                     'Use Tab Color (Light)': False, 'Use Tab Color (Dark)': False,
@@ -501,11 +509,11 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.api.current, expected)
         request = {'terminal': UUID, 'device': DEVICE, 'phase': 'launch', 'preserve': True, 'launch_id': '42-1'}
         async def launch():
-            while self.api.saved is None or self.api.saved[0] != '42-1':
+            while not self.api.watching:
                 await asyncio.sleep(0)
             self.api.current = {'Use Tab Color': True, 'Use Tab Color (Light)': True,
-                                'Use Tab Color (Dark)': True, 'Icon': 2, 'Custom Icon Path': '/fixture/codex.png'}
-            self.api.job = 'codex'
+                                'Use Tab Color (Dark)': True, 'Icon': 2, 'Custom Icon Path': '/fixture/omp.png'}
+            self.api.main = 'omp'
             await self.api.events.put(None)
         driver = asyncio.create_task(launch())
         try:
@@ -514,7 +522,7 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
             await driver
             self.assertEqual(self.api.current, expected)
             self.api.current = {'Use Tab Color': True, 'Icon': 2, 'Custom Icon Path': '/fixture/shell.png'}
-            self.api.job = 'zsh'
+            self.api.main = 'zsh'
             with patch.object(appearance, '_WATCH_SECONDS', .02):
                 self.assertEqual(await appearance._operate({**request, 'phase': 'return'}), 'applied')
             self.assertEqual(self.api.current, expected)
@@ -623,17 +631,19 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
         self.api.saved = ('42-1', dict(self.api.current))
         ownership_at_write = []
         self.api.write.side_effect = lambda *args: ownership_at_write.append(self.api.saved)
+        self.api.main = 'omp'
         request = {**self.request, 'phase': 'launch', 'launch_id': '43-1'}
         with patch.object(appearance, '_WATCH_SECONDS', .001):
             self.assertEqual(await appearance._operate(request), 'applied')
             self.assertEqual(ownership_at_write, [('43-1', None)])
+            self.api.main = 'zsh'
             self.assertEqual(await appearance._operate({**request, 'phase': 'return'}), 'applied')
         self.api.save_snapshot.assert_awaited_once_with(self.api.session, None, '43-1')
         self.assertIsNone(self.api.saved)
 
     async def test_cancelled_return_clears_only_its_reserved_snapshot(self):
         self.api.saved = ('42-1', dict(self.api.current))
-        self.api.job = 'codex'
+        self.api.main = 'omp'
         request = {'terminal': UUID, 'device': DEVICE, 'phase': 'return', 'preserve': True, 'launch_id': '42-1'}
         observer = asyncio.create_task(appearance._operate(request))
         try:
@@ -659,7 +669,7 @@ class AppearanceOperationTests(unittest.IsolatedAsyncioTestCase):
             await old
         self.assertFalse(self.api.watching)
         writes = self.api.write.await_count
-        self.api.job = 'codex'
+        self.api.main = 'omp'
         await self.api.events.put(None)
         await asyncio.sleep(0)
         self.assertEqual(self.api.write.await_count, writes)
@@ -715,6 +725,102 @@ class SnapshotSession:
         self.writes.append((self.in_transaction, profile))
         self.current = profile
 
+
+class InstalledAppearanceTests(unittest.TestCase):
+    def test_standalone_release_imports_only_its_adjacent_identity_helper(self):
+        import shutil
+        with tempfile.TemporaryDirectory() as root:
+            release = Path(root) / 'release'
+            release.mkdir()
+            for name in ('appearance.py', 'terminal_identity.py'):
+                shutil.copy(Path(appearance.__file__).parent / name, release / name)
+            code = """import runpy,sys,pathlib
+root=pathlib.Path(sys.argv[1])
+sys.path.insert(0,str(root))
+module=runpy.run_path(str(root/'appearance.py'))
+import terminal_identity
+assert pathlib.Path(terminal_identity.__file__).parent == root
+assert module['verified_identity'] is terminal_identity.verified_identity
+assert 'iterm2_utils' not in sys.modules
+print('standalone')
+"""
+            result = subprocess.run([sys.executable, '-I', '-c', code, str(release)],
+                                    cwd=root, env={'HOME': root}, capture_output=True, text=True)
+            self.assertEqual((result.returncode, result.stdout, result.stderr), (0, 'standalone\n', ''))
+
+
+class OmpIdentityTests(unittest.IsolatedAsyncioTestCase):
+    async def test_operation_writes_only_after_actual_private_live_identity(self):
+        from runtime import terminal_identity
+        with tempfile.TemporaryDirectory() as root:
+            registry = Path(root) / 'identity'
+            registry.mkdir(mode=0o700)
+            record = dict(schema=1, terminal_id=UUID, tab_id='tab', window_id='window',
+                          session_file=None, session_id='actual-main', cwd=root,
+                          profile={'name': None, 'agent_dir': root}, pid=42,
+                          process_start='darwin-bsd:123:000456', generation='generation')
+            path = registry / 'instance-generation.json'
+            path.write_text(json.dumps(record)); path.chmod(0o600)
+            variables = {'tty': '/dev/null', 'user.iterm2_utils_omp': json.dumps(record)}
+            session = Mock(session_id=UUID,
+                           async_get_variable=AsyncMock(side_effect=lambda name: variables.get(name)),
+                           async_set_variable=AsyncMock(side_effect=lambda name, value: variables.update({name: value})),
+                           async_set_profile_properties=AsyncMock())
+            tab = Mock(tab_id='tab', all_sessions=[session])
+            window = Mock(window_id='window', tabs=[tab])
+            app = Mock(terminal_windows=[window], get_session_by_id=Mock(return_value=session))
+            connection = Mock(websocket=Mock(close=AsyncMock()))
+            sdk = Mock(async_get_app=AsyncMock(return_value=app))
+            sdk.Connection.async_create = AsyncMock(return_value=connection)
+            sdk.Transaction.return_value = AsyncMock()
+            request = dict(terminal=UUID, device=DEVICE, phase='launch', registry=str(registry),
+                           launch_id='42-1', color='#65A85A', icon='/fixture/a.png')
+            for birth, expected in ((record['process_start'], 'applied'),
+                                    ('darwin-bsd:123:000457', 'timeout'), (None, 'timeout')):
+                session.async_set_profile_properties.reset_mock()
+                with patch.dict(sys.modules, {'iterm2': sdk}), \
+                     patch.object(terminal_identity, 'process_start', return_value=birth), \
+                     patch.object(appearance, '_WATCH_SECONDS', .001):
+                    self.assertEqual(await appearance._operate(request), expected)
+                self.assertEqual(session.async_set_profile_properties.await_count,
+                                 1 if expected == 'applied' else 0)
+
+    async def test_actual_identity_requires_registry_birth_and_independent_addresses(self):
+        from runtime import terminal_identity
+        with tempfile.TemporaryDirectory() as root:
+            registry = Path(root) / 'identity'
+            registry.mkdir(mode=0o700)
+            record = dict(schema=1, terminal_id=UUID, tab_id='tab', window_id='window',
+                          session_file=None, session_id='actual-main', cwd=root,
+                          profile={'name': None, 'agent_dir': root}, pid=42,
+                          process_start='darwin-bsd:123:000456', generation='generation')
+            path = registry / 'instance-generation.json'
+            path.write_text(json.dumps(record)); path.chmod(0o600)
+            with patch.object(terminal_identity, 'process_start', return_value=record['process_start']):
+                self.assertEqual(terminal_identity.verified_identity(registry, record), record)
+                for key in ('terminal_id', 'tab_id', 'window_id', 'generation', 'session_id'):
+                    self.assertIsNone(terminal_identity.verified_identity(registry, {**record, key: 'foreign'}))
+            for birth in (None, 'darwin-bsd:123:000457'):
+                with patch.object(terminal_identity, 'process_start', return_value=birth):
+                    self.assertIsNone(terminal_identity.verified_identity(registry, record))
+            path.chmod(0o644)
+            with patch.object(terminal_identity, 'process_start', return_value=record['process_start']):
+                self.assertIsNone(terminal_identity.verified_identity(registry, record))
+
+    async def test_sdk_identity_uses_observed_addresses_not_embedded_registry_echo(self):
+        sdk = Mock()
+        session = Mock(session_id=UUID, async_get_variable=AsyncMock(return_value=json.dumps({
+            'terminal_id': UUID, 'tab_id': 'stale', 'window_id': 'stale'})))
+        tab = Mock(tab_id='actual-tab', all_sessions=[session])
+        window = Mock(window_id='actual-window', tabs=[tab])
+        sdk.async_get_app = AsyncMock(return_value=Mock(terminal_windows=[window]))
+        with patch.dict(sys.modules, {'iterm2': sdk}):
+            api = appearance._API()
+        with patch.object(appearance, 'verified_identity', return_value=None) as verify:
+            self.assertIsNone(await api.main_identity(session, Path('/fixture/identity')))
+        observed = verify.call_args.args[1]
+        self.assertEqual((observed['terminal_id'], observed['tab_id'], observed['window_id']),
+                         (UUID, 'actual-tab', 'actual-window'))
 
 class NativeAdapterTests(unittest.IsolatedAsyncioTestCase):
     async def test_terminal_device_alias_and_foreign_pty(self):
@@ -921,10 +1027,10 @@ class NativeAdapterTests(unittest.IsolatedAsyncioTestCase):
             api = appearance._API()
         api.connection = object()
         async with api.watch(UUID) as events:
-            await monitors[1].queue.put('Codex')
+            await monitors[1].queue.put('omp')
             await asyncio.wait_for(events.get(), .1)
         self.assertEqual([monitor.args for monitor in monitors], [
-            (api.connection, sdk.VariableScopes.SESSION, 'jobName', UUID),
+            (api.connection, sdk.VariableScopes.SESSION, 'user.iterm2_utils_omp', UUID),
             (api.connection, sdk.VariableScopes.SESSION, 'profileName', UUID)])
         self.assertTrue(all(monitor.closed for monitor in monitors))
 
@@ -982,7 +1088,7 @@ class SupervisorTests(unittest.TestCase):
                         signal.signal(sig, handler)
                     signal.pthread_sigmask(signal.SIG_SETMASK, mask)
 
-    def test_real_worker_readiness_follows_write_and_keeps_cancel_fence(self):
+    def test_real_worker_readiness_without_identity_never_authorizes_write_and_keeps_cancel_fence(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / 'iterm2.py').write_text('''
@@ -1006,7 +1112,7 @@ class Session:
     snapshot = None
     async def async_get_variable(self, name):
         if name == 'tty': return os.environ['APPEARANCE_TEST_TTY']
-        return 'zsh' if name == 'jobName' else self.snapshot
+        return self.snapshot
     async def async_set_variable(self, name, value): self.snapshot = value
     async def async_set_profile_properties(self, profile):
         await asyncio.sleep(.05)
@@ -1044,7 +1150,7 @@ class Connection:
                     try:
                         self.assertTrue(select.select([read_fd], [], [], 2)[0], 'no readiness or EOF')
                         self.assertEqual(os.read(read_fd, 64), b'ready\n')
-                        self.assertTrue(marker.exists())
+                        self.assertFalse(marker.exists(), 'read-only API success is not main identity')
                         self.assertIsNone(child.poll(), 'observer must remain alive after readiness')
                         child.terminate()
                         self.assertEqual(child.communicate(timeout=1), ('unavailable\n', ''))

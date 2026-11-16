@@ -8,13 +8,15 @@ Status Bar iTerm2. Кнопка открывает **новую активную
 [iterm2-projects](https://github.com/YarikMix/iterm2-utils/tree/main/skills/iterm2-projects).
 [Статический вымышленный пример](examples/project-launcher.html).
 
-Нужны macOS, zsh, **iTerm2 3.7.6** и выбранный существующий Python **3.11+** с
+Нужны macOS, zsh, iTerm2 с поддерживаемой native схемой Status Bar и выбранный существующий Python **3.11+** с
 официальным модулем `iterm2`. Выберите его через `ITERM2_UTILS_PYTHON`, если
 обычный Python не подходит; SDK должен импортироваться именно этим Python.
 В iTerm2 включите Settings → General → Magic → Enable Python API и подтвердите
 его запрос доступа вручную. CLI не устанавливает SDK, не запускает приложение
-и не выдаёт разрешения. Неизвестная версия, недоступный API, неоднозначные
-профили или непроверяемые session overrides блокируют установку до записей.
+и не выдаёт разрешения. Строка версии не является allowlist: более новая версия с той же проверенной
+схемой работает. Недоступный API, неизвестная схема компонентов, неоднозначные
+профили или непроверяемые session overrides блокируют только launcher до записей;
+обычная shell не требует этой capability или omp.
 
 Создайте **свой локальный** JSON вне публичного репозитория. Имена, папки и
 состав ваших проектов приватны; пример ниже содержит только вымышленные данные.
@@ -31,7 +33,7 @@ Status Bar iTerm2. Кнопка открывает **новую активную
 ```
 
 `profiles` — непустой список уникальных имён **существующих** профилей, в которых
-нужна панель. Профили Codex/Claude включайте только явно и после их создания.
+нужна панель. Профиль omp включайте только явно и после его создания.
 Одинаковые имена в inventory iTerm2 считаются конфликтом. `--parent-profile`
 выбирает существующий обычный shell-профиль для наследования проектных профилей;
 его custom command явно переопределяется login shell. Default profile не меняется.
@@ -43,17 +45,17 @@ GUID: переименование и смена папки при прежне�
 неправильные типы и повторные id/имена отвергаются без печати содержимого файла.
 
 ```sh
-python3 -m iterm2_utils plan --agent codex --features project-launcher --parent-profile Default --project-launcher-config /path/to/projects.json --json
-python3 -m iterm2_utils install --agent codex --features project-launcher --parent-profile Default --project-launcher-config /path/to/projects.json --dry-run --json
-python3 -m iterm2_utils install --agent codex --features project-launcher --parent-profile Default --project-launcher-config /path/to/projects.json --json
+python3 -m iterm2_utils plan --features project-launcher --parent-profile Default --project-launcher-config /path/to/projects.json --json
+python3 -m iterm2_utils install --features project-launcher --parent-profile Default --project-launcher-config /path/to/projects.json --dry-run --json
+python3 -m iterm2_utils install --features project-launcher --parent-profile Default --project-launcher-config /path/to/projects.json --json
 python3 -m iterm2_utils update --json
 python3 -m iterm2_utils doctor --json
 python3 -m iterm2_utils uninstall --features project-launcher --dry-run --json
 python3 -m iterm2_utils uninstall --features project-launcher --json
 ```
 
-`--agent codex|claude|both` задаёт владельцев по общей модели пакета; кнопки
-открывают shell. Флаг конфигурации без выбранной feature отвергается до discovery.
+Текущий consumer — omp, но кнопки открывают только shell. Флаг конфигурации
+без выбранной feature отвергается до discovery.
 Bootstrap не выбирает эту функцию. `plan` и `--dry-run` читают и планируют без
 записей. Чтобы **добавить ещё один проект**, отредактируйте локальный JSON и снова
 выполните `plan`/`install` с этим флагом; отдельная CRUD-команда не нужна.
@@ -72,8 +74,9 @@ receipts и журналом транзакций; новые фоновые п�
 добавляя собственные кнопки в порядке JSON. В исходных профилях меняются только
 `Show Status Bar` и `Status Bar Layout`, учитываемые одним typed ресурсом;
 глобальное положение становится Bottom. Остальные настройки и вкладки не
-перезапускаются. Удаление одного agent consumer сохраняет панель другого:
-`uninstall --agent codex --features project-launcher`.
+перезапускаются. Ownership переносится миграцией без удаления/создания прежних
+GUID и кнопок, сохраняя исходные before/inverse. Перенос сам по себе не выбирает
+feature; повторная явная установка использует неизменённые owned JSON и компоненты.
 
 При конфликте сохраните пользовательские правки и сравните их с собственным
 receipt/backup локально. Верните только конфликтующее owned значение к

@@ -15,9 +15,9 @@ import threading
 import time
 
 try:
-    from .terminal_identity import terminal_from_environment, terminal_id
+    from .terminal_identity import terminal_from_environment, terminal_id, tty_device as _tty_device, verified_identity
 except ImportError:
-    from terminal_identity import terminal_from_environment, terminal_id
+    from terminal_identity import terminal_from_environment, terminal_id, tty_device as _tty_device, verified_identity
 
 
 BUILTIN_ICONS = frozenset({
@@ -101,15 +101,6 @@ _APPEARANCE_KEYS = frozenset({
 })
 
 
-def _tty_device(path: str) -> int | None:
-    """Compare terminal aliases by character-device identity inside the worker."""
-    if not isinstance(path, str) or not path.startswith('/') or '\x00' in path:
-        return None
-    try:
-        info = os.stat(path)
-        return info.st_rdev if stat.S_ISCHR(info.st_mode) else None
-    except (OSError, ValueError):
-        return None
 
 
 class _TerminalMismatch(Exception):
@@ -135,8 +126,26 @@ class _API:
         return session is not None and device is not None and _tty_device(
             await session.async_get_variable('tty')) == device
 
-    async def job_name(self, session):
-        return await session.async_get_variable('jobName')
+    async def main_identity(self, session, registry):
+        if registry is None:
+            return None
+        app = await self.sdk.async_get_app(self.connection)
+        matches = [(window, tab, candidate) for window in app.terminal_windows
+                   for tab in window.tabs for candidate in tab.all_sessions
+                   if candidate.session_id == session.session_id]
+        if len(matches) != 1:
+            return None
+        window, tab, actual = matches[0]
+        try:
+            observed = json.loads(await actual.async_get_variable('user.iterm2_utils_omp'))
+        except (ValueError, TypeError):
+            return None
+        if type(observed) is not dict:
+            return None
+        # Scope comes from the actual SDK tree, not stale embedded addresses.
+        observed.update(terminal_id=terminal_id(actual.session_id),
+                        tab_id=tab.tab_id, window_id=window.window_id)
+        return verified_identity(registry, observed)
 
     async def write(self, session, color, icon):
         profile = self.sdk.LocalWriteOnlyProfile()
@@ -222,7 +231,7 @@ class _API:
 
         async with AsyncExitStack() as stack:
             try:
-                for name in ('jobName', 'profileName'):
+                for name in ('user.iterm2_utils_omp', 'profileName'):
                     monitor = await stack.enter_async_context(self.sdk.VariableMonitor(
                         self.connection, self.sdk.VariableScopes.SESSION, name, terminal))
                     tasks.append(asyncio.create_task(forward(monitor)))
@@ -266,8 +275,14 @@ async def _operate(request):
 
             await require_ownership()
             preserved = None
+            registry = Path(request['registry']) if request.get('registry') else None
+            identity = None
             async def write():
                 await require_ownership()
+                if phase == 'launch' and await api.main_identity(session, registry) != identity:
+                    return False
+                if phase == 'return' and await api.main_identity(session, registry) is not None:
+                    return False
                 if request.get('preserve'):
                     return await api.restore(session, preserved, request.get('launch_id'))
                 if phase != 'shell':
@@ -290,18 +305,33 @@ async def _operate(request):
                     if phase == 'launch':
                         if request.get('preserve'):
                             preserved = await api.snapshot(session)
-                        # A matched launch also invalidates an older preserved snapshot.
                         await require_ownership()
-                        await api.save_snapshot(session, preserved, request.get('launch_id'))
+                        await api.invalidate_snapshot(session)
                     elif request.get('preserve'):
                         preserved = await api.take_snapshot(session, request.get('launch_id'))
                         if preserved is None:
                             return 'ignored'
-                    job = await api.job_name(session)
-                    if (phase == 'launch' and not request.get('preserve')) or (phase == 'return' and job != 'codex'):
-                        applied = await write()
+
+                    async def reconcile():
+                        nonlocal identity
+                        await require_ownership()
+                        current = await api.main_identity(session, registry)
+                        if phase == 'launch':
+                            if current is None:
+                                return False
+                            if identity is None:
+                                identity = current
+                                await require_ownership()
+                                await api.save_snapshot(session, preserved, request.get('launch_id'))
+                            if current != identity:
+                                return False
+                        elif current is not None:
+                            return False
+                        return await write()
+
+                    applied = await reconcile()
                     if 'ready_fd' in request:
-                        # Release native Codex only after the snapshot and subscriptions exist.
+                        # Release the command only after snapshot capture and subscriptions.
                         ready_fd = request.pop('ready_fd')
                         try:
                             os.write(ready_fd, b'ready\n')
@@ -317,10 +347,8 @@ async def _operate(request):
                                 await events.get()
                         except TimeoutError:
                             break
-                        # Read current state, not a possibly queued obsolete event.
-                        job = await api.job_name(session)
-                        if (job == 'codex') == (phase == 'launch'):
-                            applied = await write() or applied
+                        # Revalidate actual identity/birth, never a queued obsolete event.
+                        applied = await reconcile() or applied
                     return 'applied' if applied else 'ignored' if request.get('preserve') else 'timeout'
                 finally:
                     if phase == 'return' and owned:
@@ -415,7 +443,7 @@ def _supervise(request, environment):
 
 def apply(config: Path, cwd: Path, phase: str, *, environment: dict[str, str],
           ready_fd: int | None = None, launch_id: str | None = None,
-          tty: str | None = None) -> str:
+          tty: str | None = None, registry: Path | None = None) -> str:
     """Apply this physical directory's rule to its explicit iTerm2 session."""
     terminal = terminal_from_environment(environment)
     if terminal is None or environment.get('TMUX'):
@@ -423,6 +451,8 @@ def apply(config: Path, cwd: Path, phase: str, *, environment: dict[str, str],
     if phase not in {'shell', 'launch', 'return'}:
         return 'unavailable'
     request = {'terminal': terminal, 'phase': phase, 'config': str(config), 'cwd': str(cwd), 'tty': tty}
+    if registry is not None or environment.get('ITERM2_UTILS_IDENTITY_REGISTRY'):
+        request['registry'] = str(registry or environment['ITERM2_UTILS_IDENTITY_REGISTRY'])
     if launch_id is not None:
         if not isinstance(launch_id, str) or re.fullmatch(r'[0-9]{1,20}-[0-9]{1,20}', launch_id) is None:
             return 'unavailable'
@@ -484,13 +514,15 @@ def _main():
             parser.add_argument('--ready-fd', type=int)
             parser.add_argument('--launch-id')
             parser.add_argument('--tty')
+            parser.add_argument('--registry', type=Path)
             with open(os.devnull, 'w') as quiet, redirect_stderr(quiet):
                 args = parser.parse_args()
             if args.probe:
                 result = probe(environment=dict(os.environ))
             elif args.config is not None and args.cwd is not None and args.phase:
                 result = apply(args.config, args.cwd, args.phase, environment=dict(os.environ),
-                               ready_fd=args.ready_fd, launch_id=args.launch_id, tty=args.tty)
+                               ready_fd=args.ready_fd, launch_id=args.launch_id, tty=args.tty,
+                               registry=args.registry)
     except (Exception, SystemExit):
         pass
     print(result)

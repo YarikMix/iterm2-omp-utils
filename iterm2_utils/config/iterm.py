@@ -34,6 +34,18 @@ def validate_bar(value):
     return value
 
 
+def validate_launcher_inventory(value):
+    """Recognize the native component schema, independent of iTerm's version."""
+    validate_inventory(value)
+    for row in (*value['profiles'], *value['sessions']):
+        components = row['bar']['Status Bar Layout'].get('components')
+        if type(components) is not list or any(
+                type(component) is not dict or type(component.get('class')) is not str
+                for component in components):
+            raise ValueError('Native launcher component schema unavailable')
+    return value
+
+
 def validate_position(value):
     if type(value) is not int or value not in (0, 1):
         raise ValueError('Invalid native status bar position')

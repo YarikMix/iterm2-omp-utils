@@ -16,6 +16,9 @@ function _iterm2_utils_appearance {
   if [[ $phase != shell && ${_iterm2_utils_appearance_launch_id-} == "$sysparams[pid]-"* ]]; then
     ready_arguments+=(--launch-id "$_iterm2_utils_appearance_launch_id")
   fi
+  if [[ ${ITERM2_UTILS_IDENTITY_REGISTRY-} == /* ]]; then
+    ready_arguments+=(--registry "$ITERM2_UTILS_IDENTITY_REGISTRY")
+  fi
   if [[ -n ${_iterm2_utils_appearance_fd-} ]]; then
     fd=$_iterm2_utils_appearance_fd
     # A forked shell closes its copy, never its parent's helper.
@@ -43,7 +46,7 @@ function _iterm2_utils_appearance {
     [[ $child == <-> ]] || return 0
     # EOF on error/timeout also releases launch within the supervisor's deadline.
     [[ $phase != launch ]] || read -r discard <&$fd || true
-    # The read end must not be inherited by Codex or nested external shells.
+    # The read end must not be inherited by omp or nested external shells.
     sysopen -r -o cloexec -u clean_fd "/dev/fd/$fd" 2>/dev/null || return 0
     typeset -g +x _iterm2_utils_appearance_owner=$sysparams[pid]
     typeset -g +x _iterm2_utils_appearance_pid=$child
@@ -82,6 +85,25 @@ function _iterm2_utils_appearance_chpwd {
   return 0
 }
 
+function _iterm2_utils_appearance_preexec {
+  emulate -L zsh
+  [[ ${_iterm2_utils_appearance_hook_owner-} == $sysparams[pid] ]] || return 0
+  # Arm observation, not executable-name trust: only actual main identity can write.
+  _iterm2_utils_appearance launch "$(builtin pwd -P)"
+  return 0
+}
+
+function _iterm2_utils_appearance_precmd {
+  local result=$?
+  emulate -L zsh
+  if [[ ${_iterm2_utils_appearance_hook_owner-} == $sysparams[pid] &&
+        ${_iterm2_utils_appearance_launch_id-} == "$sysparams[pid]-"* ]]; then
+    _iterm2_utils_appearance return "$(builtin pwd -P)"
+    unset _iterm2_utils_appearance_launch_id
+  fi
+  return $result
+}
+
 () {
   emulate -L zsh
   typeset -g +x _iterm2_utils_appearance_root=${${(%):-%x}:A:h}
@@ -90,6 +112,8 @@ function _iterm2_utils_appearance_chpwd {
     typeset -g +x _iterm2_utils_appearance_hook_owner=$sysparams[pid]
     autoload -Uz add-zsh-hook
     add-zsh-hook chpwd _iterm2_utils_appearance_chpwd
+    add-zsh-hook preexec _iterm2_utils_appearance_preexec
+    add-zsh-hook precmd _iterm2_utils_appearance_precmd
     _iterm2_utils_appearance_chpwd
   fi
 }
