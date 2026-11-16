@@ -56,6 +56,52 @@ def _runtime(resource, context):
             resource['kind'] == 'symlink' and target == data/'current')
 
 
+def _active_runtime_references(resources, historical, context, runner, observations):
+    """Retained/current consumers must detach before their old code is deleted."""
+    data = context.paths.data.resolve()
+    releases = data/'releases'
+    roots = {releases/Path(resource['target']).relative_to(releases).parts[0]
+             for resource in historical if resource['kind'] == 'file' and _runtime(resource, context)}
+    current = data/'current'
+    paths = set(roots)
+    if (any(current.resolve().is_relative_to(root) for root in roots) or
+            any(resource['kind'] == 'symlink' and _runtime(resource, context) and
+                engine._same(_observe(resource, context, runner), resource['installed'])
+                for resource in historical)):
+        paths.add(current)
+    # Managed shell sources and serialized appearance paths are literal storage
+    # references; account for shell apostrophe quoting and JSON Unicode escapes.
+    patterns = {text.encode() for path in paths for text in (
+        str(path), str(path).replace("'", "'\"'\"'"), json.dumps(str(path), ensure_ascii=True)[1:-1])}
+    def references(value):
+        if isinstance(value, str):
+            return any(pattern in value.encode() for pattern in patterns)
+        if isinstance(value, dict):
+            return any(references(key) or references(item) for key, item in value.items())
+        if isinstance(value, (list, tuple)):
+            return any(references(item) for item in value)
+        return False
+    for resource in resources:
+        value = _observe(resource, context, runner)
+        observations.append(('runtime_consumer', resource, value))
+        if not engine._same(value, resource['installed']):
+            return True  # Changed consumers do not prove detachment.
+        if not value['exists']:
+            continue
+        if resource['kind'] == 'file':
+            if any(Path(resource['target']).is_relative_to(root) for root in roots):
+                return True  # A live owned file also keeps its release siblings.
+            payload = base64.b64decode(value['value'], validate=True)
+            if Path(resource['target']).suffix == '.json':
+                if references(jsonfile.parse(payload)):
+                    return True
+            elif any(pattern in payload for pattern in patterns):
+                return True
+        elif references(value['value']):
+            return True
+    return False
+
+
 def _compatible_transfer(resource, context):
     features = _features(resource)
     if not features or not features <= TRANSFERABLE or _runtime(resource, context):
@@ -200,6 +246,9 @@ def _prepare_scope(context, runner, *, restore_external, bootstrap):
                                 _runtime(other, context) or (external_writer(other) and
                                     engine._same(_observe(other, context, runner), other['installed']))
                                 for other in all_resources)
+                            if detached:
+                                detached = not _active_runtime_references(
+                                    result.resources, all_resources, context, runner, observations)
                             runtime_safe = detached and inventory.get('complete') is True and not inventory['sessions']
                             observations.append(('runtime_inventory', inventory))
                         except (ValueError, OSError, RuntimeError, KeyError):
@@ -208,7 +257,7 @@ def _prepare_scope(context, runner, *, restore_external, bootstrap):
                     if not runtime_safe:
                         pending['resources'].append(copy.deepcopy(original))
                         findings.append(_finding('legacy_runtime_deferred',
-                            'Old immutable runtime is retained for existing shells or incomplete session inventory; retry explicit migration after those shells exit.',
+                            'Old immutable runtime is retained for persisted consumers, existing shells or incomplete inventory; retry explicit migration after references detach and old shells exit.',
                             'pending_ui'))
                         continue
                 if _compatible_transfer(resource, context):

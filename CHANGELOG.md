@@ -34,7 +34,9 @@ GUIDs transfer unchanged; historical feature intent is not credited as installed
 until the actual lifecycle builder commits it. Disabled external writers stay
 disabled by default, outside ordinary uninstall ownership; explicit restoration
 cannot activate a duplicate writer. Existing shells retain their old immutable
-runtime until a safe explicit retry. Bootstrap now copies only to the selected
+runtime until a safe explicit retry. Runtime cleanup also re-observes active and
+transferred consumers, preserving literal shell/appearance references and sibling
+files of active releases even with zero live sessions. Bootstrap now copies only to the selected
 omp profile and recovers its own journal before planning an actual update.
 
 Добавлен отдельный bootstrap-навык `iterm2-projects` для операций со списком

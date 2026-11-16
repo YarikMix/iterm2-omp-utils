@@ -331,3 +331,121 @@ class MigrationTests(MigrationFixture):
         result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
         self.assertEqual(result.receipt.legacy_cleanup[0]['selection']['shortcuts'], ['resume'])
         self.assertEqual(result.receipt.selection.shortcuts, frozenset())
+
+    def test_transferred_neutral_shell_reference_preserves_runtime_on_explicit_retry(self):
+        import os
+        import shlex
+        from iterm2_utils.config import zshrc
+        release = self.context.paths.data/'releases/old-shell'
+        helper = release/'vendor/shell_integration/iterm2_shell_integration.zsh'
+        helper.parent.mkdir(parents=True); helper.write_bytes(b'# owned shell integration\n')
+        current = self.context.paths.data/'current'; current.symlink_to(release)
+        body = ('if [[ ${TERM_PROGRAM-} == iTerm.app && -z ${ITERM_SHELL_INTEGRATION_INSTALLED-} ]]; then\n'
+                '  source '+shlex.quote(str(current/'vendor/shell_integration/iterm2_shell_integration.zsh'))+'\nfi')
+        self.context.paths.zshrc.write_bytes(zshrc.block(b'# foreign shell line\n', 'root', body))
+        resources = [
+            self.resource('file', helper, {'mode':0o600}, self.value(exists=False),
+                self.value(base64.b64encode(helper.read_bytes()).decode()), ('shared:runtime','shell')),
+            self.resource('symlink', current, {}, self.value(exists=False), self.value(str(release)),
+                ('shared:runtime','shell')),
+            self.resource('zsh', self.context.paths.zshrc, {'name':'root','mode':0o600},
+                self.value(exists=False), self.value(body), ('shared:shell','shell')),
+        ]
+        self.save(self.historical(resources, ('shell',)))
+        shell_before = self.context.paths.zshrc.read_bytes()
+        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[], 'complete':True}):
+            first = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+            self.assertTrue(any(resource['kind'] == 'zsh' for resource in first.receipt.resources))
+            second = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(self.context.paths.zshrc.read_bytes(), shell_before)
+        self.assertTrue(current.is_symlink())
+        self.assertEqual(os.readlink(current), str(release))
+        self.assertEqual(helper.read_bytes(), b'# owned shell integration\n')
+        self.assertEqual({resource['target'] for raw in second.receipt.legacy_cleanup for resource in raw['resources']},
+                         {str(helper), str(current)})
+        self.assertTrue(any(finding.code == 'legacy_runtime_deferred' for finding in second.findings))
+        self.assertFalse(any(finding.code == 'migration_cleanup_complete' for finding in second.findings))
+        self.assertEqual(self.runner.calls, [])
+
+    def test_transferred_appearance_current_path_preserves_runtime_on_explicit_retry(self):
+        release = self.context.paths.data/'releases/old-appearance'
+        asset = release/'assets/appearance/icon.svg'
+        asset.parent.mkdir(parents=True); asset.write_bytes(b'<svg/>')
+        current = self.context.paths.data/'current'; current.symlink_to(release)
+        config = self.context.paths.config/'appearance.json'; config.parent.mkdir()
+        asset_path = str(current/'assets/appearance/icon.svg')
+        config.write_text(json.dumps({'asset':asset_path, 'foreign':'keep'}))
+        resources = [
+            self.resource('file', asset, {'mode':0o600}, self.value(exists=False),
+                self.value(base64.b64encode(asset.read_bytes()).decode()), ('shared:runtime','appearance')),
+            self.resource('symlink', current, {}, self.value(exists=False), self.value(str(release)),
+                ('shared:runtime','appearance')),
+            self.json_resource(config, 'asset', before='original-icon', installed=asset_path,
+                owners=('codex:appearance',)),
+        ]
+        self.save(self.historical(resources, ('appearance',)))
+        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[], 'complete':True}):
+            migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+            result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertTrue(current.is_symlink())
+        self.assertEqual(asset.read_bytes(), b'<svg/>')
+        self.assertEqual(json.loads(config.read_bytes()), {'asset':asset_path, 'foreign':'keep'})
+        self.assertTrue(any(resource['target'] == str(config) for resource in result.receipt.resources))
+        self.assertTrue(result.receipt.legacy_cleanup)
+
+    def test_active_appearance_release_path_in_owned_file_preserves_runtime(self):
+        release = self.context.paths.data/'releases/old-appearance'
+        asset = release/'assets/appearance/icon.svg'
+        asset.parent.mkdir(parents=True); asset.write_bytes(b'<svg/>')
+        config = self.context.paths.config/'appearance.json'; config.parent.mkdir()
+        content = json.dumps({'asset':str(asset), 'foreign':'keep'}).encode()
+        config.write_bytes(content)
+        active = self.resource('file', config, {'mode':0o600}, self.value(exists=False),
+            self.value(base64.b64encode(content).decode()), ('appearance',))
+        deferred = self.resource('file', asset, {'mode':0o600}, self.value(exists=False),
+            self.value(base64.b64encode(asset.read_bytes()).decode()), ('shared:runtime','appearance'))
+        receipt = Receipt('2', Selection(frozenset({'appearance'}), frozenset(), 'Default', self.profile),
+            [active], [], [legacy_state.encode(self.historical([deferred]))])
+        self.save(receipt)
+        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[], 'complete':True}):
+            migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+            result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(config.read_bytes(), content)
+        self.assertEqual(asset.read_bytes(), b'<svg/>')
+        self.assertEqual(result.receipt.legacy_cleanup[0]['resources'], [deferred])
+
+    def test_active_runtime_file_keeps_deferred_release_siblings(self):
+        release = self.context.paths.data/'releases/old-runtime'; release.mkdir(parents=True)
+        active_file = release/'appearance.py'; active_file.write_bytes(b'import sibling\n')
+        sibling = release/'sibling.py'; sibling.write_bytes(b'# required by active runtime\n')
+        active = self.resource('file', active_file, {'mode':0o600}, self.value(exists=False),
+            self.value(base64.b64encode(active_file.read_bytes()).decode()), ('shared:runtime','appearance'))
+        deferred = self.resource('file', sibling, {'mode':0o600}, self.value(exists=False),
+            self.value(base64.b64encode(sibling.read_bytes()).decode()), ('shared:runtime','appearance'))
+        self.save(Receipt('2', Selection(frozenset({'appearance'}), frozenset(), 'Default', self.profile),
+            [active], [], [legacy_state.encode(self.historical([deferred]))]))
+        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[], 'complete':True}):
+            migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+            result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(active_file.read_bytes(), b'import sibling\n')
+        self.assertEqual(sibling.read_bytes(), b'# required by active runtime\n')
+        self.assertEqual(result.receipt.legacy_cleanup[0]['resources'], [deferred])
+
+    def test_detached_active_appearance_does_not_pin_unreferenced_old_release(self):
+        old = self.context.paths.data/'releases/old/icon.svg'; old.parent.mkdir(parents=True)
+        old.write_bytes(b'<svg id=\"old\"/>')
+        new = self.context.paths.data/'releases/new/icon.svg'; new.parent.mkdir(parents=True)
+        new.write_bytes(b'<svg id=\"new\"/>')
+        config = self.context.paths.config/'appearance.json'; config.parent.mkdir()
+        config.write_text(json.dumps({'asset':str(new), 'foreign':'keep'}))
+        active = self.json_resource(config, 'asset', before='original-icon', installed=str(new), owners=('appearance',))
+        deferred = self.resource('file', old, {'mode':0o600}, self.value(exists=False),
+            self.value(base64.b64encode(old.read_bytes()).decode()), ('shared:runtime','appearance'))
+        self.save(Receipt('2', Selection(frozenset({'appearance'}), frozenset(), 'Default', self.profile),
+            [active], [], [legacy_state.encode(self.historical([deferred]))]))
+        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[], 'complete':True}):
+            result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertFalse(old.exists())
+        self.assertEqual(new.read_bytes(), b'<svg id=\"new\"/>')
+        self.assertEqual(json.loads(config.read_bytes()), {'asset':str(new), 'foreign':'keep'})
+        self.assertEqual(result.receipt.legacy_cleanup, [])
