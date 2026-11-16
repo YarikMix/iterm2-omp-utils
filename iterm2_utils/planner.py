@@ -51,7 +51,7 @@ def validate(selection: Selection, context: Context) -> list[Finding]:
             dependencies.add('omp')
         if feature in {'status','notifications'} or feature=='shortcuts' and selection.shortcuts-{'ctrl-q'}:
             dependencies.add('bun')
-        if feature in {'appearance','project-launcher'}:
+        if feature in {'appearance','restore','project-launcher'}:
             dependencies.add('python3')
         if feature=='mcp':
             dependencies.add('uvx')
@@ -90,7 +90,8 @@ def plan(context: Context, selection: Selection) -> Plan:
                         shortcuts=selection.shortcuts if 'shortcuts' in available else frozenset())
     builders = (
         (profiles.build,{'clipboard','shortcuts'}),
-        (shell.runtime_payload,{'shell','appearance'}),
+        (shell.runtime_payload,{'shell','appearance','restore'}),
+        (shell.identity_extension,{'appearance','restore'}),
         (shell.build,{'shell','appearance'}),
         (status.build,{'status'}), (notifications.build,{'notifications'}),
         (restore.build,{'restore'}), (mcp.build,{'mcp'}),

@@ -11,7 +11,7 @@ from ..models import ChangeSet, Context, FileEdit, SymlinkEdit, Finding, Selecti
 
 OWNER = 'shared:shell'
 RUNTIME_OWNER = 'shared:runtime'
-DEPENDENTS = frozenset({'shell', 'appearance'})
+DEPENDENTS = frozenset({'shell', 'appearance', 'restore'})
 APPEARANCE_ASSETS = tuple(Path('assets/appearance') / (name + '.' + extension)
                           for name in ('ios', 'android', 'kotlett', 'ios-mail', 'ios-cloud',
                                        'android-mail', 'android-cloud', 'chrome-mail', 'chrome-cloud')
@@ -61,6 +61,8 @@ def runtime_payload(context: Context, selection: Selection) -> ChangeSet:
         if hashlib.sha256(content).hexdigest() != entry['sha256']:
             raise ValueError('Runtime parser provenance changed')
         files[relative] = content
+    if consumers & {'appearance','restore'}:
+        files[Path('terminal_identity.py')] = _source(repo,Path('runtime/terminal_identity.py'))
     if 'appearance' in consumers:
         files.update({Path(target):_source(repo,Path(source)) for source,target in APPEARANCE_PAYLOAD.items()})
         files.update({relative:_source(repo,Path('runtime')/relative) for relative in APPEARANCE_ASSETS})
@@ -84,7 +86,7 @@ def runtime_payload(context: Context, selection: Selection) -> ChangeSet:
 
 def build(context: Context, selection: Selection) -> ChangeSet:
     changes = ChangeSet([], [], [])
-    consumers = selection.features & DEPENDENTS
+    consumers = selection.features & {'shell','appearance'}
     if not consumers:
         return changes
     path = context.paths.zshrc
@@ -118,4 +120,35 @@ def build(context: Context, selection: Selection) -> ChangeSet:
         for feature in sorted(consumers):
             changes.findings.append(Finding(feature,None,'shell_conflict','conflict',
                 'Shell startup contains malformed managed integration; explicit repair is required.'))
+    return changes
+
+
+def identity_extension(context: Context, selection: Selection) -> ChangeSet:
+    """One owned standalone extension per selected native profile."""
+    from .. import engine, state
+    changes = ChangeSet([],[],[])
+    consumers = selection.features & {'restore','appearance'}
+    if not consumers:
+        return changes
+    target = selection.omp_profile.agent_dir/'extensions/iterm2-utils-identity.ts'
+    if target.is_symlink() or target.parent.is_symlink():
+        raise ValueError('Unsafe identity extension path')
+    before = target.read_bytes() if target.exists() else None
+    receipt = state.load(context.paths.data/'receipt.json')
+    resources = [r for r in receipt.resources if r['target'] == str(target.resolve())
+                 and 'shared:identity' in r['owners']] if receipt else []
+    if before is not None and (not resources or not all(
+            engine._same(engine._read(r,None,context),r['installed']) for r in resources)):
+        raise ValueError('Identity extension name is owned by another writer')
+    install = {'registry':str(context.paths.data/'identity'),
+               'profile':{'name':selection.omp_profile.name,'agent_dir':str(selection.omp_profile.agent_dir)},
+               'python':str(context.executables['python3']),
+               'helper':str(context.paths.data/'current/terminal_identity.py')}
+    source = _source(context.paths.repo,Path('runtime/omp_identity.ts'))
+    marker = b"function installation(): Installation { throw new Error('Install the profile-scoped identity extension first'); }"
+    if source.count(marker) != 1:
+        raise ValueError('Identity extension installation contract changed')
+    content = source.replace(marker,b'function installation(): Installation { return '+json.dumps(install).encode()+b'; }')
+    changes.edits.append(FileEdit(target,before,content,0o600,'shared:identity'))
+    changes.consumers['shared:identity'] = frozenset(consumers)
     return changes

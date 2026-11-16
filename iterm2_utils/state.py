@@ -22,7 +22,7 @@ CURRENT_FEATURES = frozenset({'clipboard', 'status', 'notifications', 'restore',
                               'appearance', 'project-launcher', 'bootstrap-skill'})
 CURRENT_SHORTCUTS = frozenset({'ctrl-v-ru', 'alt-enter', 'ctrl-q', 'resume'})
 SHARED_OWNERS = frozenset({'shared:runtime', 'shared:shell', 'shared:hooks', 'shared:agent-profiles',
-                           'shared:project-launcher'})
+                           'shared:project-launcher', 'shared:identity'})
 
 
 def private_dir(path):

@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Added exact omp saved-header/continuation validation and main-TUI-only identity.
+Profile-scoped owned standalone extensions publish private generation records
+and own-TTY iTerm user variables; PID birth, scoped terminal observations and
+full session/profile identity must agree. Stale inherited terminal addresses,
+forks, replaced headers and orphan generations are not open-dialog evidence.
+Restore and appearance share transactional identity installation, without
+status/notification callbacks or model/endpoint/approval changes.
+See docs/omp-identity.md; execution/live acceptance remains queued to Task10.
+
 Separated current omp receipt v2 from strict historical v1 integration data.
 Added pure, shared omp profile resolution matching the existing bootstrap rules.
 Generic recovery preserves historical inverses and conflicts without old-agent
