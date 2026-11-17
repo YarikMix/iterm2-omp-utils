@@ -2,10 +2,10 @@
 
 ## Scope
 
-Task10 offline execution only. No personal settings/auth, actual iTerm API,
-GUI, installation/migration or user test tab was read, changed or created.
-Fixtures do not establish native/UI acceptance. Earlier authoring-stage NOT RUN
-statements remain historical; this matrix records the first integrated execution.
+The first matrix records Task10's initial isolated execution; no personal
+settings/auth/API/GUI were accessed during that tranche. Later sections distinguish
+the reviewed source correction from separately authorized personal preview and
+partial migration. Fixtures never establish native/UI acceptance.
 
 Every offline process began with an allowlisted private HOME, configuration,
 agent, XDG, ZDOTDIR, temporary/package state and terminal environment before
@@ -75,34 +75,67 @@ launch SKILL was refreshed (read-text SHA256
 references were unchanged. No actor executed CLI, SDK or UI operations. Decision
 replay does not establish runtime timing, statistical reliability or live acceptance.
 
-## Pending selected preview and live acceptance
+## Final source correction and scoped review
 
-No overall Task10 completion or installed/native feature claim is made.
-Before reading any real selected settings/inventory for preview, obtain scoped
-read-only authorization and the material choices: selected features, omp storage
-profile, existing iTerm parent/shell profiles, shortcut subset/resume chord,
-notification error opt-in, appearance/project configuration if selected, and
-whether any explicitly identified external integration may be restored.
-Bootstrap alone grants none of these settings permissions.
+Native whole-branch workers completed all five finder dimensions and twenty
+skeptic nodes. Earlier deadline-limited output remains historical, not silently
+credited with missing coverage. Confirmed issues from both execution generations
+were frozen together before the single omnibus source correction.
 
-Show the actual selected migration/install preview (including owned addresses,
-conflicts, retained old runtimes/profiles and external-reactivation choice), then
-obtain separate apply authorization. Keep foreign/conflicting values and live
-references; old running shells may continue using retained old runtime and must
-not be restarted automatically.
+Correction commit: `245b2eaedc2a3429bae34a07b0694f94264c2f22`.
+Its one scoped re-review returned all eighteen source/test obligations addressed
+and no fix-introduced breakage. Source-boundary questions are not live UI proof.
 
-Live prerequisites also include an existing chosen Python/official SDK and
-explicit iTerm API/trust permission, an unambiguous allowed window, exact selected
-profiles/cwd/history and bounded owned test-tab budget including project buttons.
-Any missing SDK installation or trust action remains a separate human decision.
-Clipboard tests require explicit temporary preservation/replacement/restoration
-permission without printing contents; otherwise leave them unverified.
+| Covering evidence after that correction | Observed result | Limit |
+| --- | --- | --- |
+| Affected Python tranche | 332 cases executed; initial 4 failures/3 errors across four fixture methods, all repaired methods subsequently pass | Distributed affected-case evidence, not one final all-green tranche; Linux not executed |
+| Bun identity/config | Existing 16 pass; new installed default-entrypoint/private-PTY case passes after consumer calibration | 17 cases covered; no actual iTerm receiver/UI proof |
+| Source/export/skill validators | All exit 0 | Structural/provenance only |
 
-Pending real surfaces: ordinary shell; empty fresh omp; named-profile handoff
+The default-entrypoint test exercises actual private own-PTY OSC publication,
+device mismatch refusal and failed-publication cleanup. No personal terminal is
+used. No permanent identity/process source change was needed for that proof.
+
+## Authorized personal cutover — partial, not accepted
+
+The user separately authorized scoped read-only preview and then the displayed
+migration/three-skill update. Auth files, personal dialog content and screens were
+not read. Diagnostic versions observed: omp18.20.3, Bun1.4.4, iTerm2 3.7.7,
+selected Python3.13.7 with official SDK2.23; no exact agent-version gate.
+
+The migration preview had no ownership conflicts. One apply converted the four
+receipt scopes and performed exact owned cleanup while preserving appearance
+rules, disabled external handlers and old runtime data. It returned exit2:
+native status/notifications/appearance installation was blocked by the retained
+legacy stable runtime symlink. The resulting feature receipt has no installed
+native features; those settings were not written. Unknown old callers must not
+be broken by manually repointing or deleting the retained runtime.
+
+All three omp-only skill updates completed. Mixed historical launch ownership
+initially left an empty directory that the bootstrap correctly refused as
+foreign. Only the two verified-empty package directories were removed with
+atomic nonrecursive `rmdir`, then the normal bootstrap succeeded. All nine
+installed bundle files match the reviewed source byte-for-byte; extra/foreign
+files were not overwritten or adopted.
+
+The live blockers require an explicitly authorized additional corrective stage,
+not another implicit final-review fix wave. No test tabs, model turns or clipboard
+operations have been authorized/performed. Existing sessions were not restarted
+or closed. Private full evidence remains in the ignored plan workspace.
+
+## Remaining acceptance and release gates
+
+The full Task10/native cutover is **not accepted**. After an approved correction,
+show the actual selected preview again before applying any changed target.
+Create only explicitly authorized bounded own test tabs and preserve all IDs.
+Clipboard checks require separate temporary preserve/replace/restore permission.
+
+Pending real surfaces: ordinary shell; empty fresh omp; selected-profile handoff
 with actual new ID and fresh ack under autoResume; exact resume/continuation and
 no duplicate-open; native idle/working/blocked/done/error; exactly one notification
 with receiver/macOS behavior; EN/RU Cmd+C/paste/Alt+Enter and unchanged Ctrl+Q;
-cd/reset/APS/light-dark/appearance and project shell buttons. Preserve every
-actual created ID and clean up only fixture-owned resources. No personal tabs
-were used during offline execution. Controller retains scoped authorization,
-fresh task review and the native whole-branch review.
+cd/reset/APS/light-dark/appearance and project shell buttons.
+
+The earlier archive predates the source correction. Rebuild and verify extraction
+from final accepted source before treating an artifact as the current release.
+No merge, push, publication or native readiness claim has occurred.

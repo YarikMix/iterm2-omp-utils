@@ -203,11 +203,11 @@ Runtime лежит в versioned data/releases со стабильным current;
 
 ## Проверка исходников и поставка
 
-Все новые execution/RED/GREEN, skill actor scenarios и live acceptance этой
-omp-only миграции **NOT RUN** до итогового Task10. Старые validation документы
-сохраняются как история, не доказательство нового поведения. Автотесты используют
-TemporaryDirectory HOME, fake process/native adapters; не реальные auth/settings/GUI.
-Структурная проверка не является agent behavior evaluation.
+Task10 выполнил изолированные Python/Bun/zsh, CLI, extraction и actor-проверки;
+фактические результаты и ограничения — в [acceptance matrix](docs/superpowers/validation/2026-11-16-omp-only/acceptance.md).
+Это не единый повторный green full-suite и не доказательство GUI. Разрешённая
+живая миграция пока частична: старый runtime сохранён, native feature cutover
+заблокирован; три omp-only bundle установлены. Общая приёмка ещё не завершена.
 
 ```sh
 python3 -m unittest discover -s tests -t . -v
@@ -223,9 +223,10 @@ Source cutover removes the old active runtime/vendor/tests while retaining stric
 historical decode/recovery and receipt-authorized cleanup. The explicit archive
 allowlist includes all three bundles, native helpers, YAML distributable and
 licenses/artwork. No private SDD, author workspace, auth/settings or old binaries
-belong in it. Isolated extraction/bootstrap/shell/installed-helper regressions
-are authored but **NOT RUN**; source inventory does not prove standalone operation.
-Installed helper layout is `current/runtime/omp_config.ts` → `current/vendor/yaml/`.
-Native status/banner/keyboard/rendering acceptance also remains unverified.
+belong in it. Isolated extraction/bootstrap/installed-helper evidence is recorded
+in the acceptance matrix; the earlier archive predates the final source fixes and
+is not a current-source release. Installed helper layout is
+`current/runtime/omp_config.ts` → `current/vendor/yaml/`.
+Native status/banner/keyboard/rendering acceptance remains unverified.
 Лицензии: [MIT](LICENSE) и [условия внешних компонентов](THIRD_PARTY_NOTICES.md);
 происхождение зависимостей: [sources.lock.json](sources.lock.json).
