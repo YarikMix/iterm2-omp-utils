@@ -116,7 +116,10 @@ def install(context, selection, runner, *, dry_run=False):
             if consumers and (owner not in emitted or not consumers <= prepared.changes.consumers.get(owner, frozenset())):
                 prepared.changes.findings.append(Finding(feature, 'omp', 'recomposition_unavailable', 'conflict',
                     'A shared recomposition omitted a committed consumer; previous ownership is preserved.'))
-        prepared.changes.ui = [step for step in prepared.changes.ui if step.feature == feature]
+        unchanged = all(edit.before == edit.after for edit in prepared.changes.edits)
+        prepared.changes.ui = [step for step in prepared.changes.ui if step.feature == feature
+            and not (unchanged and feature in working.selection.features
+                     and step not in working.pending_ui)]
         for step in working.pending_ui:
             if step not in prepared.changes.ui:
                 prepared.changes.ui.append(step)

@@ -2,7 +2,7 @@
 
 import argparse
 import asyncio
-from contextlib import AsyncExitStack, asynccontextmanager, redirect_stderr, redirect_stdout
+from contextlib import AsyncExitStack, asynccontextmanager, closing, redirect_stderr, redirect_stdout
 import json
 import os
 from pathlib import Path
@@ -583,7 +583,7 @@ def _supervise(request, environment):
                 os.write(external_ready, b'ready\n')
             # Watch the actual shell process and worker pipe, without idle polling.
             if ready:
-                with select.kqueue() as lifetime:
+                with closing(select.kqueue()) as lifetime:
                     lifetime.control([
                         select.kevent(request['shell_pid'], filter=select.KQ_FILTER_PROC,
                                       flags=select.KQ_EV_ADD | select.KQ_EV_ONESHOT, fflags=select.KQ_NOTE_EXIT),

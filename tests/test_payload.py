@@ -25,6 +25,10 @@ class Connection:
     @property
     def websocket(self): return self
     async def close(self): pass
+class Transaction:
+    def __init__(self, connection): pass
+    async def __aenter__(self): return self
+    async def __aexit__(self, *args): pass
 class Session:
     def __init__(self, terminal): self.terminal = terminal
     async def async_get_variable(self, name):
@@ -38,7 +42,15 @@ class Session:
             out.write(json.dumps([self.terminal, kind, value])+'\n')
     async def async_set_variable(self, name, value): self.mutate('snapshot', value)
     async def async_set_profile_properties(self, profile): self.mutate('profile', profile.values)
+    async def async_get_profile(self):
+        from types import SimpleNamespace
+        properties = {'Tab Color': None, 'Tab Color (Light)': None, 'Tab Color (Dark)': None,
+                      'Use Tab Color': True, 'Use Tab Color (Light)': True, 'Use Tab Color (Dark)': True,
+                      'Icon': 2, 'Custom Icon Path': ''}
+        return SimpleNamespace(local_write_only_copy=SimpleNamespace(
+            values={key: json.dumps(value) for key, value in properties.items()}))
 class App:
+    terminal_windows = []
     def get_session_by_id(self, terminal):
         return Session(terminal) if terminal in read() else None
 async def async_get_app(connection): return App()
@@ -124,7 +136,7 @@ class PayloadTests(test_shell.ShellFixture):
         result = engine.apply(Plan(self.selection(),changes,'payload'),self.context,self.runner)
         self.assertSuccess(result)
         self.assertEqual(package.path.read_bytes(),source.read_bytes())
-        self.assertEqual(next(r['kind'] for r in result.receipt.resources if r['target']==str(package.path)),'file')
+        self.assertEqual(next(r['kind'] for r in result.receipt.resources if r['target']==str(package.path.resolve())),'file')
         repeated = runtime_payload(self.context,self.selection())
         self.assertEqual(next(e.after for e in repeated.edits if isinstance(e,SymlinkEdit)),
                          next(e.after for e in changes.edits if isinstance(e,SymlinkEdit)))
@@ -294,12 +306,16 @@ assert (current/'LICENSE').is_file() and (current/'THIRD_PARTY_NOTICES.md').is_f
                                 preexec_fn=own_terminal, text=True, timeout=7)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
         updated = json.loads(state.read_text())[terminal]
-        self.assertIsNone(updated['snapshot'])
+        baseline = json.loads(updated['snapshot'])
+        self.assertIsNone(baseline['launch_id'])
+        self.assertIsNone(baseline['properties'])
+        self.assertEqual(baseline['shell_baseline']['owner'][0], terminal)
+        self.assertEqual(baseline['shell_baseline']['cwd'], str(project.resolve()))
         self.assertEqual(updated['profile']['tab_color'], [18, 52, 86])
         self.assertEqual(updated['profile']['custom_icon_path'], str(current.resolve()/'assets/appearance/ios.png'))
         records = [json.loads(line) for line in mutations.read_text().splitlines()]
         self.assertEqual([(sid, kind) for sid, kind, _ in records],
-                         [(terminal, 'snapshot'), (terminal, 'profile')])
+                         [(terminal, 'snapshot'), (terminal, 'profile'), (terminal, 'snapshot')])
 
     def test_installed_chpwd_hook_survives_source_removal(self):
         from tests.test_lifecycle import LifecycleFixture
@@ -360,6 +376,11 @@ await_calls 3 || exit 15
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         self.assertEqual(result.stdout+result.stderr, '')
         records = [json.loads(line) for line in calls.read_text().splitlines()]
+        shell_pids = {row[1]['--shell-pid'] for row in records}
+        self.assertEqual(len(shell_pids), 1)
+        shell_pid = shell_pids.pop()
+        self.assertTrue(shell_pid.isdigit())
         self.assertEqual(records, [[str(current.resolve()/'appearance.py'),
-                                   {'--config': str(config), '--cwd': str(cwd.resolve()), '--phase': 'shell', '--tty': tty}]
+                                   {'--config': str(config), '--cwd': str(cwd.resolve()), '--phase': 'shell',
+                                    '--tty': tty, '--shell-pid': shell_pid}]
                                   for cwd in (home, project, home)])

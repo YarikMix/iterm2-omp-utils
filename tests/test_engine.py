@@ -393,11 +393,14 @@ class NativeResourceTests(unittest.TestCase):
     def test_current_apply_preserves_deferred_historical_inverse(self):
         from iterm2_utils import state
         from tests.test_legacy_state import legacy_fixture
-        receipt = Receipt('2',self.selection,[],[],[legacy_fixture()])
+        historical = legacy_fixture()
+        historical['selection']['features'] = ['mcp']
+        historical['resources'][0]['owners'] = ['mcp']
+        receipt = Receipt('2',self.selection,[],[],[historical])
         state.save(self.context.paths.data/'receipt.json',receipt)
         result = engine.apply(self.plan([FileEdit(self.root/'next',None,b'new',0o600,'clipboard')]),self.context,None)
         self.assertFalse(result.findings)
-        self.assertEqual(result.receipt.legacy_cleanup,[legacy_fixture()])
+        self.assertEqual(result.receipt.legacy_cleanup,[historical])
 
     def test_native_resources_compile_as_group_and_restore_exact_types(self):
         before = {'Show Status Bar': False, 'Status Bar Layout': {'components': []}}

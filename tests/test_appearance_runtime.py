@@ -948,6 +948,11 @@ class OmpIdentityTests(unittest.IsolatedAsyncioTestCase):
             sdk = Mock(async_get_app=AsyncMock(return_value=app))
             sdk.Connection.async_create = AsyncMock(return_value=connection)
             sdk.Transaction.return_value = AsyncMock()
+            class Monitor:
+                async def __aenter__(self): return self
+                async def __aexit__(self, *args): pass
+                async def async_get(self): await asyncio.Future()
+            sdk.VariableMonitor.side_effect = lambda *args: Monitor()
             request = dict(terminal=UUID, device=DEVICE, phase='launch', registry=str(registry),
                            launch_id='42-1', color='#65A85A', icon='/fixture/a.png')
             for birth, expected in ((record['process_start'], 'applied'),
@@ -1024,6 +1029,7 @@ try:
         os.tcsetpgrp(0,os.getpgrp())
         assert detached_state()=='departed'
         api.current={'profile-reset':True}
+        api.events=asyncio.Queue()  # Each actual invocation owns a fresh SDK/event loop.
         assert asyncio.run(appearance._operate({**request,'phase':'return'}))=='applied'
     print(json.dumps(dict(restored=api.current==original,live=terminal_identity.process_start(child)==birth,
                           binding=read_bindings(registry)[0].session_id,record=path.exists(),

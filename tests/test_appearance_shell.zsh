@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Fake executables at the boundary; the dispatcher and zsh jobs are real.
 exec python3 - "$0" "$@" <<'PY'
-import errno, fcntl, json, os, pathlib, pty, select, shutil, subprocess, sys, tempfile, termios, time, unittest
+import errno, fcntl, json, os, pathlib, pty, select, shutil, subprocess, sys, tempfile, termios, threading, time, unittest
 REPO = pathlib.Path(sys.argv[1]).resolve().parents[1]
 HELPER = r'''import json, os, pathlib, select, signal, sys, time
 root = pathlib.Path(__file__).parent
@@ -56,9 +56,24 @@ sys.exit(42)
 '''
 class ShellProcess(subprocess.Popen):
     def communicate(self, input=None, timeout=None):
-        if input is not None:
-            os.write(self.terminal_master, input.encode())
-        return super().communicate(timeout=timeout)
+        # A terminal consumer must drain echo/prompt bytes: Darwin can wait for
+        # pending tty output even after the shell closes its captured pipes.
+        stopped = threading.Event()
+        def drain_terminal():
+            while not stopped.is_set():
+                if select.select([self.terminal_master], [], [], .02)[0]:
+                    try:
+                        if not os.read(self.terminal_master, 4096): break
+                    except OSError: break
+        reader = threading.Thread(target=drain_terminal)
+        reader.start()
+        try:
+            if input is not None:
+                os.write(self.terminal_master, input.encode())
+            return super().communicate(timeout=timeout)
+        finally:
+            stopped.set()
+            reader.join()
 
 class AppearanceShell(unittest.TestCase):
     def setUp(self):
@@ -225,7 +240,7 @@ async def async_get_app(connection): return App()
                 # Return stays asynchronous; terminate it explicitly in this fixture.
     def test_services_and_help_keep_exact_argv_without_executable_trust(self):
         commands=['--help','--version','--mode json','--mode rpc','--print task']
-        p=self.run_shell(self.wait_helper()+'; '.join('omp '+s for s in commands)+'; true')
+        p=self.run_shell(self.wait_helper()+'; '.join('omp '+s+'; '+self.wait_helper() for s in commands)+'true')
         self.assertEqual(p.returncode,0,p.stderr)
         self.assertEqual([r['phase'] for r in self.rows() if r['event']=='start'],['shell']+['launch','return']*len(commands))
         self.assertEqual([r['args'] for r in self.rows('calls')],[s.split() for s in commands])
@@ -360,7 +375,8 @@ print parent:$sysparams[pid]
             self.assertEqual(os.waitstatus_to_exitcode(status),0,output)
             self.assertEqual(output.decode().replace('\r\n','\n'),'on:'+('on' if monitored else 'off')+':on\n')
     def test_real_interactive_hooks_preserve_argv_and_native_exit(self):
-        p=self.start_shell(['/bin/zsh','-dfi'])
+        # stdout/stderr are captured pipes, so use prompt hooks without the tty line editor.
+        p=self.start_shell(['/bin/zsh','-dfi','-o','nozle'],env=dict(self.env,PS1='',RPS1=''))
         try:
             script='source "$TEST_ROOT/appearance.zsh"\ncommand omp "literal argument"\nprint -r -- "native-result:$?"\nexit\n'
             out,err=p.communicate(script,timeout=7)
@@ -390,7 +406,7 @@ class Connection:
             dict(root=str(self.project),color='#65A85A',icon=str(self.root/'icon.png'))]}))
         (self.root/'icon.png').write_bytes(b'fixture')
         env=dict(self.env,ITERM2_UTILS_APPEARANCE_CONFIG='',PYTHONPATH=str(self.root))
-        p=self.start_shell(['/bin/zsh','-dfi'],env=env)
+        p=self.start_shell(['/bin/zsh','-dfi','-o','nozle'],env=dict(env,PS1='',RPS1=''))
         try:
             setup='source "$TEST_ROOT/appearance.zsh"\nITERM2_UTILS_APPEARANCE_CONFIG="$TEST_ROOT/installed rules.json"\n'
             setup+='function ordinary { until [[ -e "$TEST_ROOT/sdk-entered-$_iterm2_utils_appearance_pid.json" ]]; do sleep .01; done; print ordinary-proceeded; read fixture_release; }\nordinary\n'

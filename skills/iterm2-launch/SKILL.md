@@ -23,9 +23,12 @@ without resolving virtualenv symlinks to a different interpreter. Check import
 of official `iterm2` and `launch-omp --help` with that same Python. Preserve it
 across tool calls; if invocation cwd/PATH changes, recheck there, not in another
 environment. Missing SDK/API blocks launch; do not automatically install it.
-Each external operation is bounded at 10 seconds. Use the host's actual
-permission mechanism; do not demand unsupported sandbox tool metadata. A denial
-remains denied: no alternate API/automation path or permission changes.
+Each preflight/inventory operation is bounded at 10 seconds, not the whole launch
+CLI invocation. Creation plus command verification share 30 seconds; handoff
+receipt has a separate 120-second bound after verified command launch.
+Use the host's actual permission mechanism; do not demand unsupported sandbox
+tool metadata. A denial remains denied: no alternate API/automation path or
+permission changes.
 
 The CLI uses complete typed inventories and independent SDK evidence. Target
 priority is explicit window, consistent unique parent terminal mapping, then the
@@ -61,6 +64,15 @@ value as one argv element (or correctly shell-quote it):
 "$launch_python" -m iterm2_utils launch-omp --mode handoff --window WINDOW_ID --profile iterm2-utils:omp --cwd ABS_DIR --handoff ABS_FILE --omp-profile work --json
 "$launch_python" -m iterm2_utils launch-omp --mode resume --window WINDOW_ID --profile iterm2-utils:omp --cwd ABS_DIR --resume-file ABS_JSONL --resume-id UUID --omp-profile work --json
 ```
+Run that single CLI invocation as one supervised asynchronous job when the host's
+foreground wait is shorter than its phases. Observe the same job to its structured
+result: sequential preflight/inventory time comes before the shared 30-second
+create/verify budget and, for handoff, up to another 120 seconds for receipt.
+A 10-second tool wait is not a kill deadline; neither 10 nor 30 seconds is a valid
+whole-invocation timeout for handoff. If the host cannot preserve/observe that job
+for these phases, report the execution limit before creation. Never start a second
+invocation because a tool wait ended.
+
 
 The SDK supplies the full command at creation, never typing into a terminal.
 New/handoff use a private final `--config` overlay with `autoResume:false`, leaving

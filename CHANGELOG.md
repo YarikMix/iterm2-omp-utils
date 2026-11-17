@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+Task10 offline execution (not native/UI acceptance): initial 514-test Python
+discovery exposed integration/fixture defects; affected 252-test suites and
+12-test extracted-release suite now pass. Bun 16 tests and controlled zsh 25
+tests pass; skill/source/export validators pass. One case-sensitive filesystem
+test was skipped on the case-insensitive fixture volume.
+Fixed Darwin kqueue lifetime cleanup, retained unresolved uninstall selection
+and prior UI steps, kept reconciled checks cleared on unchanged updates, and
+reported shared-profile failures to every affected consumer. Updated stale
+native/PTY fixtures without dropping their safety assertions.
+Actual private kernel/foreground/stopped-live/shell-return and temporary-config
+CLI/export proofs remain distinct from real iTerm/omp acceptance. Launch skill
+timeouts now distinguish per-preflight 10s, shared create/verify 30s and separate
+handoff receipt 120s; observe one asynchronous job rather than retrying it.
+See `docs/superpowers/validation/2026-11-16-omp-only/acceptance.md` for limits.
+
 Removed obsolete active Codex/Claude runtime, restore tree and status vendor.
 Only strict historical data decoding, transaction recovery and receipt-authorized
 cleanup remain; no compatibility commands, registration transport or active

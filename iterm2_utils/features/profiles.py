@@ -55,7 +55,8 @@ def build(context: Context, selection: Selection) -> ChangeSet:
         return changes
     feature = 'shortcuts' if 'shortcuts' in consumers else 'clipboard'
     def fail(code, message):
-        changes.findings.append(Finding(feature, 'omp', code, 'conflict', message))
+        changes.findings.extend(Finding(consumer, 'omp', code, 'conflict', message)
+                                for consumer in sorted(consumers))
         return changes
     parent = context.profiles.get(selection.parent_profile)
     if not isinstance(parent, dict):

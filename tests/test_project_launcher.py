@@ -215,6 +215,7 @@ class ProjectLauncherTests(LifecycleFixture):
         result = self.install('project-launcher')
         self.assertTrue(any(f.state in lifecycle.BLOCKING for f in result.findings))
         self.assertFalse(self.dynamic.exists())
+        self.context.project_launcher_config = None
         self.assertSuccess(self.install('shell'))
 
     def test_repeat_update_without_source_stable_guid_and_dryrun(self):
@@ -380,7 +381,7 @@ class ProjectLauncherTests(LifecycleFixture):
             self.resume(command,dry_run=True)
         selection=self.selection('project-launcher')
         plan(prepare(self.context,selection,self.runner),selection)
-        lifecycle.doctor(self.context,replace(lifecycle._empty(),selection=selection),self.runner)
+        lifecycle.doctor(self.context,replace(lifecycle._empty(self.context),selection=selection),self.runner)
         self.assertEqual(self.snapshot(),before);self.assertEqual(self.native,native)
 
     def test_public_recovery_respects_transaction_lock(self):

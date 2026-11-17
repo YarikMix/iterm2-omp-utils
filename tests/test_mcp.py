@@ -204,8 +204,10 @@ for line in sys.stdin:
                 return {'tools': sorted(mcp.TOOLS), 'sessions': True}
         runner = Probe()
         output = io.StringIO()
-        with patch.object(cli, 'resolve_paths', return_value=self.context.paths), patch.object(cli, 'Runner', return_value=runner), patch.object(cli, 'discover', side_effect=AssertionError('agent discovery')), contextlib.redirect_stdout(output):
+        with patch.object(cli, 'resolve_paths', return_value=self.context.paths), patch.object(cli, 'Runner', return_value=runner), patch.object(cli, 'discover', return_value=self.context) as discovery, contextlib.redirect_stdout(output):
             cli.main(['doctor', '--live', '--json'])
+        discovery.assert_called_once_with(self.context.paths, runner, features=self.selection.features,
+                                          omp_profile=self.profile)
         self.assertEqual(runner.calls, 1)
         self.assertTrue(any(f['code'] == 'mcp_connection' and f['state'] == 'ready' for f in json.loads(output.getvalue())['findings']))
 

@@ -13,6 +13,7 @@ import stat
 import tempfile
 import uuid
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from . import state, legacy_state
 from .config import jsonfile, tomlfile, zshrc, preferences, omp, iterm, legacy_mcp
@@ -575,7 +576,19 @@ def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozens
                     else:
                         changes.append(dict(resource,before=resource['installed'],installed=resource['before']))
                 resources = retained
-            receipt = Receipt(state.VERSION,plan.selection,resources,plan.changes.ui,copy.deepcopy(previous.legacy_cleanup))
+            selection = plan.selection
+            if remove_owners:
+                unresolved = {owner.removeprefix('omp:') for resource in resources
+                              for owner in resource['owners'] if owner in remove_owners}
+                selection = replace(selection, features=selection.features | unresolved,
+                    shortcuts=previous.selection.shortcuts if 'shortcuts' in unresolved else selection.shortcuts,
+                    resume_key=previous.selection.resume_key if 'shortcuts' in unresolved else selection.resume_key,
+                    notify_errors=previous.selection.notify_errors if 'notifications' in unresolved else selection.notify_errors)
+            pending_ui = list(plan.changes.ui)
+            for step in previous.pending_ui:
+                if step.feature in selection.features and step not in pending_ui:
+                    pending_ui.append(step)
+            receipt = Receipt(state.VERSION,selection,resources,pending_ui,copy.deepcopy(previous.legacy_cleanup))
             ok,failed = _transaction(changes,receipt,context,runner)
             return Outcome(receipt if ok else previous,findings+failed)
     except Exception:

@@ -359,7 +359,7 @@ class preferences:
     @staticmethod
     async def async_get_preference(connection,key): return 1
 ''')
-            paths=Paths(root,root/'zshrc',root/'codex',root/'claude.json',root/'config',root/'cache',root/'data',root/'profiles',Path(__file__).resolve().parents[1])
+            paths=Paths(root,root/'zshrc',root/'config',root/'cache',root/'data',root/'profiles',Path(__file__).resolve().parents[1])
             context=Context(paths,{'python3':Path(sys.executable)},{'python3':'3.11.9'},frozenset(),{}, {})
             proof={'guid':'parent-guid','bar':{'Show Status Bar':True,'Status Bar Layout':{'components':[{'parameter':'removed-guid'}]}}}
             with patch.dict(os.environ,PYTHONPATH=str(root)):
