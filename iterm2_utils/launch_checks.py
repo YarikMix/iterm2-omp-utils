@@ -35,6 +35,7 @@ class LaunchIdentity:
     prefixes: tuple[tuple[str, ...], ...]
     version: str
     wrapper: str = ''
+    interpreter: Path | None = None
 
 
 @dataclass(frozen=True)
@@ -44,6 +45,7 @@ class LaunchInspection:
     profile_guid: str
     window_id: str
     identity: LaunchIdentity | None
+    window_basis: tuple[str,str] = ('explicit','')
 
 
 def validate_request(request):
@@ -97,6 +99,10 @@ def wrapper_arguments(body):
     index=0
     while index<len(args):
         key,sep,value=args[index].partition('=')
+        if key=='--no-daemon' and not sep:
+            if args.count('--no-daemon')>2:raise ValueError('launch_wrapper_unverified')
+            index+=1
+            continue
         if key not in allowed:
             raise ValueError('launch_wrapper_unverified')
         if not sep:
@@ -108,19 +114,21 @@ def wrapper_arguments(body):
     return args
 
 
-def executable_prefixes(executable):
+def executable_prefixes(executable,environment):
     real=executable.resolve(strict=True)
     if not real.is_file() or not os.access(real,os.X_OK):
         raise ValueError('launch_executable_unavailable')
     with real.open('rb') as source:
-        header=source.readline(256).decode('utf8')
+        header=source.readline(256)
     prefixes=[(str(executable),),(str(real),)]
-    if header.strip() == '#!/usr/bin/env bun':
-        bun=shutil.which('bun')
+    if header.strip() == b'#!/usr/bin/env bun':
+        bun=shutil.which('bun',path=environment.get('PATH',os.defpath))
         if not bun or not Path(bun).is_absolute():raise ValueError('launch_bun_unavailable')
-        # This is the selected script's actual shebang, not permission to trust arbitrary Bun jobs.
-        prefixes.extend((str(Path(bun).resolve()),str(script)) for script in (executable,real))
-    elif header.startswith('#!'):
+        # The verified login shell selects the interpreter, not the caller's PATH.
+        interpreter=Path(bun).resolve(strict=True)
+        if not interpreter.is_file() or not os.access(interpreter,os.X_OK):raise ValueError('launch_bun_unavailable')
+        prefixes.extend((str(interpreter),str(script)) for script in (executable,real))
+    elif header.startswith(b'#!'):
         raise ValueError('launch_interpreter_unverified')
     return tuple(dict.fromkeys(prefixes))
 
@@ -130,7 +138,7 @@ def _shell_identity(zsh,runner,env,cwd,profile_name):
           'sys.path.insert(0,'+repr(str(Path(__file__).resolve().parent.parent))+'); '
           'from iterm2_utils.omp_profile import resolve_omp_profile; '
           'raw=dict(zip(("executable","alias","function"),sys.argv[1:4])); '
-          'raw["environment"]={k:os.environ[k] for k in ("HOME","PI_CONFIG_DIR","PI_CODING_AGENT_DIR") if k in os.environ}; '
+          'raw["environment"]=dict(os.environ); '
           'profile=resolve_omp_profile(Path.home(),dict(os.environ),sys.argv[4]); '
           'raw["profile"]={"name":profile.name,"agent_dir":str(profile.agent_dir)}; print(json.dumps(raw))')
     script=(shlex.join([sys.executable,'-c',code])+
@@ -155,6 +163,8 @@ def inspect_launch(paths: Paths, request: LaunchRequest, runner: Runner) -> tupl
         it2=app/'Contents/Resources/utilities/it2'
         terminal=Terminal(it2,runner)
         window=terminal.select_window(request.window_id,dict(os.environ))
+        parents=[value.rsplit(':',1)[-1] for key in ('ITERM_SESSION_ID','TERM_SESSION_ID') if (value:=os.environ.get(key))]
+        basis=('explicit','') if request.window_id else ('parent',parents[0]) if parents else ('sole','')
         profiles=terminal.profiles()
         matches=[p for p in profiles if p.get('name') == request.profile]
         if len(matches)!=1 or not isinstance(matches[0].get('guid'),str) or not matches[0]['guid']:
@@ -164,30 +174,32 @@ def inspect_launch(paths: Paths, request: LaunchRequest, runner: Runner) -> tupl
         profile=terminal.profile(request.profile)
         if profile.get('name')!=request.profile or profile.get('guid')!=guid or profile.get('command') not in (None,''):
             raise ValueError('launch_profile_startup_command')
-        if request.mode=='shell':return LaunchInspection(it2,Path(zsh),guid,window,None),[]
+        if request.mode=='shell':return LaunchInspection(it2,Path(zsh),guid,window,None,basis),[]
         env=dict(os.environ)
         for key in ('ITERM_SESSION_ID','TERM_SESSION_ID'):env.pop(key,None)
         explicit=request.omp_profile.name or 'default'
         executable,args,wrapper,effective_env,selected=_shell_identity(Path(zsh),runner,env,request.cwd,explicit)
         if not executable.is_absolute():raise ValueError('launch_executable_unavailable')
-        prefixes=executable_prefixes(executable)
+        for key in ('ITERM_SESSION_ID','TERM_SESSION_ID'):effective_env.pop(key,None)
+        prefixes=executable_prefixes(executable,effective_env)
         for i,arg in enumerate(args):
             if arg=='--profile' and args[i+1]!=explicit or arg.startswith('--profile=') and arg.split('=',1)[1]!=explicit:
                 raise ValueError('launch_profile_mismatch')
         if selected!=request.omp_profile:
             raise ValueError('launch_profile_mismatch')
-        help_result=runner.run([str(executable),'--help'],timeout=10,env=env)
+        help_result=runner.run([str(executable),'--help'],timeout=10,env=effective_env)
         required=['--cwd','--profile']+(['--resume'] if request.mode=='resume' else ['--config'])
         if help_result.returncode or any(flag not in help_result.stdout for flag in required):
             raise ValueError('launch_capability_unavailable')
         version_text=''
         try:
-            version=runner.run([str(executable),'--version'],timeout=10,env=env)
+            version=runner.run([str(executable),'--version'],timeout=10,env=effective_env)
             if version.returncode==0:version_text=version.stdout.strip()[:128]
         except (OSError,subprocess.SubprocessError):
             pass  # Version output is informational, never a capability gate.
-        identity=LaunchIdentity(executable,tuple(args),prefixes,version_text,wrapper)
-        return LaunchInspection(it2,Path(zsh),guid,window,identity),[]
+        interpreter=next((Path(prefix[0]) for prefix in prefixes if len(prefix)==2),None)
+        identity=LaunchIdentity(executable,tuple(args),prefixes,version_text,wrapper,interpreter)
+        return LaunchInspection(it2,Path(zsh),guid,window,identity,basis),[]
     except (OSError,ValueError,KeyError,IndexError,TypeError,AttributeError,subprocess.SubprocessError):
         return None,[Finding('launch',None if request.mode=='shell' else 'omp','launch_preflight_unverified','unavailable',
                              'Launch inputs, terminal target, profile or executable capabilities could not be verified.')]

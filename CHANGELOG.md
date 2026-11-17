@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+Final omp-only source corrections preserve migrated appearance PNGs and guarded
+original binding inverses; native config/MCP FIFO reads fail without mutation.
+Resume no longer treats missing identity records as proof a dialog is closed.
+Automatic window selection keeps its parent/sole provenance through SDK recheck.
+Launch text exposes independent command/identity/history/ack evidence; binary
+headers and login-shell-selected Bun/environment are verified without CLI PATH
+substitution. Complete literal/quoted argv forms and bounded UTF-8 handoff
+production retain exact content/proof. Diagnostic version failures do not erase
+available executables. Native receiver delivery remains pending instead of
+depending on unsupported it2-help advertisements; parser preparation uses the
+supplied lifecycle Runner. Added isolated recovery, policy/UI retry, late-ack,
+default installed publisher/private-PTY and platform-applicability regressions.
+These source corrections do not establish live iTerm/omp/UI acceptance.
+
 Task10 offline execution (not native/UI acceptance): initial 514-test Python
 discovery exposed integration/fixture defects; affected 252-test suites and
 12-test extracted-release suite now pass. Bun 16 tests and controlled zsh 25

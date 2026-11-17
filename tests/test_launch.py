@@ -35,7 +35,7 @@ class LaunchTests(unittest.TestCase):
             def profile(self,name):return dict(name='Omp',guid='G')
             def variable(self,sid,name):
                 return {'session.profileName':'Omp','session.jobName':state['job'],'session.commandLine':('malformed "' if state['command_bad'] else shlex.join(state['argv']))}[name]
-        async def create(w,p,g,command):
+        async def create(w,p,g,command,**kwargs):
             nonlocal binding
             state['creates']+=1
             argv=shlex.split(command)
@@ -70,7 +70,7 @@ class LaunchTests(unittest.TestCase):
                     transport.panes=lambda self:[dict(terminal_id='S',tab_id='T',window_id='W'),dict(terminal_id='extra',tab_id='T',window_id='W')]
                 else:
                     original=create
-                    async def create(w,p,g,c):
+                    async def create(w,p,g,c,**kwargs):
                         result=await original(w,p,g,c)
                         state['argv']+=['--continue']
                         return result
@@ -116,7 +116,7 @@ class LaunchTests(unittest.TestCase):
                 if mode=='handoff':
                     artifact=m.prepare_handoff(root,'Task to read'); request=replace(request,mode='handoff',handoff=artifact.path)
                     plain=create
-                    async def create(w,p,g,c):
+                    async def create(w,p,g,c,**kwargs):
                         result=await plain(w,p,g,c)
                         artifact.ack_path.write_text(json.dumps(dict(request_id=artifact.request_id,thread_id=state['selected_session_id'],cwd=str(artifact.cwd),accepted_task='Read task',first_step='Inspect materials')))
                         artifact.ack_path.chmod(0o600)
@@ -235,3 +235,138 @@ class LaunchTests(unittest.TestCase):
             self.assertFalse(m.valid_ack(artifact,'actual',2))
             artifact.ack_path.unlink(); artifact.ack_path.symlink_to(artifact.path)
             self.assertFalse(m.valid_ack(artifact,'actual',0))
+
+    def test_resume_without_registry_requires_independent_dialog_evidence_or_opt_in(self):
+        for situation in ('missing','unavailable','unrelated','instrumented-other','opt-in','stale'):
+            with self.subTest(situation=situation),TemporaryDirectory() as tmp:
+                root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+                request=replace(request,mode='resume',resume=resolve_resume(binding.session_file,'fresh',binding.profile),
+                                allow_duplicate=situation=='opt-in')
+                state['bindings']=[] if situation!='unrelated' else [replace(binding,session_id='other')]
+                if situation=='unavailable':
+                    transport.bindings=lambda self: (_ for _ in ()).throw(OSError('private registry unavailable'))
+                if situation=='stale':
+                    state['bindings']=[binding]
+                    transport.process_start=lambda self,pid:'reused-pid'
+                if situation=='instrumented-other':
+                    other=root/'other.jsonl'
+                    other.write_text(json.dumps(dict(type='session',id='other',cwd=str(root)))+'\n')
+                    current=replace(binding,session_id='other',session_file=other)
+                    state['bindings']=[current]
+                    transport.observe=lambda self,sid:binding_record(current)
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                allowed=situation in {'instrumented-other','opt-in'}
+                self.assertEqual(state['creates'],int(allowed))
+                self.assertEqual((code,out['status']),(0,'launched') if allowed else (2,'blocked'))
+
+    def test_resume_command_proof_never_implies_foreign_fresh_fork_or_missing_history(self):
+        for actual in ('foreign','fresh','fork','missing'):
+            with self.subTest(actual=actual),TemporaryDirectory() as tmp:
+                root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+                saved=root/'requested.jsonl'
+                saved.write_text(json.dumps(dict(type='session',id='requested',cwd=str(root)))+'\n')
+                request=replace(request,mode='resume',resume=resolve_resume(saved,'requested',binding.profile),
+                                allow_duplicate=True)
+                if actual=='fork':
+                    binding.session_file.write_text(json.dumps(dict(type='session',id='fresh',cwd=str(root),
+                                                                   parentSession='requested'))+'\n')
+                elif actual=='foreign':
+                    foreign=root/'foreign';foreign.mkdir()
+                    state['bindings']=[replace(binding,profile=OmpProfile(None,foreign))]
+                elif actual=='missing':state['bindings']=[]
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['status'],out['command'],out['history']),
+                                 (0,'launched','verified','unverified'))
+                self.assertEqual((out['window_id'],out['tab_id'],out['session_id']),('W','T','S'))
+                self.assertEqual(state['creates'],1)
+                if actual=='missing':self.assertEqual(out['identity'],'unverified')
+
+    def test_handoff_ack_has_separate_120_seconds_and_never_recreates(self):
+        for ack in ('late','missing','invalid'):
+            with self.subTest(ack=ack),TemporaryDirectory() as tmp:
+                root=Path(tmp).resolve();request,inspection,binding,state,transport,create=self.fixture(root)
+                artifact=m.prepare_handoff(root,'private task')
+                self.addCleanup(__import__('shutil').rmtree,artifact.path.parent)
+                request=replace(request,mode='handoff',handoff=artifact.path)
+                observe=transport.observe
+                def observed(self,sid):
+                    if state['now']>=45 and ack!='missing' and not artifact.ack_path.exists():
+                        artifact.ack_path.write_text(json.dumps(dict(request_id=artifact.request_id,
+                            thread_id='fresh' if ack=='late' else 'wrong',cwd=str(root),
+                            accepted_task='read',first_step='inspect')))
+                        artifact.ack_path.chmod(0o600)
+                    return observe(self,sid)
+                transport.observe=observed
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['command'],out['ack']),
+                                 (0,'verified','received' if ack=='late' else 'unconfirmed'))
+                self.assertGreaterEqual(state['now'],45 if ack=='late' else 120)
+                self.assertLess(state['now'],46 if ack=='late' else 121)
+                self.assertEqual((out['window_id'],out['tab_id'],out['session_id']),('W','T','S'))
+                self.assertEqual(state['creates'],1)
+
+    def test_complete_command_observation_accepts_literal_and_quoted_exact_forms(self):
+        for form in ('literal','quoted','interpreter-literal','interpreter-quoted','extra','wrong-cwd','wrong-id','wrong-handoff','malformed'):
+            with self.subTest(form=form),TemporaryDirectory(prefix="space ' quote ") as tmp:
+                root=Path(tmp).resolve();request,inspection,binding,state,transport,create=self.fixture(root)
+                target=resolve_resume(binding.session_file,'fresh',binding.profile)
+                request=replace(request,mode='resume',resume=target,allow_duplicate=True)
+                original=transport.variable
+                def variable(self,sid,name):
+                    if name!='session.commandLine':return original(self,sid,name)
+                    argv=list(state['argv'])
+                    if form.startswith('interpreter'):argv=[str(root/'bun'),*argv]
+                    if form=='extra':argv+=['--continue']
+                    if form=='wrong-cwd':argv[argv.index('--cwd')+1]='/wrong'
+                    if form=='wrong-id':argv[-1]=str(root/'other.jsonl')
+                    if form=='wrong-handoff':argv+=['--','Read another task']
+                    line=' '.join(argv) if form.endswith('literal') else shlex.join(argv)
+                    return line+" '" if form=='malformed' else line
+                transport.variable=variable
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual(out['command'],'verified' if form in {
+                    'literal','quoted','interpreter-literal','interpreter-quoted'} else 'unverified')
+                self.assertEqual(state['creates'],1)
+
+    def test_handoff_producer_bounds_complete_utf8_representation_without_truncation(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve()
+            for task in ('x'*65536,'界'*22000,'x'*65450):
+                with self.subTest(length=len(task)),patch.object(m.tempfile,'tempdir',str(root)):
+                    with self.assertRaises(ValueError):m.prepare_handoff(root,task)
+                    self.assertEqual(list(root.iterdir()),[])
+            task="Unicode 界 and quotes ' \""*500
+            artifact=m.prepare_handoff(root,task)
+            self.addCleanup(__import__('shutil').rmtree,artifact.path.parent)
+            self.assertEqual(m.read_handoff(artifact.path,root),artifact)
+            self.assertIn(task,artifact.path.read_text())
+            self.assertLessEqual(artifact.path.stat().st_size,65536)
+
+    def test_window_selection_provenance_reaches_sdk_create_without_retargeting(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+            inspection=replace(inspection,window_basis=('parent','PARENT'))
+            async def capture(*args,**kwargs):
+                self.assertEqual(kwargs,{'window_basis':('parent','PARENT')})
+                return await create(*args,**kwargs)
+            code,out=self.run_launch(root,request,inspection,state,transport,capture)
+            self.assertEqual((code,state['creates']),(0,1))
+
+    def test_handoff_literal_and_quoted_complete_bun_argv_preserve_exact_prompt_path(self):
+        for form in ('literal','quoted','wrong-handoff'):
+            with self.subTest(form=form),TemporaryDirectory(prefix="space ' \" quote ") as tmp:
+                root=Path(tmp).resolve();request,inspection,binding,state,transport,create=self.fixture(root)
+                with patch.object(m.tempfile,'tempdir',str(root)):
+                    artifact=m.prepare_handoff(root,'task')
+                request=replace(request,mode='handoff',handoff=artifact.path)
+                original=transport.variable
+                def variable(self,sid,name):
+                    if name!='session.commandLine':return original(self,sid,name)
+                    argv=[str(root/'bun'),*state['argv']]
+                    if form=='wrong-handoff':argv[-1]=argv[-1].replace(str(artifact.path),str(root/'other.md'))
+                    return ' '.join(argv) if form=='literal' else shlex.join(argv)
+                transport.variable=variable
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['command']),(3,'unverified') if form=='wrong-handoff' else (0,'verified'))
+                self.assertEqual(out['ack'],'unconfirmed')
+                self.assertEqual(state['creates'],1)

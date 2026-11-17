@@ -981,6 +981,7 @@ class OmpIdentityTests(unittest.IsolatedAsyncioTestCase):
              patch.object(os, 'getpgid', return_value=42):
             self.assertEqual(terminal_identity.foreground_state(42, 'birth', '/dev/null'), 'unknown')
 
+    @unittest.skipUnless(sys.platform=='darwin','Requires Darwin process-birth and foreground kernel ABI')
     async def test_suspend_to_shell_restores_original_without_removing_live_dialog(self):
         script = r"""import asyncio,fcntl,json,os,pathlib,signal,subprocess,sys,termios
 from unittest.mock import patch
@@ -1348,6 +1349,7 @@ class NativeAdapterTests(unittest.IsolatedAsyncioTestCase):
 
 
 class SupervisorTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform=='darwin','Requires Darwin kqueue process lifetime observation')
     def test_command_observer_outlives_cold_deadline_and_is_reaped_on_cancel(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -12,11 +12,13 @@ settings/comments. Matching foreign values are reused without ownership.
 Changed owned values remain conflicts during update/uninstall. An independent
 later feature install preserves the recorded notification policy.
 
-The required receiver is feature-specific: missing OSC 9 evidence does not
-block status, ordinary shell or unrelated checkpoints. Versions are diagnostic,
-not exact-version rejection rules. No old executable or `config get/list`
-probe is used. Bun is required only to parse/transform selected native YAML
-addresses, never to open an ordinary shell.
+Receiver delivery is feature-specific and remains explicit pending UI, not
+inferred from `it2 --help`, versions or API connectivity. Unknown OSC 9 delivery
+does not prevent preparing the selected native settings or block status/shell;
+it never counts as banner acceptance. Required executable/parser failures still
+block their consumers. Versions are diagnostic, not exact-version rules.
+No old executable or `config get/list` probe is used. Bun is required only to
+parse/transform selected native YAML addresses, never to open an ordinary shell.
 
 `native_notifications` remains pending until real native completion/error
 behavior is verified in a fresh selected-profile main TUI. Local YAML and a

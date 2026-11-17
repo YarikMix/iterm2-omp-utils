@@ -6,7 +6,7 @@ from tests.native_features_support import NativeFixture
 
 class NotificationFeatureTests(NativeFixture):
     def test_notifications_alone_preserve_native_default_policy(self):
-        changes = notifications.build(self.context,self.selection('notifications'))
+        changes = notifications.build(self.context,self.selection('notifications'),runner=self.runner)
         self.assertEqual([(e.key,e.after['value']) for e in changes.edits],
                          [('completion.notify','on'),('error.notify','off')])
         self.assertFalse(any(e.owner=='status' for e in changes.edits))
@@ -30,8 +30,9 @@ class NotificationFeatureTests(NativeFixture):
             self.assertFalse([f for f in validate(self.selection('notifications'),self.context)
                               if f.state in {'unavailable','conflict','missing_dependency'}])
 
-    def test_missing_notification_receiver_does_not_block_status(self):
+    def test_unknown_notification_receiver_leaves_both_selected_native_surfaces_pending(self):
         self.context.capabilities -= {'iterm2:osc9'}
         result = lifecycle.install(self.context,self.selection('status','notifications'),self.runner)
-        self.assertEqual(result.receipt.selection.features,{'status'})
-        self.assertTrue(any(f.feature=='notifications' and f.state=='unavailable' for f in result.findings))
+        self.assertSuccess(result)
+        self.assertEqual(result.receipt.selection.features,{'status','notifications'})
+        self.assertEqual({step.code for step in result.receipt.pending_ui},{'native_status','native_notifications'})

@@ -3,7 +3,7 @@ import os
 import stat
 
 from . import jsonfile
-from .omp import LIMIT, same
+from .omp import _bytes, same
 from ..models import FileEdit, Finding, OmpProfile
 
 NAME = 'iterm2-observe'
@@ -25,15 +25,7 @@ def _storage(profile):
 
 def _read(profile):
     path = _storage(profile)
-    try:
-        with path.open('rb') as source:
-            raw = source.read(LIMIT + 1)
-    except FileNotFoundError:
-        raw = None
-    except OSError:
-        raise ValueError('MCP configuration is unreadable') from None
-    if raw is not None and len(raw) > LIMIT:
-        raise ValueError('MCP configuration exceeds size limit')
+    raw = _bytes(path)
     root = jsonfile.parse(raw) if raw is not None else {}
     if not isinstance(root, dict) or 'mcpServers' in root and not isinstance(root['mcpServers'], dict):
         raise ValueError('Invalid MCP configuration')

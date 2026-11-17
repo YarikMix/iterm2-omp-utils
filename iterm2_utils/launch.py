@@ -17,6 +17,8 @@ from .models import Finding
 from .omp_sessions import SessionBinding, binding_record, matches_conversation
 from .terminal import Terminal
 
+_PRIVATE_LIMIT=65536
+
 
 @dataclass(frozen=True)
 class Handoff:
@@ -29,15 +31,15 @@ class Handoff:
 def _private_read(path):
     before=path.lstat()
     if (not stat.S_ISREG(before.st_mode) or before.st_uid!=os.getuid() or
-            before.st_mode & 0o777 != 0o600 or before.st_size>65536):
+            before.st_mode & 0o777 != 0o600 or before.st_size>_PRIVATE_LIMIT):
         raise ValueError('Unsafe private artifact')
     fd=os.open(path,os.O_RDONLY|os.O_NOFOLLOW|os.O_NONBLOCK)
     with os.fdopen(fd,'rb') as source:
         opened=os.fstat(source.fileno())
         if (opened.st_dev,opened.st_ino)!=(before.st_dev,before.st_ino):raise ValueError('Replaced artifact')
-        data=source.read(65537)
+        data=source.read(_PRIVATE_LIMIT+1)
         after=os.fstat(source.fileno())
-    if (len(data)>65536 or (after.st_size,after.st_mtime_ns)!=(opened.st_size,opened.st_mtime_ns)):
+    if (len(data)>_PRIVATE_LIMIT or (after.st_size,after.st_mtime_ns)!=(opened.st_size,opened.st_mtime_ns)):
         raise ValueError('Changing artifact')
     return data,before
 
@@ -52,8 +54,12 @@ def prepare_handoff(cwd: Path, task: str) -> Handoff:
           'Atomically write a new mode-0600 ack.json at ack_path with nonempty string fields '
           'request_id, thread_id (your ACTUAL omp session ID), cwd (actual cwd), accepted_task, first_step. '
           'Do not invent identity or acknowledge work you have not read. This receipt is not task completion.\n')
+    encoded=text.encode('utf8')
+    if len(encoded)>_PRIVATE_LIMIT:
+        root.rmdir()
+        raise ValueError('Handoff exceeds private artifact size limit')
     fd=os.open(artifact.path,os.O_WRONLY|os.O_CREAT|os.O_EXCL,0o600)
-    with os.fdopen(fd,'w') as stream:stream.write(text)
+    with os.fdopen(fd,'wb') as stream:stream.write(encoded)
     return artifact
 
 
@@ -102,13 +108,15 @@ def build_command(request, inspection, argv):
         identity=inspection.identity
         guard=('[[ ${commands[omp]-} == '+shlex.quote(str(identity.executable))+
                ' && -z ${aliases[omp]-} && ${functions[omp]-} == '+shlex.quote(identity.wrapper)+' ]] || exit 1; ')
-        profile_check=('import os,sys; from pathlib import Path; '
+        profile_check=('import os,sys,shutil; from pathlib import Path; '
                        'sys.path.insert(0,'+repr(str(Path(__file__).resolve().parent.parent))+'); '
                        'from iterm2_utils.omp_profile import resolve_omp_profile; '
-                       'sys.exit(0 if resolve_omp_profile(Path.home(),dict(os.environ),sys.argv[1]).agent_dir'
-                       ' == Path(sys.argv[2]) else 1)')
+                       'profile_ok=resolve_omp_profile(Path.home(),dict(os.environ),sys.argv[1]).agent_dir'
+                       ' == Path(sys.argv[2]); '
+                       'bun=shutil.which("bun") if sys.argv[3] else None; '
+                       'sys.exit(0 if profile_ok and (not sys.argv[3] or bun and Path(bun).resolve()==Path(sys.argv[3])) else 1)')
         guard+=shlex.join([sys.executable,'-c',profile_check,request.omp_profile.name or 'default',
-                           str(request.omp_profile.agent_dir)])+' || exit 1; '
+                           str(request.omp_profile.agent_dir),str(identity.interpreter or '')])+' || exit 1; '
         # -ilc does not read a prompt command; arm the installed observer explicitly.
         guard+='if (( $+functions[_iterm2_utils_appearance_arm] )); then _iterm2_utils_appearance_arm; fi; '
         invocation=[str(inspection.zsh),'-ilc',guard+'exec '+shlex.join([
@@ -129,7 +137,7 @@ def _observed_binding(terminal, sid):
 
 
 def _existing(request,terminal):
-    """A live matching candidate with missing observations is NOT permission to duplicate."""
+    """An uninstrumented live pane is uncertainty, not negative dialog evidence."""
     for candidate in terminal.bindings():
         plausible=(candidate.session_id==request.resume.session_id and
                    candidate.profile==request.resume.profile and candidate.cwd==request.resume.cwd)
@@ -138,7 +146,18 @@ def _existing(request,terminal):
         actual=_observed_binding(terminal,candidate.terminal_id)
         if actual and matches_conversation(request.resume,actual):return actual,False
         return None,True
+    for pane in terminal.panes():
+        actual=_observed_binding(terminal,pane['terminal_id'])
+        if actual is None:return None,True
+        if matches_conversation(request.resume,actual):return actual,False
     return None,False
+
+
+def _command_matches(line,allowed):
+    # iTerm observations may be literal-space-joined or fully shell-quoted argv.
+    if any(line==' '.join(argv) for argv in allowed):return True
+    try:return shlex.split(line) in allowed
+    except ValueError:return False
 
 
 def launch(request: LaunchRequest, paths, runner):
@@ -172,7 +191,8 @@ def launch(request: LaunchRequest, paths, runner):
         argv=None if request.mode=='shell' else build_argv(request,inspection,overlay,artifact)
         command=build_command(request,inspection,argv)
         started_ns=time.time_ns()
-        creation=asyncio.run(create_tab(inspection.window_id,request.profile,inspection.profile_guid,command))
+        creation=asyncio.run(create_tab(inspection.window_id,request.profile,inspection.profile_guid,command,
+                                       window_basis=inspection.window_basis))
     except (OSError,ValueError,KeyError,TypeError,subprocess.SubprocessError):
         output['findings'].append(asdict(Finding('launch','omp','launch_precreate_unverified','unavailable','Launch preparation could not be verified.')))
         return 2,output
@@ -192,13 +212,12 @@ def launch(request: LaunchRequest, paths, runner):
                    terminal.variable(creation.session_id,'session.profileName')==request.profile)
             line=terminal.variable(creation.session_id,'session.commandLine')
             job=terminal.variable(creation.session_id,'session.jobName')
-            parsed=shlex.split(line)
             if request.mode=='shell':
-                command_ok=parsed in ([str(inspection.zsh),'-il'],[str(inspection.zsh),'-l']) and job in {'zsh','-zsh'}
+                command_ok=_command_matches(line,[[str(inspection.zsh),'-il'],[str(inspection.zsh),'-l']]) and job in {'zsh','-zsh'}
             else:
                 identity=inspection.identity
                 allowed=[[*prefix,*argv[1:]] for prefix in identity.prefixes]
-                command_ok=parsed in allowed and job in {Path(prefix[0]).name for prefix in identity.prefixes}
+                command_ok=_command_matches(line,allowed) and job in {Path(prefix[0]).name for prefix in identity.prefixes}
             if exact and command_ok and time.monotonic()<creation.deadline:
                 output.update(status='launched',command='verified')
                 if request.mode=='shell':return 0,output

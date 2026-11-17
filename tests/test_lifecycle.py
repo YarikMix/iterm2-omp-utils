@@ -56,10 +56,10 @@ class LifecycleFixture(NativeFixture):
 
 class LifecycleTests(LifecycleFixture):
     def test_failed_feature_does_not_rollback_independent_completed_feature(self):
-        self.context.capabilities -= {'iterm2:osc7501'}
+        (self.profile.agent_dir/'config.yml').write_text('terminal: {programStatus: invalid}\n')
         result = self.install('status','notifications')
         self.assertEqual(result.receipt.selection.features,{'notifications'})
-        self.assertTrue(any(f.feature=='status' and f.state=='unavailable' for f in result.findings))
+        self.assertTrue(any(f.feature=='status' and f.state=='conflict' for f in result.findings))
 
     def test_partial_uninstall_drops_unused_runtime_without_disabling_native_status(self):
         self.assertSuccess(self.install('status','shell'))
@@ -206,6 +206,78 @@ class LifecycleTests(LifecycleFixture):
                          {'exists':True,'value':'F8'})
         self.assertIn('ctrl+j',omp.read_binding(self.profile,'tui.input.newLine',self.runner)['value'])
 
+    def test_conflicting_uninstall_persists_exact_policy_ui_and_retry_clears_only_removed_debt(self):
+        from iterm2_utils.config import omp
+        settings=self.profile.agent_dir/'config.yml'
+        bindings=self.profile.agent_dir/'keybindings.yml'
+        settings.write_text('completion: {notify: off}\nerror: {notify: off}\nforeign: keep\n')
+        bindings.write_text('app.session.resume: F7\napp.history.search: Ctrl+R\n')
+        initial=self.install('shortcuts','notifications','status',shortcuts=('resume',),
+                             resume_key='F8',notify_errors=True)
+        self.assertSuccess(initial)
+        pending=list(initial.receipt.pending_ui)
+        omp.set_binding(self.profile,'app.session.resume',{'exists':True,'value':'F10'},self.runner,
+                        expected={'exists':True,'value':'F8'})
+        omp.set_setting(self.profile,'error.notify',{'exists':True,'value':'off'},self.runner,
+                        expected={'exists':True,'value':'on'})
+        result=lifecycle.uninstall(self.context,frozenset({'shortcuts','notifications'}),self.runner)
+        stored=state.load(self.context.paths.data/'receipt.json')
+        self.assertEqual(stored,result.receipt)
+        self.assertEqual(stored.selection.features,{'shortcuts','notifications','status'})
+        self.assertEqual((stored.selection.resume_key,stored.selection.notify_errors),('F8',True))
+        self.assertCountEqual(stored.pending_ui,pending)
+        self.assertEqual(omp.read_binding(self.profile,'app.session.resume',self.runner)['value'],'F10')
+        omp.set_binding(self.profile,'app.session.resume',{'exists':True,'value':'F8'},self.runner,
+                        expected={'exists':True,'value':'F10'})
+        self.assertSuccess(lifecycle.uninstall(self.context,frozenset({'shortcuts'}),self.runner))
+        stored=state.load(self.context.paths.data/'receipt.json')
+        self.assertEqual(stored.selection.features,{'notifications','status'})
+        self.assertIsNone(stored.selection.resume_key)
+        self.assertTrue(stored.selection.notify_errors)
+        self.assertCountEqual(stored.pending_ui,[step for step in pending if step.feature!='shortcuts'])
+        self.assertEqual(omp.read_binding(self.profile,'app.session.resume',self.runner)['value'],'F7')
+        omp.set_setting(self.profile,'error.notify',{'exists':True,'value':'on'},self.runner,
+                        expected={'exists':True,'value':'off'})
+        self.assertSuccess(lifecycle.uninstall(self.context,frozenset({'notifications'}),self.runner))
+        stored=state.load(self.context.paths.data/'receipt.json')
+        self.assertEqual(stored.selection.features,{'status'})
+        self.assertFalse(stored.selection.notify_errors)
+        self.assertCountEqual(stored.pending_ui,[step for step in pending if step.feature=='status'])
+        self.assertEqual(omp.read_setting(self.profile,'error.notify',self.runner)['value'],'off')
+        self.assertIn('foreign: keep',settings.read_text())
+        self.assertIn('app.history.search: Ctrl+R',bindings.read_text())
+
+    def test_native_planning_uses_supplied_runner_without_global_bun_or_writes(self):
+        import subprocess
+        class Parser:
+            def run(inner,argv,**kwargs):
+                request=json.loads(kwargs['stdin'])
+                root=json.loads(request['raw'] or '{}')
+                node=root
+                exists=True
+                for part in request['pointer']:
+                    if not isinstance(node,dict) or part not in node:
+                        exists=False;node=None;break
+                    node=node[part]
+                if request['op']=='read':
+                    result={'value':{'exists':exists,'value':node}}
+                else:
+                    target=root
+                    for part in request['pointer'][:-1]:target=target.setdefault(part,{})
+                    target[request['pointer'][-1]]=request['next']['value']
+                    result={'raw':json.dumps(root)}
+                return subprocess.CompletedProcess(argv,0,json.dumps(result),'')
+        parser=Parser()
+        before=self.snapshot()
+        with patch.object(Runner,'run',side_effect=AssertionError('escaped supplied adapter')):
+            result=lifecycle.install(self.context,self.selection('status','notifications','shortcuts',
+                shortcuts=('resume',),resume_key='F8',notify_errors=True),parser,dry_run=True)
+        self.assertSuccess(result)
+        self.assertEqual(result.receipt.selection.features,{'status','notifications','shortcuts'})
+        self.assertEqual({step.code for step in result.receipt.pending_ui},
+                         {'native_status','native_notifications','native_keyboard'})
+        self.assertEqual(self.snapshot(),before)
+
 
 from tests.test_migration import MigrationFixture
 
@@ -220,7 +292,7 @@ class MigrationLifecycleTests(MigrationFixture):
         migration.migrate_to_omp(self.context, self.runner, dry_run=False)
         target = self.home/'clipboard-state'
         chosen = Selection(frozenset({'status','clipboard'}), frozenset(), 'Default', self.profile)
-        def planned(context, selection):
+        def planned(context, selection, *, runner=None):
             return Plan(selection, ChangeSet([FileEdit(target, None, b'clipboard', 0o600, 'clipboard')], [],
                 [Finding('clipboard','omp','prepared','ready','Prepared independent clipboard fixture.')]), 'fixture')
         with patch.object(lifecycle, 'validate', return_value=[]), patch.object(lifecycle, 'plan', side_effect=planned):

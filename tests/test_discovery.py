@@ -25,16 +25,16 @@ class DiscoveryTests(unittest.TestCase):
             self.assertFalse(any(Path(call[0][0]).name in {'omp','codex','claude','bun','uvx','cc-status'} for call in f.runner.calls))
             self.assertEqual(f.snapshot(),before)
 
-    def test_native_capability_probes_do_not_read_effective_config_or_start_agent(self):
+    def test_native_capability_probes_do_not_run_it2_help_or_invent_receiver_support(self):
         with Fixture() as f:
             self.binary(f,'omp'); self.binary(f,'bun')
             f.runner.responses['omp'] = 'omp 99.0.0 --resume --cwd --config'
-            f.runner.responses['it2'] = 'OSC 7501 OSC 9 set-status get-status'
             context = discover(resolve_paths(),f.runner,features=frozenset({'status','notifications','restore'}))
-            self.assertTrue({'omp:resume','iterm2:osc7501','iterm2:osc9'} <= context.capabilities)
+            self.assertIn('omp:resume',context.capabilities)
+            self.assertFalse({'iterm2:osc7501','iterm2:osc9'} & context.capabilities)
             calls = [call[0][1:] for call in f.runner.calls if Path(call[0][0]).name=='omp']
             self.assertEqual(calls,[['--version'],['--help']])
-            self.assertFalse(any(Path(call[0][0]).name in {'codex','claude','terminal-notifier','fzf','cc-status'} for call in f.runner.calls))
+            self.assertFalse(any(Path(call[0][0]).name in {'it2','codex','claude','terminal-notifier','fzf','cc-status'} for call in f.runner.calls))
             self.assertTrue(all(call[1]<=10 for call in f.runner.calls))
 
     def test_unknown_receiver_is_not_inferred_from_version_or_old_hooks(self):
@@ -142,3 +142,40 @@ class DiscoveryTests(unittest.TestCase):
                                 'conflict','unavailable','missing_dependency'}])
                             self.assertFalse(target.exists())
                             self.assertFalse(result.receipt.selection.features)
+
+    def test_diagnostic_version_failures_do_not_erase_available_resume_capability(self):
+        for failure in ('error','empty','stderr','timeout'):
+            with self.subTest(failure=failure),Fixture() as f:
+                omp=self.binary(f,'omp')
+                original=f.runner.run
+                def run(argv,**kwargs):
+                    if argv==[str(omp),'--version']:
+                        if failure=='timeout':raise subprocess.TimeoutExpired(argv,5)
+                        return subprocess.CompletedProcess(argv,1 if failure=='error' else 0,'',
+                            'omp 999.1.2' if failure=='stderr' else '')
+                    if argv==[str(omp),'--help']:
+                        return subprocess.CompletedProcess(argv,0,'--resume --cwd --profile','')
+                    return original(argv,**kwargs)
+                f.runner.run=run
+                context=discover(resolve_paths(),f.runner,features=frozenset({'restore'}))
+                self.assertEqual(context.executables['omp'],omp)
+                self.assertIn('omp:resume',context.capabilities)
+                self.assertNotIn('omp',context.versions)
+
+    def test_required_help_capability_failure_still_blocks_restore_alone(self):
+        from iterm2_utils.models import Selection
+        from iterm2_utils.planner import validate
+        with Fixture() as f:
+            omp=self.binary(f,'omp');self.binary(f,'python3')
+            original=f.runner.run
+            def run(argv,**kwargs):
+                if argv==[str(omp),'--help']:return subprocess.CompletedProcess(argv,1,'','private')
+                if argv[1:]==['-c','import iterm2; print("iterm2-sdk-ready")']:
+                    return subprocess.CompletedProcess(argv,0,'iterm2-sdk-ready','')
+                return original(argv,**kwargs)
+            f.runner.run=run
+            context=discover(resolve_paths(),f.runner,features=frozenset({'restore','shell'}))
+            selection=Selection(frozenset({'restore','shell'}),frozenset(),'Default',context.omp_profile)
+            findings=validate(selection,context)
+            self.assertTrue(any(item.feature=='restore' and item.code=='native_capability' for item in findings))
+            self.assertFalse(any(item.feature=='shell' and item.state=='unavailable' for item in findings))

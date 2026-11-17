@@ -136,13 +136,13 @@ class CliTests(MigrationFixture):
                         return 'W'
                     def profiles(self):
                         return [dict(name='Shell' if mode=='shell' else 'Omp',guid='G')]
-                    def panes(self):return [dict(terminal_id='S',tab_id='T',window_id='W')]
+                    def panes(self):return [dict(terminal_id='S',tab_id='T',window_id='W')] if observed['creates'] else []
                     def profile(self,name):return dict(name='Shell' if mode=='shell' else 'Omp',guid='G')
                     def variable(self,terminal_id,name):
                         return {'session.profileName':'Shell' if mode=='shell' else 'Omp',
                                 'session.jobName':'zsh' if mode=='shell' else 'omp',
                                 'session.commandLine':shlex.join(['/bin/zsh','-il'] if mode=='shell' else observed['argv'] or [])}[name]
-                async def create(window,profile,guid,command):
+                async def create(window,profile,guid,command,**kwargs):
                     observed['creates'] += 1
                     self.assertEqual((window,profile,guid),('W','Shell' if mode=='shell' else 'Omp','G'))
                     if mode!='shell':
@@ -212,7 +212,8 @@ class CliTests(MigrationFixture):
             def panes(self):return []
             def profile(self,name):return dict(name='Omp',guid='G')
             def variable(self,sid,name):return ''
-        async def create(*args):
+        async def create(*args,**kwargs):
+            self.assertEqual(kwargs,{'window_basis':('explicit','')})
             observed['creates'] += 1
             return LaunchCreation('unknown','W','T',None,30,())
         identity = LaunchIdentity(self.home/'omp',(),((str(self.home/'omp'),),),'future')
@@ -242,6 +243,23 @@ class CliTests(MigrationFixture):
         self.assertEqual(output['status'],'blocked')
         self.assertIsNone(output['tab_id'])
         self.assertEqual(self.runner.calls,[])
+
+    def test_plain_launch_output_exposes_each_proof_and_known_ids_without_private_payload(self):
+        from types import SimpleNamespace
+        for mode in ('resume','handoff'):
+            out=io.StringIO()
+            output=dict(mode='launch_omp',status='launched',window_id='W',tab_id='T',session_id='S',
+                profile='Omp',command='verified',identity='unverified',
+                history='unverified' if mode=='resume' else 'not_requested',
+                ack='unconfirmed' if mode=='handoff' else 'not_requested',findings=[],
+                argv=['PRIVATE_PROMPT'],screen='PRIVATE_SCREEN')
+            with contextlib.redirect_stdout(out):
+                code=cli._emit(SimpleNamespace(json=False,command='launch-omp'),output)
+            self.assertEqual(code,0)
+            text=out.getvalue()
+            for key in ('window_id','tab_id','session_id','profile','command','identity','history','ack'):
+                self.assertIn(key+'='+json.dumps(output[key]),text)
+            self.assertNotIn('PRIVATE_',text)
 
     def test_explicit_external_restore_choice_is_visible_in_migration_preview(self):
         before = self.snapshot()

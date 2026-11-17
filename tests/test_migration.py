@@ -164,6 +164,44 @@ class MigrationTests(MigrationFixture):
         self.assertNotIn('project-launcher', result.receipt.selection.features)
         self.assertEqual(result.receipt.legacy_cleanup[0]['selection']['features'], ['project-launcher'])
 
+    def test_referenced_appearance_png_transfers_original_inverse_and_retries_user_conflict(self):
+        config=self.context.paths.config/'appearance.json';config.parent.mkdir()
+        icon=self.context.paths.data/'appearance/icons' / ('a'*64+'.png');icon.parent.mkdir(parents=True)
+        original=b'original user PNG';installed=b'\x89PNG\r\n\x1a\nowned PNG'
+        icon.write_bytes(installed)
+        document={'projects':[{'root':str(self.home),'color':'#123456','icon':str(icon)}]}
+        config.write_text(json.dumps(document))
+        config_resource=self.resource('json',config,{'pointer':['projects'],'mode':0o600},
+            self.value(exists=False),self.value(document['projects']),('codex:appearance',))
+        asset=self.resource('file',icon,{'mode':0o600},self.value(base64.b64encode(original).decode()),
+            self.value(base64.b64encode(installed).decode()),('codex:appearance',))
+        self.save(self.historical([config_resource,asset],('appearance',)))
+        icon.write_bytes(b'user changed')
+        first=migration.migrate_to_omp(self.context,self.runner,dry_run=False)
+        self.assertEqual(icon.read_bytes(),b'user changed')
+        self.assertEqual(first.receipt.legacy_cleanup[0]['resources'],[asset])
+        icon.write_bytes(installed)
+        second=migration.migrate_to_omp(self.context,self.runner,dry_run=False)
+        self.assertEqual(icon.read_bytes(),installed)
+        transferred=next(r for r in second.receipt.resources if r['target']==str(icon))
+        self.assertEqual(transferred['before'],asset['before'])
+        self.assertEqual(transferred['installed'],asset['installed'])
+        self.assertEqual(transferred['owners'],['appearance'])
+        self.assertEqual(json.loads(config.read_bytes()),document)
+        self.assertEqual(second.receipt.legacy_cleanup[0]['resources'],[])
+        self.assertEqual(engine._inverse([transferred],self.runner,self.context),([],[]))
+        self.assertEqual(icon.read_bytes(),original)
+
+    def test_owned_new_appearance_png_is_not_deleted_during_transfer(self):
+        icon=self.context.paths.data/'appearance/icons'/('b'*64+'.png');icon.parent.mkdir(parents=True)
+        icon.write_bytes(b'owned PNG')
+        asset=self.resource('file',icon,{'mode':0o600},self.value(exists=False),
+            self.value(base64.b64encode(b'owned PNG').decode()),('appearance',))
+        self.save(self.historical([asset]))
+        result=migration.migrate_to_omp(self.context,self.runner,dry_run=False)
+        self.assertEqual(icon.read_bytes(),b'owned PNG')
+        self.assertEqual(result.receipt.resources[0]['before'],self.value(exists=False))
+
     def test_feature_intent_goes_through_actual_lifecycle_builder(self):
         self.save(self.historical([], ('status',)))
         result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)

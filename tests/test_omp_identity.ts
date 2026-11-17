@@ -3,6 +3,7 @@ import { mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, statSync,
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { registerIdentity, readProcessIdentity, type IdentityContext, type Observation, type RecordValue } from '../runtime/omp_identity';
+import { spawnSync } from 'node:child_process';
 
 const terminal = 'AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE';
 function fixture() {
@@ -125,3 +126,119 @@ test('unavailable shared live process authority cannot publish a stale main iden
     expect(readdirSync(f.root)).not.toContain('registry');
   } finally { rmSync(f.root,{recursive:true,force:true}); }
 });
+
+test.skipIf(process.platform !== 'darwin')('installed default entrypoint publishes only to own private PTY and cleans failed publication', () => {
+  const driver = String.raw`
+import fcntl,json,os,pathlib,pty,select,shutil,subprocess,sys,tempfile,termios,threading
+from iterm2_utils.features.shell import identity_extension
+from iterm2_utils.models import Context,OmpProfile,Paths,Selection
+repo=pathlib.Path.cwd()
+rows=[]
+for scenario in ('own','mismatch','failure'):
+  with tempfile.TemporaryDirectory(prefix='installed-identity-') as tmp:
+    root=pathlib.Path(tmp).resolve()
+    paths=Paths(root,root/'.zshrc',root/'config',root/'cache',root/'data',root/'profiles',repo)
+    profile=OmpProfile('work',root/'.omp/profiles/work/agent')
+    context=Context(paths,{'python3':pathlib.Path(sys.executable)},{},frozenset(),{},{},omp_profile=profile)
+    selection=Selection(frozenset({'restore'}),frozenset(),'Default',profile)
+    edit=identity_extension(context,selection).edits[0]
+    edit.path.parent.mkdir(parents=True);edit.path.write_bytes(edit.after)
+    helper=paths.data/'current/terminal_identity.py';helper.parent.mkdir(parents=True)
+    shutil.copyfile(repo/'runtime/terminal_identity.py',helper)
+    master,slave=pty.openpty();other_master,other_slave=pty.openpty()
+    tty=os.ttyname(slave)
+    if scenario!='own':
+      destination=os.ttyname(other_slave) if scenario=='mismatch' else str(root/'missing-tty')
+      helper.write_text('import json,sys\nsys.path.insert(0,'+repr(str(repo))+')\n'
+        'from runtime.terminal_identity import process_start\n'
+        'if sys.argv[1]=="--process-start": print(json.dumps(process_start(int(sys.argv[2]))))\n'
+        'else: print(json.dumps('+repr(dict(terminal_id='AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE',
+          tab_id='tab',window_id='window',tty=destination))+'))\n')
+    (root/'iterm2.py').write_text('''import os
+from types import SimpleNamespace
+class Session:
+    session_id="AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE"
+    async def async_get_variable(self,key):
+        return os.environ["FIXTURE_TTY"] if key=="tty" else None
+async def close(): pass
+class Connection:
+    @staticmethod
+    async def async_create(): return SimpleNamespace(websocket=SimpleNamespace(close=close))
+async def async_get_app(connection):
+    return SimpleNamespace(terminal_windows=[SimpleNamespace(window_id="window",tabs=[
+        SimpleNamespace(tab_id="tab",sessions=[Session()])])])
+''')
+    child=root/'exercise.ts'
+    child.write_text('import identity from '+json.dumps(str(edit.path))+';\n'+'''
+import { readdirSync, readFileSync } from "node:fs";
+const handlers = new Map<string,Function>();
+identity({on:(event,handler)=>handlers.set(event,handler)});
+const ctx={mode:"tui",agent:{kind:"main"},sessionManager:{
+ getSessionId:()=>"actual-dialog",getSessionFile:()=>undefined,getCwd:()=>process.env.HOME!}};
+let failed=false;
+try { await handlers.get("session_start")!({},ctx); } catch { failed=true; }
+const directory=process.env.HOME+"/data/identity";
+const names=readdirSync(directory).filter(n=>n.endsWith(".json"));
+const records=names.map(n=>JSON.parse(readFileSync(directory+"/"+n,"utf8")));
+await handlers.get("session_shutdown")!({},ctx);
+console.log(JSON.stringify({failed,records,remaining:readdirSync(directory),pid:process.pid}));
+''')
+    env=dict(os.environ,HOME=str(root),ZDOTDIR=str(root),PYTHONPATH=str(root),
+      FIXTURE_TTY=tty,ITERM_SESSION_ID='w0t0p0:AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE',
+      TERM_SESSION_ID='AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE')
+    def controlling_tty():
+      os.setsid();fcntl.ioctl(0,termios.TIOCSCTTY,0)
+    child_process=None;reader=None;finished=threading.Event();captured=bytearray()
+    os.set_blocking(master,False)
+    def drain():
+      while not finished.is_set() or select.select([master],[],[],0)[0]:
+        if select.select([master],[],[],.05)[0]:
+          try:part=os.read(master,65536)
+          except BlockingIOError:continue
+          except OSError:break
+          if not part:break
+          captured.extend(part)
+    try:
+      child_process=subprocess.Popen([sys.argv[1],'--no-install','--no-env-file','--config=/dev/null',str(child)],
+        stdin=slave,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True,env=env,preexec_fn=controlling_tty,cwd=root)
+      (root/'child.pid').write_text(str(child_process.pid))
+      # Darwin exit can wait for tty output; consume the master during communicate.
+      reader=threading.Thread(target=drain);reader.start()
+      stdout,stderr=child_process.communicate(timeout=8)
+      if child_process.returncode:raise AssertionError((child_process.returncode,stdout,stderr))
+      finished.set();reader.join(timeout=1)
+      assert not reader.is_alive(),'fixture PTY reader did not finish'
+      rows.append(dict(scenario=scenario,result=json.loads(stdout),osc=captured.decode('utf8')))
+    finally:
+      if child_process is not None and child_process.poll() is None:
+        child_process.kill();child_process.wait(timeout=2)
+      finished.set()
+      if reader is not None:reader.join(timeout=1)
+      for fd in (master,slave,other_master,other_slave):
+        if fd is not None:os.close(fd)
+print(json.dumps(rows))
+`;
+  const result = spawnSync('python3', ['-c', driver, process.execPath],
+    { encoding:'utf8', timeout:28000, maxBuffer:65536, env:process.env });
+  expect(result.status).toBe(0);
+  if (result.status !== 0) throw new Error(result.stderr || String(result.error));
+  const rows = JSON.parse(result.stdout);
+  const own = rows[0];
+  expect(own.result.failed).toBe(false);
+  expect(own.result.records).toHaveLength(1);
+  expect(own.result.remaining).toEqual([]);
+  const match = /^\x1b\]1337;SetUserVar=iterm2_utils_omp=([A-Za-z0-9+/=]+)\x07$/.exec(own.osc);
+  if (!match) throw new Error('Fixture PTY bytes: '+JSON.stringify(own.osc));
+  expect(match).not.toBeNull();
+  const published = JSON.parse(Buffer.from(match![1], 'base64').toString());
+  expect(published).toEqual(own.result.records[0]);
+  expect(published).toMatchObject({ session_id:'actual-dialog', session_file:null, pid:own.result.pid,
+    terminal_id:terminal, tab_id:'tab', window_id:'window', profile:{name:'work'} });
+  expect(published.process_start).toMatch(/^darwin-bsd:[1-9][0-9]*:[0-9]{6}$/);
+  for (const row of rows.slice(1)) {
+    expect(row.result.failed).toBe(true);
+    expect(row.result.records).toEqual([]);
+    expect(row.result.remaining).toEqual([]);
+    expect(row.osc).toBe('');
+  }
+}, 30000);

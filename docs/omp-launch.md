@@ -10,9 +10,12 @@ sole-window inventory resolve it. There is no focus selection, interim selector
 flag or legacy launch alias.
 
 The selected iTerm profile must have no startup command. Preflight checks exact
-name/GUID; SDK creation rechecks them and the window. Creation supplies the full
-command, once. No terminal typing, restart, close, or retry is used. Shell launch
-needs neither omp, Bun, identity installation nor agent/config probing.
+name/GUID; SDK creation rechecks them and the original explicit/parent/sole-window
+selection basis. A moved parent or a new second window invalidates automatic
+selection even if the old window survives; there is no retarget or retry.
+This is a fresh recheck, not atomicity against later SDK/window changes.
+Creation supplies the full command, once. No terminal typing, restart, close,
+or retry is used. Shell launch needs neither omp, Bun, identity installation nor agent/config probing.
 It does not resolve or validate omp storage/profile environment. The internal
 `LaunchRequest.omp_profile` is `None` for shell and required for all omp modes;
 preflight rejects a shell request carrying agent storage rather than inventing
@@ -22,7 +25,8 @@ without a supplied selection resolves ambient profile variables.
 
 omp preflight inspects (never executes) the login-shell function/alias. A single
 `command omp [literal options] "$@"` passthrough is accepted; literal profile,
-model, provider, thinking and config options are preserved. Other wrappers,
+model, provider, thinking and config options and zero to two literal `--no-daemon`
+flags are preserved. Other wrappers,
 aliases, injected continue/resume/goal/approval/session-dir/mode/unknown options
 are refused, including unquoted tilde/glob/brace expansion; quoted literal
 characters remain literal. Preflight runs startup in the requested cwd.
@@ -32,8 +36,13 @@ PI_CODING_AGENT_DIR before exec; directory drift refuses launch. It retains its
 normal environment (including endpoint and
 credentials); no settings bodies are read. The selected absolute executable is
 used. An env-Bun shebang permits only that selected script's complete argv with
-the resolved Bun executable, never an arbitrary Bun job. Public selected source
-was inspected at the installed `@oh-my-pi/pi-coding-agent/dist/cli.js`: Bun
+the Bun executable resolved from the same verified login-shell environment.
+Capability probes use that environment too; the child rechecks its interpreter
+before exec. CLI PATH cannot substitute another Bun. Native binary headers are
+inspected as bounded bytes, not decoded as UTF-8. Exact literal-space-joined or
+safely tokenized shell-quoted complete argv observations are accepted; extra
+arguments, wrong paths and malformed quoted alternatives are refused, never evaluated.
+Public selected source was inspected at the installed `@oh-my-pi/pi-coding-agent/dist/cli.js`: Bun
 shebang, literal profile passthrough generator and repeated config parser. Version
 is informational, not pinned. Required CLI flags are checked per operation.
 
@@ -51,6 +60,9 @@ custom session storage or persistent config changes. Resume uses exact absolute
 following sections are task/context/instructions. Pass `artifact.path` as the
 LaunchRequest.handoff. Do not reuse paths or erase receipts. Callers include
 scope, first step, authorization and unresolved questions in task text.
+The complete encoded file, including JSON metadata and instructions, is limited
+to 65536 UTF-8 bytes, matching its private reader. Oversized tasks are rejected
+without truncating content or retaining an unusable task directory.
 
 Receiving omp writes the existing reference's five fields: request_id,
 thread_id (actual omp session ID), cwd (actual verified cwd), accepted_task,
@@ -69,7 +81,12 @@ LaunchRequest has window_id/profile/cwd/omp_profile/mode/handoff/resume plus
 request (`--allow-duplicate`), never an automated retry. Before resume, matching
 live candidates require independent SDK/user-variable identity and shared kernel
 process birth evidence. Moved addresses are returned as currently observed;
-incomplete live candidates block creation instead of silently duplicating.
+incomplete live candidates or uninstrumented panes block creation instead of
+silently duplicating. An empty/missing/unavailable registry is not negative
+evidence. Independently observed live bindings may identify an already-open
+dialog or a different dialog; unavailable identity remains genuine uncertainty.
+No unrelated feature installation is forced; new/handoff/shell remain independent,
+and duplicate creation still requires explicit `--allow-duplicate` authorization.
 
 Exit 2 / blocked precedes creation. Exit 3 / created_unverified or unknown keeps
 all known SDK IDs without filling missing IDs from inventory. Exit 0 / launched
@@ -80,6 +97,8 @@ success is not history success: history=unverified means **resume command launch
 history restoration unconfirmed**. Ack=unconfirmed means **task receipt unconfirmed**.
 No raw argv, prompt, terminal screen, settings or private subprocess exceptions
 are serialized. The returned session_id is the terminal ID, not omp dialog ID.
+Plain text output includes all four proof states and known addresses just as
+JSON does; command success retains its independent exit semantics.
 Identity transport uses the contract in omp-identity.md, never a registry echo.
 
 External reads are at most 10 seconds, SDK create plus launch observations share

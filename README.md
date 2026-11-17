@@ -75,6 +75,9 @@ OSC/banner/keyboard/effective settings нельзя считать провер�
 успешной записи или API connectivity. Нет fallback на hooks/daemon. MCP optional:
 `uvx --with 'mcp<2' mcp-server-iterm2==0.1.1`, серверный Python >=3.12 отдельно.
 Другие MCP servers и настройки/model/credentials/approval mode сохраняются.
+Неизвестный OSC receiver остаётся `pending_ui`: выбранные native настройки можно
+подготовить, но это не подтверждает доставку. `it2 --help` не является контрактом
+рекламы OSC и не запускается для такой проверки.
 
 ## Открытие одной вкладки
 
@@ -171,6 +174,8 @@ MCP server addresses и файлы навыков при совпадении с
 MCP registration без receipted storage address — **conflict**, не разрешение угадать
 CODEX_HOME или удалить похожую запись. Общие пригодные appearance/launcher/shell
 ресурсы передаются с прежними GUID и исходными inverses, без пересоздания.
+Owned PNG в `data/appearance/icons` передаются вместе с appearance rules,
+с исходными inverses; изменённый пользователем файл сохраняет retryable conflict.
 
 Ранее отключённые внешние writers по умолчанию **остаются отключёнными**:
 исходное значение сохраняется в historical cleanup, а не в обычном uninstall.

@@ -51,6 +51,15 @@ async def _operate(request, emit):
         window = app.get_window_by_id(request['window_id'])
         if window is None or window.window_id != request['window_id']:
             return 'blocked'
+        basis,parent=request.get('window_basis',('explicit',''))
+        if basis=='parent':
+            matches=[w.window_id for w in app.terminal_windows for t in w.tabs for s in t.sessions
+                     if s.session_id.lower()==parent.lower()]
+            if matches != [request['window_id']]:return 'blocked'
+        elif basis=='sole':
+            if [w.window_id for w in app.terminal_windows] != [request['window_id']]:return 'blocked'
+        elif basis!='explicit':
+            return 'blocked'
         deadline = time.monotonic() + _CREATE_SECONDS
         # Publish uncertainty before the one possible mutation; cancellation is no rollback.
         emit({'phase': 'create', 'window_id': _identifier(window.window_id), 'deadline': deadline})
@@ -85,7 +94,8 @@ def _result(status, window_id=None, tab_id=None, session_id=None, deadline=None)
     return LaunchCreation(status, window_id, tab_id, session_id, deadline, findings)
 
 
-async def create_tab(window_id: str, profile: str, profile_guid: str, command: str) -> LaunchCreation:
+async def create_tab(window_id: str, profile: str, profile_guid: str, command: str, *,
+                     window_basis=('explicit','')) -> LaunchCreation:
     """Bound SDK auth in a same-Python helper; no retries or terminal cleanup."""
     child = None
     status = 'blocked'
@@ -97,7 +107,7 @@ async def create_tab(window_id: str, profile: str, profile_guid: str, command: s
                 sys.executable, '-m', 'iterm2_utils.launch_api',
                 stdin=asyncio.subprocess.PIPE, stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.DEVNULL, limit=4096)
-            child.stdin.write(json.dumps(dict(window_id=window_id, profile=profile,
+            child.stdin.write(json.dumps(dict(window_id=window_id, profile=profile,window_basis=window_basis,
                                              profile_guid=profile_guid, command=command)).encode()+b'\n')
             await child.stdin.drain()
 

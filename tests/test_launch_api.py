@@ -190,6 +190,37 @@ class LaunchAPITests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(status, 'blocked')
         self.assertEqual(self.calls('create'), [])
 
+    async def test_automatic_window_basis_is_rechecked_before_the_single_create(self):
+        for basis,scenario,allowed in ((('parent','S-parent'),'stable',True),
+                (('parent','S-parent'),'moved',False),(('parent','S-parent'),'missing',False),
+                (('sole',''),'stable',True),(('sole',''),'second-window',False),
+                (('explicit',''),'second-window',True)):
+            with self.subTest(basis=basis,scenario=scenario):
+                creates=[];frames=[]
+                parent=SimpleNamespace(session_id='S-parent')
+                old=SimpleNamespace(window_id='W1',tabs=[SimpleNamespace(sessions=[parent])])
+                other=SimpleNamespace(window_id='W2',tabs=[SimpleNamespace(sessions=[])])
+                if scenario=='moved':
+                    old.tabs[0].sessions=[];other.tabs[0].sessions=[parent]
+                if scenario=='missing':old.tabs[0].sessions=[]
+                async def create(**kwargs):
+                    creates.append(kwargs)
+                    return SimpleNamespace(tab_id='T',all_sessions=[SimpleNamespace(session_id='S')])
+                old.async_create_tab=create
+                windows=[old] if scenario in {'stable','missing'} else [old,other]
+                app=SimpleNamespace(terminal_windows=windows,get_window_by_id=lambda wid:old if wid=='W1' else other)
+                async def connect():return SimpleNamespace(websocket=SimpleNamespace(close=asyncio.sleep))
+                async def get_app(connection):return app
+                async def profiles(connection):return [SimpleNamespace(name='Omp',guid='G')]
+                sdk=SimpleNamespace(Connection=SimpleNamespace(async_create=connect),async_get_app=get_app,
+                                    Profile=SimpleNamespace(async_get=profiles))
+                with patch.dict(sys.modules,{'iterm2':sdk}):
+                    status=await launch_api._operate(dict(window_id='W1',profile='Omp',profile_guid='G',
+                        command='complete-command',window_basis=basis),frames.append)
+                self.assertEqual(status,'created_unverified' if allowed else 'blocked')
+                self.assertEqual(len(creates),int(allowed))
+                if not allowed:self.assertFalse(any(frame.get('phase')=='create' for frame in frames))
+
     async def test_worker_rejects_malformed_oversized_or_repeated_progress(self):
         cases = ["print('not json')", "print('x'*5000)",
                  "print('{\"phase\":\"connect\"}'); print('{\"phase\":\"connect\"}')"]

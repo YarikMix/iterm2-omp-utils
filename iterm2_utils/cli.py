@@ -48,7 +48,7 @@ def _emit(args, output):
         # JSON escaping keeps terminal control characters inert in text output too.
         print(json.dumps(output.get('status', output['mode']))+
               (' '+ ' '.join(key+'='+json.dumps(output.get(key))
-               for key in ('window_id','tab_id','session_id','profile')) if args.command=='launch-omp' else ''))
+               for key in ('window_id','tab_id','session_id','profile','command','identity','history','ack')) if args.command=='launch-omp' else ''))
         for finding in output.get('findings', []):
             print(json.dumps(finding['message']))
     return _exit([Finding(**f) for f in output.get('findings', [])])
@@ -214,7 +214,7 @@ def main(argv=None):
                     resume_key=(args.resume_key if 'resume' in shortcuts else receipt.selection.resume_key),
                     notify_errors=(args.notify_errors if 'notifications' in features else receipt.selection.notify_errors))
             from .features.project_launcher import prepare
-            prepared = plan(prepare(context,choice,runner),choice)
+            prepared = plan(prepare(context,choice,runner),choice,runner=runner)
             output = dict(mode='read_only_preview',selection=_selection(choice),
                           findings=[asdict(f) for f in prepared.changes.findings],
                           ui=[asdict(s) for s in prepared.changes.ui],fingerprint=prepared.fingerprint)

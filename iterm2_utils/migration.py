@@ -114,6 +114,9 @@ def _compatible_transfer(resource, context):
         return (features <= {'shell','appearance'} and
                 not any(word in body.lower() for word in ('codex','claude','restore','hook.py')))
     if resource['kind'] == 'file':
+        # The transferred appearance rules still reference these receipt-owned assets.
+        if features <= {'appearance'} and target.parent == context.paths.data/'appearance/icons' and target.suffix == '.png':
+            return True
         return target in {context.paths.config/'appearance.json',
                           context.paths.config/'iterm2-utils-project-launcher.json',
                           context.paths.profiles/'iterm2-utils-project-launcher.json'}

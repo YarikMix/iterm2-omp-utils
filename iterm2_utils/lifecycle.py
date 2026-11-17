@@ -92,7 +92,7 @@ def install(context, selection, runner, *, dry_run=False):
                                         else working.selection.notify_errors))
         from .features.project_launcher import prepare
         prepared_context = prepare(context, chosen, runner)
-        prepared = plan(prepared_context, chosen)
+        prepared = plan(prepared_context, chosen, runner=runner)
         prepared.changes.edits = [edit for edit in prepared.changes.edits
             if edit.owner in {feature, 'omp:'+feature} or
             feature in prepared.changes.consumers.get(edit.owner, ())]
@@ -187,7 +187,7 @@ def uninstall(context, owners, runner, *, dry_run=False):
         for owner in resource['owners'] if owner.startswith('shared:')}
     from .features.project_launcher import prepare
     prepared_context = prepare(context, selection, runner)
-    prepared = plan(prepared_context, selection) if selection.features else Plan(selection, ChangeSet([], [], []), 'uninstall')
+    prepared = plan(prepared_context, selection, runner=runner) if selection.features else Plan(selection, ChangeSet([], [], []), 'uninstall')
     prepared.changes.edits = [edit for edit in prepared.changes.edits if edit.owner in affected_shared]
     retained = {owner: set() for owner in affected_shared}
     for resource in receipt.resources:

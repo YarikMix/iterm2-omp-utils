@@ -83,9 +83,9 @@ def discover(paths: Paths, runner: Runner, *, features: frozenset[str] = frozens
             continue
         binary = Path(found).absolute()
         output = _probe(runner,binary,['--version'])
-        if not output:
-            continue
-        executables[name],versions[name] = binary,_version(output)
+        executables[name] = binary
+        if output and (version := _version(output)) != 'unknown':
+            versions[name] = version
         if name=='omp':
             help_output = _probe(runner,binary,['--help'])
             if re.search(r'(?<![\w-])--resume(?![\w-])',help_output):
@@ -97,20 +97,8 @@ def discover(paths: Paths, runner: Runner, *, features: frozenset[str] = frozens
     if app:
         executables['iterm2'] = app
         versions['iterm2'] = _version(str(info.get('CFBundleShortVersionString','')))
-        if features & {'status','notifications'}:
-            it2 = app/'Contents/Resources/utilities/it2'
-            if it2.is_file() and os.access(it2,os.X_OK) and not it2.is_symlink():
-                output = _probe(runner,it2,['--help'])
-                if output:
-                    executables['it2'] = it2
-                if 'get-status' in output:
-                    capabilities.add('iterm2:session-status')
-                # API availability or a version string does not prove an OSC
-                # receiver. Only explicit advertised protocol support is credited;
-                # otherwise the feature stays unverified, without hook fallback.
-                for code in ('7501','9'):
-                    if re.search(r'\bOSC[\s_-]+'+code+r'\b',output,re.I):
-                        capabilities.add('iterm2:osc'+code)
+        # it2 root help has no OSC advertisement contract and may read private
+        # configuration. Native receiver delivery remains explicit pending UI.
     preferences,profiles = {},{}
     if app and features & {'clipboard','shortcuts','appearance','project-launcher'}:
         try:

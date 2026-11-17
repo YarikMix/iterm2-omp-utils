@@ -102,7 +102,10 @@ def storage(profile: OmpProfile, kind: str) -> Path:
 
 def _bytes(path: Path) -> bytes | None:
     try:
-        with path.open('rb') as source:
+        fd=os.open(path,os.O_RDONLY|os.O_NONBLOCK)
+        with os.fdopen(fd,'rb') as source:
+            if not stat.S_ISREG(os.fstat(source.fileno()).st_mode):
+                raise ValueError('Native omp configuration is not a regular file')
             raw = source.read(LIMIT + 1)
     except FileNotFoundError:
         return None
@@ -220,7 +223,7 @@ def _binding_guards(profile, action, value, runner):
     return sources
 
 
-def set_address(profile, kind, key, value, runner, *, expected, path=None):
+def set_address(profile, kind, key, value, runner, *, expected, path=None, restoring=False):
     pointer = _pointer(kind, key)
     _native_value(kind, key, value); _native_value(kind, key, expected)
     selected = storage(profile, kind).resolve()
@@ -229,7 +232,7 @@ def set_address(profile, kind, key, value, runner, *, expected, path=None):
     raw = _bytes(selected)
     if not same(_native_snapshot(raw, kind, key, runner), expected):
         raise ValueError('Concurrent native configuration edit')
-    guards = _binding_guards(profile, key, value, runner) if kind == 'binding' else []
+    guards = _binding_guards(profile, key, value, runner) if kind == 'binding' and not restoring else []
     result = transform(raw, pointer, runner, next=value, expected=expected, op='patch')['raw'].encode()
     if result == raw:
         return

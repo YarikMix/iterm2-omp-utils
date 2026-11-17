@@ -10,13 +10,19 @@ foreign neighbours under file/address CAS and the existing transaction journal.
 Equivalent foreign settings may be reused without claiming ownership. Named
 profiles remain distinct; storage readback is not an effective project/provider/
 launch-overlay configuration probe. No native `config get/list` is executed.
+Native YAML/MCP storage reads reject non-regular files through nonblocking open
+and descriptor type checks; a FIFO is preserved and cannot hang planning.
+The lifecycle's supplied Runner also covers native parser preparation.
+New binding intent retains collision checks; a receipt-guarded inverse restores
+the actual original chord even when that original already had a collision.
 
-Version strings are diagnostic, never exact-version gates. Selected capability
-discovery uses bounded help-only probes. Explicit OSC support advertised by the
-selected iTerm2 utility is evidence of that surface; ordinary status API support,
-an installed historical integration or an iTerm2 version alone is not evidence
-of its OSC 7501 receiver. Missing evidence blocks only the affected optional
-feature, with no blind hook fallback. Live receiver evidence remains unverified.
+Version strings are diagnostic, never exact-version gates. Native setting
+names/values follow omp's public settings/runtime contract. `it2 --help` has
+no OSC advertisement contract and may read private configuration, so discovery
+does not execute it or infer receiver support from help/version/API presence.
+Selected native configuration can be prepared with receiver delivery explicitly
+pending; this does not advertise OSC support or install a hook fallback.
+Missing required executable/parser capabilities still block only their consumers.
 
 `native_status` stays pending after storage writes or a connectivity probe.
 `doctor --live` may read status for an explicit terminal UUID; this does not

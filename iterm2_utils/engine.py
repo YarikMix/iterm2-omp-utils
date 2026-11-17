@@ -239,7 +239,7 @@ def _file_value(r,raw):
     return _lookup(parsed,loc['pointer'])
 
 
-def _set(r,value,runner,context, *, expected):
+def _set(r,value,runner,context, *, expected, restoring=False):
     if not _same(_read(r,runner,context),expected):
         raise ValueError('Concurrent resource edit')
     kind,loc = r['kind'],r['locator']
@@ -283,7 +283,8 @@ def _set(r,value,runner,context, *, expected):
         raise ValueError('Registrations require receipt-authorized historical migration')
     if kind in {'omp_setting','omp_binding'}:
         profile = OmpProfile(loc['profile'],Path(loc['agent_dir']))
-        omp.set_address(profile,kind.removeprefix('omp_'),loc['key'],value,runner,expected=expected,path=r['target'])
+        omp.set_address(profile,kind.removeprefix('omp_'),loc['key'],value,runner,expected=expected,
+                        path=r['target'],restoring=restoring)
         return
     path = Path(r['target'])
     raw = _bytes(path)
@@ -375,7 +376,7 @@ def _inverse(records,runner,context):
                 continue
             if not _same(current,r['installed']):
                 raise ValueError('Concurrent change')
-            _set(r,r['before'],runner,context,expected=r['installed'])
+            _set(r,r['before'],runner,context,expected=r['installed'],restoring=True)
             if not _same(_read(r,runner,context),r['before']):
                 raise ValueError('Unverified inverse')
         except Exception:
@@ -422,7 +423,7 @@ def _recover(context,runner):
     return []
 
 
-def _transaction(changes,result,context,runner, *, intent_receipt=None):
+def _transaction(changes,result,context,runner, *, intent_receipt=None, restoring=frozenset()):
     journal = context.paths.data/'journal'
     state.private_dir(journal)
     intent = copy.deepcopy(intent_receipt) if intent_receipt is not None else _empty(result.selection)
@@ -439,7 +440,7 @@ def _transaction(changes,result,context,runner, *, intent_receipt=None):
             # Recheck after durable intent/backup, immediately before mutation.
             if not _same(_read(r,runner,context),r['before']):
                 raise ValueError('Concurrent change')
-            _set(r,r['installed'],runner,context,expected=r['before'])
+            _set(r,r['installed'],runner,context,expected=r['before'],restoring=_identity(r) in restoring)
             if not _same(_read(r,runner,context),r['installed']):
                 raise ValueError('Write verification failed')
         state.save(journal/'result.json',result)
@@ -558,6 +559,7 @@ def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozens
                     if not _same(current,r['installed']):
                         resources.append(r)
                         changes.append(r)
+            restoring = set()
             if remove_owners:
                 retained = []
                 for resource in resources:
@@ -575,6 +577,7 @@ def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozens
                         findings.append(_finding('uninstall_changed','User-changed value was preserved; ownership remains unresolved.',resource['owners'][0]))
                     else:
                         changes.append(dict(resource,before=resource['installed'],installed=resource['before']))
+                        restoring.add(_identity(resource))
                 resources = retained
             selection = plan.selection
             if remove_owners:
@@ -589,7 +592,7 @@ def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozens
                 if step.feature in selection.features and step not in pending_ui:
                     pending_ui.append(step)
             receipt = Receipt(state.VERSION,selection,resources,pending_ui,copy.deepcopy(previous.legacy_cleanup))
-            ok,failed = _transaction(changes,receipt,context,runner)
+            ok,failed = _transaction(changes,receipt,context,runner,restoring=restoring)
             return Outcome(receipt if ok else previous,findings+failed)
     except Exception:
         return Outcome(empty,findings+[_finding('apply_conflict','Configuration or ownership could not be verified; no installation was committed.')])
@@ -628,7 +631,7 @@ def revert(receipt: Receipt, context: Context, runner: Runner, owners: frozenset
                     continue
                 changes.append(dict(r,before=r['installed'],installed=r['before']))
             result = Receipt(state.VERSION,receipt.selection,remaining,receipt.pending_ui,copy.deepcopy(receipt.legacy_cleanup))
-            ok,failed = _transaction(changes,result,context,runner)
+            ok,failed = _transaction(changes,result,context,runner,restoring={_identity(r) for r in changes})
             return Outcome(result if ok else receipt,findings+failed)
     except Exception:
         return Outcome(receipt,findings+[_finding('ownership_unavailable','Valid current ownership is required before uninstalling.')])

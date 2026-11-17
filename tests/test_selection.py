@@ -137,7 +137,7 @@ class CurrentLifecycleTests(unittest.TestCase):
             first.write_bytes(b'original')
             second.write_bytes(b'user change')
             selection = Selection(frozenset({'shell','clipboard'}),frozenset(),'Default',context.omp_profile)
-            def builder(context, chosen):
+            def builder(context, chosen, *, runner=None):
                 edits = [FileEdit(first,first.read_bytes(),b'installed',0o600,'shell')]
                 if 'clipboard' in chosen.features:
                     edits.append(FileEdit(second,b'expected',b'installed',0o600,'clipboard'))
@@ -168,7 +168,7 @@ class CurrentLifecycleTests(unittest.TestCase):
                 before={'exists':True,'value':0},installed={'exists':True,'value':1},owners=['shell'],version='1')
             journal = context.paths.data/'journal'
             state.save(journal/'intent.json',Receipt('2',selection,[resource],[]))
-            def builder(context, chosen):
+            def builder(context, chosen, *, runner=None):
                 import json
                 self.assertEqual(json.loads(target.read_bytes()),{'ours':0,'foreign':7})
                 return Plan(chosen,ChangeSet([FileEdit(context.paths.home/'new',None,b'installed',0o600,'shell')],[],[]),'fixture')
@@ -190,7 +190,7 @@ class CurrentLifecycleTests(unittest.TestCase):
             changes = ChangeSet([FileEdit(target,None,b'shared',0o600,'shared:runtime')],[],[],
                                 {'shared:runtime':frozenset({'shell','status'})})
             initial = engine.apply(Plan(selection,changes,'fixture'),context,None)
-            with patch.object(lifecycle, 'plan', side_effect=lambda context, chosen: Plan(chosen,ChangeSet([],[],[]),'fixture')):
+            with patch.object(lifecycle, 'plan', side_effect=lambda context, chosen, **kwargs: Plan(chosen,ChangeSet([],[],[]),'fixture')):
                 result = lifecycle.uninstall(context,frozenset({'shell'}),None)
             self.assertTrue(any(f.code=='recomposition_unavailable' for f in result.findings))
             self.assertEqual(target.read_bytes(),b'shared')
@@ -216,7 +216,7 @@ class CurrentLifecycleTests(unittest.TestCase):
                     self.assertFalse(initial.findings)
                     receipt_path = context.paths.data/'receipt.json'
                     committed = receipt_path.read_bytes()
-                    def incomplete(context, chosen):
+                    def incomplete(context, chosen, *, runner=None):
                         edits = [FileEdit(exclusive,b'shell v1',b'shell v2',0o600,'shell')]
                         consumers = {}
                         if emit_shared:
@@ -252,7 +252,7 @@ class CurrentLifecycleTests(unittest.TestCase):
             initial = engine.apply(Plan(selection,ChangeSet([
                 FileEdit(target,None,b'both v1',0o600,'shared:runtime')],[],[],consumers),'initial'),context,None)
             self.assertFalse(initial.findings)
-            def complete(context, chosen):
+            def complete(context, chosen, *, runner=None):
                 return Plan(chosen,ChangeSet([
                     FileEdit(target,b'both v1',b'both v2',0o600,'shared:runtime')],[],[],consumers),'complete')
             requested = Selection(frozenset({'shell'}),frozenset(),'Default',context.omp_profile)
@@ -302,7 +302,7 @@ class CurrentLifecycleTests(unittest.TestCase):
             context = self.context(root)
             profile = OmpProfile('work',context.paths.home/'.omp/profiles/work/agent')
             selection = Selection(frozenset({'shell'}),frozenset(),'Default',profile)
-            def builder(context, chosen):
+            def builder(context, chosen, *, runner=None):
                 self.assertEqual(context.omp_profile,profile)
                 return Plan(chosen,ChangeSet([FileEdit(context.paths.home/'shell',None,b'installed',0o600,'shell')],[],[]),'fixture')
             with patch.object(lifecycle,'plan',side_effect=builder):

@@ -4,6 +4,7 @@ import json
 import re
 from dataclasses import replace
 from . import state
+from .commands import Runner
 from .models import ChangeSet, Context, Finding, Plan, Selection
 
 FEATURES = frozenset({'clipboard', 'status', 'notifications', 'restore', 'mcp', 'shell', 'shortcuts', 'appearance', 'project-launcher'})
@@ -70,18 +71,22 @@ def validate(selection: Selection, context: Context) -> list[Finding]:
             if 'python:iterm2' not in context.capabilities:
                 add(feature,'python_sdk','missing_dependency','The selected Python must import the iTerm2 SDK.')
                 continue
-        capability = {'status':'iterm2:osc7501','notifications':'iterm2:osc9','restore':'omp:resume'}.get(feature)
+        capability = 'omp:resume' if feature=='restore' else None
         if capability and capability not in context.capabilities:
             add(feature,'native_capability','unavailable','Required native surface is unverified: '+capability+'. No hook fallback is installed.')
             continue
+        receiver = {'status':'iterm2:osc7501','notifications':'iterm2:osc9'}.get(feature)
+        if receiver and receiver not in context.capabilities:
+            add(feature,'native_receiver','pending_ui','Native settings can be prepared; actual OSC receiver delivery remains unverified.')
         add(feature,'preview','ready',DESCRIPTIONS[feature])
     return findings
 
 
-def plan(context: Context, selection: Selection) -> Plan:
+def plan(context: Context, selection: Selection, *, runner=None) -> Plan:
     if not isinstance(selection,Selection):
         raise ValueError('Historical feature selections require explicit owned-resource migration')
     from .features import profiles, shell, status, notifications, restore, mcp, appearance, project_launcher
+    if runner is None:runner = Runner()
     findings = validate(selection,context)
     changes = ChangeSet([],[],findings)
     blocked = {f.feature for f in findings if f.state in BLOCKING}
@@ -101,7 +106,8 @@ def plan(context: Context, selection: Selection) -> Plan:
         if not available & features:
             continue
         try:
-            built = builder(context,effective)
+            built = (builder(context,effective,runner=runner) if builder in {
+                profiles.build,status.build,notifications.build} else builder(context,effective))
             changes.edits.extend(built.edits)
             changes.ui.extend(built.ui)
             changes.findings.extend(built.findings)

@@ -65,8 +65,7 @@ class LaunchChecksTests(unittest.TestCase):
             root = Path(tmp); script = root/'cli.js'; script.write_text('#!/usr/bin/env bun\n// @bun\n')
             bun = root/'bun'; bun.write_text('binary'); bun.chmod(0o700)
             script.chmod(0o700)
-            with patch('iterm2_utils.launch_checks.shutil.which', return_value=str(bun)):
-                prefixes = executable_prefixes(script)
+            prefixes = executable_prefixes(script,{'PATH':str(root)})
             self.assertIn((str(bun), str(script)), prefixes)
             self.assertNotIn(('bun',), prefixes)
 
@@ -95,3 +94,78 @@ class LaunchChecksTests(unittest.TestCase):
             with patch('iterm2_utils.launch_checks.platform.system',return_value='Darwin'), patch('iterm2_utils.launch_checks._iterm',return_value=(root,[])), patch('iterm2_utils.launch_checks.Terminal',return_value=terminal), patch('iterm2_utils.launch_checks.shutil.which',return_value='/bin/zsh'):
                 inspection, findings=inspect_launch(SimpleNamespace(),req,runner)
             self.assertEqual(findings,[]); self.assertIsNone(inspection.identity)
+
+    def test_native_macho_header_is_not_decoded_as_text(self):
+        with TemporaryDirectory() as tmp:
+            binary=Path(tmp)/'omp';binary.write_bytes(b'\xcf\xfa\xed\xfe'+b'\x00'*300);binary.chmod(0o700)
+            self.assertEqual(executable_prefixes(binary,{}),((str(binary),),))
+            binary.write_bytes(b'#!/bin/sh\n')
+            with self.assertRaises(ValueError):executable_prefixes(binary,{})
+
+    def test_wrapper_accepts_only_zero_to_two_literal_no_daemon_flags(self):
+        for count in range(3):
+            body='command omp '+'--no-daemon '*count+'--model provider/model "$@"'
+            self.assertEqual(wrapper_arguments(body),['--no-daemon']*count+['--model','provider/model'])
+        for flags in ('--no-daemon '*3,'--no-daemon=true','--no-daemon $VALUE'):
+            with self.subTest(flags=flags),self.assertRaises(ValueError):
+                wrapper_arguments('command omp '+flags+' "$@"')
+
+    def test_login_shell_selects_bun_and_capability_environment_not_cli_path(self):
+        from types import SimpleNamespace
+        from iterm2_utils.commands import Runner
+        for cli_bun in (False,True):
+            with self.subTest(cli_bun=cli_bun),TemporaryDirectory() as tmp:
+                root=Path(tmp).resolve();selected_bin=root/'login-bin';selected_bin.mkdir()
+                caller_bin=root/'cli-bin';caller_bin.mkdir()
+                omp=selected_bin/'omp';omp.write_text('#!/usr/bin/env bun\n');omp.chmod(0o700)
+                bun=selected_bin/'bun'
+                bun.write_text('#!/bin/sh\n[ "$KEEP_ENDPOINT" = fixture-endpoint ] || exit 1\n'
+                               'case "$2" in --help) echo "--cwd --profile --config --resume";; --version) exit 1;; *) exit 1;; esac\n')
+                bun.chmod(0o700)
+                if cli_bun:
+                    wrong=caller_bin/'bun';wrong.write_text('#!/bin/sh\nexit 88\n');wrong.chmod(0o700)
+                (root/'.zshenv').write_text('unsetopt GLOBAL_RCS\n')
+                (root/'.zshrc').write_text('export PATH='+str(selected_bin)+':/usr/bin:/bin\n'
+                    'export KEEP_ENDPOINT=fixture-endpoint\n'
+                    'omp() { command omp --no-daemon --no-daemon --model provider/model "$@"; }\n')
+                env=dict(HOME=str(root),ZDOTDIR=str(root),PATH=str(caller_bin)+':/usr/bin:/bin',
+                         PI_CONFIG_DIR='.omp',PYTHONNOUSERSITE='1',PYTHONDONTWRITEBYTECODE='1')
+                request=LaunchRequest('W','Omp',root,OmpProfile('work',root/'.omp/profiles/work/agent'),'new')
+                terminal=SimpleNamespace(select_window=lambda *a:'W',profiles=lambda:[dict(name='Omp',guid='G')],
+                    profile=lambda *a:dict(name='Omp',guid='G',command=''))
+                with patch.dict(os.environ,env,clear=True),patch('iterm2_utils.launch_checks.platform.system',return_value='Darwin'), \
+                        patch('iterm2_utils.launch_checks._iterm',return_value=(root,{})), \
+                        patch('iterm2_utils.launch_checks.Terminal',return_value=terminal):
+                    inspection,findings=inspect_launch(SimpleNamespace(home=root),request,Runner())
+                self.assertEqual(findings,[])
+                self.assertEqual(inspection.identity.arguments,('--no-daemon','--no-daemon','--model','provider/model'))
+                self.assertIn((str(bun),str(omp)),inspection.identity.prefixes)
+                self.assertNotIn((str(caller_bin/'bun'),str(omp)),inspection.identity.prefixes)
+                self.assertEqual(inspection.identity.version,'')
+                from iterm2_utils.launch import build_command
+                command=build_command(request,inspection,[str(omp),'--help'])
+                import shlex
+                result=subprocess.run(shlex.split(command),env=env,cwd=root,capture_output=True,text=True,timeout=10)
+                self.assertEqual(result.returncode,0,result.stderr)
+                (root/'.zshrc').write_text('export PATH='+str(caller_bin)+':'+str(selected_bin)+':/usr/bin:/bin\n'
+                    'export KEEP_ENDPOINT=fixture-endpoint\n'
+                    'omp() { command omp --no-daemon --no-daemon --model provider/model "$@"; }\n')
+                wrong=caller_bin/'bun';wrong.write_text('#!/bin/sh\nexit 88\n');wrong.chmod(0o700)
+                result=subprocess.run(shlex.split(command),env=env,cwd=root,capture_output=True,text=True,timeout=10)
+                self.assertEqual(result.returncode,1,'interpreter drift must refuse before executing the alternate Bun')
+
+    def test_preflight_keeps_parent_and_sole_selection_basis(self):
+        from types import SimpleNamespace
+        for env,basis in (({'ITERM_SESSION_ID':'w0t0p0:PARENT'},('parent','PARENT')),({},('sole',''))):
+            with self.subTest(basis=basis),TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                request=LaunchRequest('','Shell',root,None,'shell')
+                terminal=SimpleNamespace(select_window=lambda *a:'W',profiles=lambda:[dict(name='Shell',guid='G')],
+                    profile=lambda *a:dict(name='Shell',guid='G',command=''))
+                with patch.dict(os.environ,env,clear=True),patch('iterm2_utils.launch_checks.platform.system',return_value='Darwin'), \
+                        patch('iterm2_utils.launch_checks._iterm',return_value=(root,{})), \
+                        patch('iterm2_utils.launch_checks.shutil.which',return_value='/bin/zsh'), \
+                        patch('iterm2_utils.launch_checks.Terminal',return_value=terminal):
+                    inspection,findings=inspect_launch(SimpleNamespace(),request,SimpleNamespace())
+                self.assertEqual(findings,[])
+                self.assertEqual(inspection.window_basis,basis)

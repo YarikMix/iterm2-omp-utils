@@ -4,7 +4,6 @@ import json
 import uuid
 import re
 from .. import state
-from ..commands import Runner
 from ..config import omp
 from ..models import ChangeSet, Context, FileEdit, PreferenceEdit, Finding, Selection, UiStep
 
@@ -48,7 +47,7 @@ def resume_key_conflict(value):
     return chord is None or chord in {_chord(key) for key in RESERVED_KEYS}
 
 
-def build(context: Context, selection: Selection) -> ChangeSet:
+def build(context: Context, selection: Selection, *, runner) -> ChangeSet:
     changes = ChangeSet([], [], [])
     consumers = selection.features & {'clipboard', 'shortcuts'}
     if not consumers:
@@ -87,7 +86,6 @@ def build(context: Context, selection: Selection) -> ChangeSet:
     after = before if before is not None and json.loads(before)==document else (
         json.dumps(document,sort_keys=True,indent=2)+'\n').encode()
     changes.edits.append(FileEdit(path,before,after,0o600,OWNER))
-    runner = Runner()
     for shortcut, action, chord, defaults in (
             ('alt-enter','tui.input.newLine','ctrl+j',['shift+enter','ctrl+j']),
             ('ctrl-v-ru','app.clipboard.pasteImage','ctrl+v',['ctrl+v'])):
@@ -103,7 +101,7 @@ def build(context: Context, selection: Selection) -> ChangeSet:
     changes.consumers[OWNER] = frozenset(consumers)
     if 'resume' in selection.shortcuts:
         changes.edits.append(omp.binding_edit(selection.omp_profile,'app.session.resume',
-            {'exists':True,'value':selection.resume_key},Runner(),owner='shortcuts'))
+            {'exists':True,'value':selection.resume_key},runner,owner='shortcuts'))
     if 'clipboard' in consumers:
         preferences = context.preferences.get(DOMAIN,{})
         changes.edits.append(PreferenceEdit(DOMAIN,'CopySelection',preferences.get('CopySelection'),False,'clipboard'))

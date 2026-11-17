@@ -7,7 +7,7 @@ from tests.native_features_support import NativeFixture
 
 class StatusFeatureTests(NativeFixture):
     def test_status_only_enables_native_program_status(self):
-        changes = status.build(self.context, self.selection('status'))
+        changes = status.build(self.context, self.selection('status'),runner=self.runner)
         self.assertEqual([(e.kind,e.key,e.after) for e in changes.edits],
                          [('setting','terminal.programStatus',{'exists':True,'value':True})])
         self.assertTrue(all(isinstance(e,OmpEdit) for e in changes.edits))
@@ -17,8 +17,8 @@ class StatusFeatureTests(NativeFixture):
         path = self.profile.agent_dir/'config.yml'
         path.write_text('model: preserve\nterminal:\n  programStatus: false\n  foreign: keep\n')
         selection = self.selection('status','notifications')
-        changes = status.build(self.context,selection)
-        other = notifications.build(self.context,selection)
+        changes = status.build(self.context,selection,runner=self.runner)
+        other = notifications.build(self.context,selection,runner=self.runner)
         changes.edits.extend(other.edits)
         changes.ui.extend(other.ui)
         result = engine.apply(Plan(selection,changes,'native'),self.context,self.runner)
@@ -41,8 +41,10 @@ class StatusFeatureTests(NativeFixture):
         self.assertEqual(result.receipt.resources,[])
         self.assertEqual(result.receipt.selection.features,{'status'})
 
-    def test_missing_receiver_blocks_only_status_checkpoint(self):
+    def test_unknown_receiver_keeps_native_status_configuration_pending_not_claimed_supported(self):
         self.context.capabilities -= {'iterm2:osc7501'}
         result = lifecycle.install(self.context,self.selection('status','shell'),self.runner)
-        self.assertEqual(result.receipt.selection.features,{'shell'})
-        self.assertTrue(any(f.feature=='status' and f.state=='unavailable' for f in result.findings))
+        self.assertSuccess(result)
+        self.assertEqual(result.receipt.selection.features,{'status','shell'})
+        self.assertIn('native_status',[step.code for step in result.receipt.pending_ui])
+        self.assertTrue(any(f.feature=='status' and f.state=='pending_ui' for f in result.findings))

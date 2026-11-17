@@ -4,6 +4,8 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+import subprocess
+import sys
 
 from iterm2_utils import engine
 from iterm2_utils.config import mcp
@@ -224,3 +226,21 @@ for line in sys.stdin:
             status = cli.main(['doctor', '--live', '--json'])
         self.assertEqual(status, 2)
         self.assertTrue(any(f['code'] == 'migration_required' for f in json.loads(output.getvalue())['findings']))
+
+    def test_fifo_mcp_storage_fails_in_bounded_child_without_mutation(self):
+        os.mkfifo(self.path,0o600)
+        code="""import sys
+from pathlib import Path
+from iterm2_utils.config.mcp import server_edit
+from iterm2_utils.models import OmpProfile
+try:
+    server_edit(OmpProfile('work',Path(sys.argv[1])))
+except ValueError:
+    print('special-file refused')
+else:
+    raise AssertionError('special file accepted')
+"""
+        result=subprocess.run([sys.executable,'-c',code,str(self.profile.agent_dir)],
+            capture_output=True,text=True,timeout=3,env=dict(os.environ),cwd=self.context.paths.repo)
+        self.assertEqual((result.returncode,result.stdout),(0,'special-file refused\n'),result.stderr)
+        self.assertTrue(__import__('stat').S_ISFIFO(self.path.lstat().st_mode))

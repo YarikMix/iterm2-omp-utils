@@ -6,6 +6,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
+import sys
 
 from iterm2_utils import engine, state
 from iterm2_utils.commands import Runner
@@ -316,3 +317,75 @@ class NativeConfigTests(unittest.TestCase):
         self.assertTrue(any(f.state=='conflict' for f in result.findings))
         self.assertEqual(inherited.read_bytes(),before)
         self.assertFalse((self.profile.agent_dir/'keybindings.yml').exists())
+
+    def test_fifo_native_storage_fails_in_isolated_bounded_child_without_removal(self):
+        for kind,filename,key in (('setting','config.yml','terminal.programStatus'),
+                                  ('binding','keybindings.yml','app.session.resume')):
+            with self.subTest(kind=kind):
+                path=self.profile.agent_dir/filename
+                os.mkfifo(path,0o600)
+                try:
+                    code="""import sys
+from pathlib import Path
+from iterm2_utils.config import omp
+from iterm2_utils.models import OmpProfile
+try:
+    omp.read_address(OmpProfile('work',Path(sys.argv[1])),sys.argv[2],sys.argv[3],None)
+except ValueError:
+    print('special-file refused')
+else:
+    raise AssertionError('special file accepted')
+"""
+                    result=subprocess.run([sys.executable,'-c',code,str(self.profile.agent_dir),kind,key],
+                        env=dict(os.environ),capture_output=True,text=True,timeout=3,cwd=self.paths.repo)
+                    self.assertEqual((result.returncode,result.stdout),(0,'special-file refused\n'),result.stderr)
+                    self.assertTrue(__import__('stat').S_ISFIFO(path.lstat().st_mode))
+                finally:path.unlink()
+
+    def test_interrupted_binding_transaction_restores_original_colliding_chord(self):
+        path=self.profile.agent_dir/'keybindings.yml'
+        path.write_text('# original\napp.session.resume: F8\napp.history.search: F8\n')
+        edit=omp.binding_edit(self.profile,'app.session.resume',present('F9'),self.runner)
+        original=state.save
+        def crash(destination,receipt):
+            if destination.name=='result.json':raise KeyboardInterrupt('fixture process crash after write')
+            return original(destination,receipt)
+        with patch.object(state,'save',side_effect=crash),self.assertRaises(KeyboardInterrupt):
+            engine.apply(Plan(self.selection,ChangeSet([edit],[],[]),''),self.context,self.runner)
+        journal=self.paths.data/'journal'
+        self.assertTrue(journal.exists())
+        self.assertEqual(omp.read_binding(self.profile,'app.session.resume',self.runner),present('F9'))
+        self.assertEqual(engine._recover(self.context,self.runner),[])
+        self.assertFalse(journal.exists())
+        self.assertEqual(omp.read_binding(self.profile,'app.session.resume',self.runner),present('F8'))
+        self.assertIn('# original\n',path.read_text())
+        self.assertIn('app.history.search: F8',path.read_text())
+
+    def test_interrupted_binding_recovery_preserves_changed_user_chord_and_journal(self):
+        path=self.profile.agent_dir/'keybindings.yml'
+        path.write_text('app.session.resume: F8\napp.history.search: F8\n')
+        edit=omp.binding_edit(self.profile,'app.session.resume',present('F9'),self.runner)
+        original=state.save
+        def crash(destination,receipt):
+            if destination.name=='result.json':raise KeyboardInterrupt()
+            return original(destination,receipt)
+        with patch.object(state,'save',side_effect=crash),self.assertRaises(KeyboardInterrupt):
+            engine.apply(Plan(self.selection,ChangeSet([edit],[],[]),''),self.context,self.runner)
+        path.write_text('app.session.resume: F10\napp.history.search: F8\n')
+        self.assertTrue(engine._recover(self.context,self.runner))
+        self.assertIn('app.session.resume: F10',path.read_text())
+        self.assertTrue((self.paths.data/'journal/intent.json').exists())
+        path.write_text('app.session.resume: F9\napp.history.search: F8\n')
+        self.assertEqual(engine._recover(self.context,self.runner),[])
+        self.assertEqual(omp.read_binding(self.profile,'app.session.resume',self.runner),present('F8'))
+
+    def test_uninstall_binding_inverse_restores_existing_collision_not_new_intent(self):
+        path=self.profile.agent_dir/'keybindings.yml'
+        path.write_text('app.session.resume: F8\napp.history.search: F8\n')
+        edit=omp.binding_edit(self.profile,'app.session.resume',present('F9'),self.runner)
+        result=engine.apply(Plan(self.selection,ChangeSet([edit],[],[]),''),self.context,self.runner)
+        self.assertEqual(result.findings,[])
+        reverted=engine.revert(result.receipt,self.context,self.runner,frozenset({'shortcuts'}))
+        self.assertEqual(reverted.findings,[])
+        self.assertEqual(omp.read_binding(self.profile,'app.session.resume',self.runner),present('F8'))
+        self.assertIn('app.history.search: F8',path.read_text())
