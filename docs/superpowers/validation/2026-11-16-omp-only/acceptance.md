@@ -59,8 +59,21 @@ Controller-observed tool-free launch actor cases L1a/L1b/L2 incorrectly applied
 to each preflight/inventory operation, 30 seconds jointly to creation/command
 verification, and a separate 120 seconds to handoff receipt. It explains observing
 one supervised asynchronous invocation without premature cancellation or retry.
-This is instruction correction, not runtime/live proof; targeted actor replay
-and adjudication belong to the controller.
+Controller completed a fresh tool-free targeted replay of L1a/L1b/L2 after that
+correction; all three proposals were manually acceptable. L1a/L1b retained
+correct shell/target/no-agent behavior and omitted the erroneous whole-call
+10-second limit, but specified no outer timeout metadata; they do not independently
+prove it. L2 explicitly chose one supervised asynchronous job, a separate
+120-second receipt budget after command observation, and no second invocation
+when a short tool wait ends.
+
+Campaign evidence is **18 baseline proposals: 15 acceptable, 3 budget-instruction
+failures; actual instruction correction; 3 acceptable targeted replay proposals**.
+The other 15 were not rerun unchanged; this is not a fresh all-18 pass. Only the
+launch SKILL was refreshed (read-text SHA256
+`26925fe1ee59cf6e7b36177690bda422130953515ab8dcff46f103f3042f4103`);
+references were unchanged. No actor executed CLI, SDK or UI operations. Decision
+replay does not establish runtime timing, statistical reliability or live acceptance.
 
 ## Pending selected preview and live acceptance
 
@@ -92,4 +105,4 @@ with receiver/macOS behavior; EN/RU Cmd+C/paste/Alt+Enter and unchanged Ctrl+Q;
 cd/reset/APS/light-dark/appearance and project shell buttons. Preserve every
 actual created ID and clean up only fixture-owned resources. No personal tabs
 were used during offline execution. Controller retains scoped authorization,
-actor replay, fresh task review and the native whole-branch review.
+fresh task review and the native whole-branch review.
