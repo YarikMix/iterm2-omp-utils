@@ -123,9 +123,10 @@ class EngineTests(unittest.TestCase):
         self.assertEqual(q.read_bytes(),b'user file')
         self.assertTrue(result.findings)
 
-    def test_registration_without_backend_preflights_before_file_write(self):
+    def test_invalid_address_preflights_all_edits_before_file_write(self):
         p = self.root/'one'
-        result = engine.apply(self.plan([FileEdit(p,None,b'new',0o600,'clipboard'),RegistrationEdit('codex','iterm2',None,{'command':'fixture'},'mcp')]),self.context,None)
+        result = engine.apply(self.plan([FileEdit(p,None,b'new',0o600,'clipboard'),
+            FileEdit(Path('relative'),None,b'invalid',0o600,'clipboard')]),self.context,None)
         self.assertFalse(p.exists())
         self.assertTrue(result.findings)
 
@@ -450,3 +451,16 @@ class NativeResourceTests(unittest.TestCase):
         for invalid in (None, False, '0', 2):
             with self.assertRaises(ValueError):
                 engine._compile(StatusBarPositionEdit(invalid, 1, 'clipboard'))
+
+    def test_contended_transaction_lock_refuses_without_mutation(self):
+        target = self.root/'settings.json'
+        target.write_bytes(b'{"ours":0}')
+        with engine._lock(self.context):
+            result = engine.apply(self.plan([
+                FileEdit(target,b'{"ours":0}',b'{"ours":1}',0o600,'clipboard')]),self.context,None)
+        self.assertTrue(any(f.state == 'conflict' for f in result.findings))
+        self.assertEqual(target.read_bytes(), b'{"ours":0}')
+        self.assertFalse((self.context.paths.data/'journal').exists())
+        self.assertFalse((self.context.paths.data/'receipt.json').exists())
+        with engine._lock(self.context):
+            pass

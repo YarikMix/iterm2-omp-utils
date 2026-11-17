@@ -22,5 +22,5 @@ addresses, never to open an ordinary shell.
 behavior is verified in a fresh selected-profile main TUI. Local YAML and a
 successful terminal API/MCP probe do not establish effective project/provider/
 overlay settings, one visible banner, OS notification permission or foreground
-policy. Fixtures do not establish live acceptance. Task4 checks are queued,
-not run.
+policy. Fixtures do not establish live acceptance. All execution and real
+banner/keyboard/receiver acceptance remain NOT RUN until Task10.

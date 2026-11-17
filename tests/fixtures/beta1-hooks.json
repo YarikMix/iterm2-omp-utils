@@ -1,0 +1,928 @@
+{
+  "source_commit": "8c5643ed574f016bca46952ae6cd804d09195580",
+  "projection": "Original hook documents, hook resources, selection and UI data only; no executable snapshots.",
+  "files": {
+    "claude/settings.json": {
+      "mode": 384,
+      "text": "{\n  \"hooks\": {\n    \"Notification\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ],\n        \"matcher\": \"permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog\"\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"PostToolUseFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"StopFailure\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"SubagentStop\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    },
+    "codex/hooks.json": {
+      "mode": 384,
+      "text": "{\n  \"hooks\": {\n    \"Interrupt\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"PermissionRequest\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"PostCompact\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"PostToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"PreCompact\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"PreToolUse\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"SessionEnd\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"SessionStart\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"Stop\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"SubagentStart\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"SubagentStop\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ],\n    \"UserPromptSubmit\": [\n      {\n        \"hooks\": [\n          {\n            \"command\": \"@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json\",\n            \"timeout\": 3,\n            \"type\": \"command\"\n          }\n        ]\n      }\n    ]\n  }\n}\n"
+    }
+  },
+  "receipt": {
+    "pending_ui": [],
+    "resources": [
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "Interrupt"
+          ]
+        },
+        "owners": [
+          "shared:codex-hooks",
+          "codex:status",
+          "codex:restore"
+        ],
+        "target": "@HOME@/codex/hooks.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "PermissionRequest"
+          ]
+        },
+        "owners": [
+          "shared:codex-hooks",
+          "codex:status",
+          "codex:restore"
+        ],
+        "target": "@HOME@/codex/hooks.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "PostCompact"
+          ]
+        },
+        "owners": [
+          "shared:codex-hooks",
+          "codex:status",
+          "codex:restore"
+        ],
+        "target": "@HOME@/codex/hooks.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "PostToolUse"
+          ]
+        },
+        "owners": [
+          "shared:codex-hooks",
+          "codex:status",
+          "codex:restore"
+        ],
+        "target": "@HOME@/codex/hooks.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "PreCompact"
+          ]
+        },
+        "owners": [
+          "shared:codex-hooks",
+          "codex:status",
+          "codex:restore"
+        ],
+        "target": "@HOME@/codex/hooks.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "PreToolUse"
+          ]
+        },
+        "owners": [
+          "shared:codex-hooks",
+          "codex:status",
+          "codex:restore"
+        ],
+        "target": "@HOME@/codex/hooks.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "SessionEnd"
+          ]
+        },
+        "owners": [
+          "shared:codex-hooks",
+          "codex:status",
+          "codex:restore"
+        ],
+        "target": "@HOME@/codex/hooks.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "SessionStart"
+          ]
+        },
+        "owners": [
+          "shared:codex-hooks",
+          "codex:status",
+          "codex:restore"
+        ],
+        "target": "@HOME@/codex/hooks.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "Stop"
+          ]
+        },
+        "owners": [
+          "shared:codex-hooks",
+          "codex:status",
+          "codex:restore"
+        ],
+        "target": "@HOME@/codex/hooks.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "SubagentStart"
+          ]
+        },
+        "owners": [
+          "shared:codex-hooks",
+          "codex:status",
+          "codex:restore"
+        ],
+        "target": "@HOME@/codex/hooks.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "SubagentStop"
+          ]
+        },
+        "owners": [
+          "shared:codex-hooks",
+          "codex:status",
+          "codex:restore"
+        ],
+        "target": "@HOME@/codex/hooks.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent codex --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "UserPromptSubmit"
+          ]
+        },
+        "owners": [
+          "shared:codex-hooks",
+          "codex:status",
+          "codex:restore"
+        ],
+        "target": "@HOME@/codex/hooks.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ],
+            "matcher": "permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog"
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ],
+            "matcher": "permission_prompt|idle_prompt|elicitation_dialog|elicitation_url_dialog"
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "Notification"
+          ]
+        },
+        "owners": [
+          "claude:notifications"
+        ],
+        "target": "@HOME@/claude/settings.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "PostToolUse"
+          ]
+        },
+        "owners": [
+          "claude:notifications"
+        ],
+        "target": "@HOME@/claude/settings.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "PostToolUseFailure"
+          ]
+        },
+        "owners": [
+          "claude:notifications"
+        ],
+        "target": "@HOME@/claude/settings.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "SessionEnd"
+          ]
+        },
+        "owners": [
+          "claude:notifications"
+        ],
+        "target": "@HOME@/claude/settings.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "SessionStart"
+          ]
+        },
+        "owners": [
+          "claude:notifications"
+        ],
+        "target": "@HOME@/claude/settings.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "Stop"
+          ]
+        },
+        "owners": [
+          "claude:notifications"
+        ],
+        "target": "@HOME@/claude/settings.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "StopFailure"
+          ]
+        },
+        "owners": [
+          "claude:notifications"
+        ],
+        "target": "@HOME@/claude/settings.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "SubagentStop"
+          ]
+        },
+        "owners": [
+          "claude:notifications"
+        ],
+        "target": "@HOME@/claude/settings.json",
+        "version": "1"
+      },
+      {
+        "before": {
+          "exists": false,
+          "value": null
+        },
+        "installed": {
+          "exists": true,
+          "value": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          }
+        },
+        "kind": "hook",
+        "locator": {
+          "entry": {
+            "hooks": [
+              {
+                "command": "@HOME@/bin/python3 @HOME@/data/current/hook.py --agent claude --settings @HOME@/config/runtime.json",
+                "timeout": 3,
+                "type": "command"
+              }
+            ]
+          },
+          "mode": 384,
+          "pointer": [
+            "hooks",
+            "UserPromptSubmit"
+          ]
+        },
+        "owners": [
+          "claude:notifications"
+        ],
+        "target": "@HOME@/claude/settings.json",
+        "version": "1"
+      }
+    ],
+    "selection": {
+      "adopt_legacy": false,
+      "agent_features": {
+        "claude": [
+          "notifications",
+          "shortcuts"
+        ],
+        "codex": [
+          "restore",
+          "shell",
+          "shortcuts",
+          "status"
+        ]
+      },
+      "agent_shortcuts": {
+        "claude": [
+          "ctrl-q"
+        ],
+        "codex": [
+          "resume"
+        ]
+      },
+      "agents": [
+        "claude",
+        "codex"
+      ],
+      "coexist_notifications": false,
+      "features": [
+        "notifications",
+        "restore",
+        "shell",
+        "shortcuts",
+        "status"
+      ],
+      "notification_coexist_agents": [],
+      "parent_profile": "Default",
+      "shortcuts": [
+        "ctrl-q",
+        "resume"
+      ]
+    },
+    "ui_snapshots": {},
+    "version": "1"
+  }
+}

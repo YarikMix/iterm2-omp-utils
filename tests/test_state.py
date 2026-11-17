@@ -110,3 +110,14 @@ class StateTests(unittest.TestCase):
             path.write_text(raw)
             with self.assertRaises(ValueError):
                 state.load(path)
+
+    def test_failed_atomic_replace_keeps_previous_state_and_removes_staging_file(self):
+        from unittest.mock import patch
+        with TemporaryDirectory() as root:
+            path = Path(root)/'state.json'
+            path.write_bytes(b'{"old":true}')
+            with patch.object(state.os, 'replace', side_effect=OSError('replace failed')):
+                with self.assertRaises(OSError):
+                    state.durable_write(path, b'{"new":true}')
+            self.assertEqual(path.read_bytes(), b'{"old":true}')
+            self.assertEqual(list(Path(root).iterdir()), [path])

@@ -24,11 +24,12 @@ prove event delivery or effective omp configuration. Every present
 `ITERM_SESSION_ID`/`TERM_SESSION_ID` must be valid and agree. No active-tab
 fallback is allowed; TMUX live acceptance is not established.
 
-`runtime/terminal_identity.py` owns the generic UUID/environment parser only.
+`runtime/terminal_identity.py` owns generic UUID/environment parsing, kernel
+PID-birth/foreground checks, private record validation and own-TTY observation.
 The identity extension is a separate main-TUI bridge, not another event writer.
 The runtime payload preserves `runtime/omp_config.ts` and root `vendor/yaml`
 relative layout. Its retained-file allowlist excludes retired hook/notifier/
 restorer trees. Ordinary shell does not depend on Bun or omp identity.
 
-Offline regressions and live idle/working/blocked/done/error acceptance are
-queued for integrated verification; no Task4 test execution is claimed.
+All offline regressions and live idle/working/blocked/done/error acceptance
+remain NOT RUN until Task10. Export inventory is not receiver or standalone proof.

@@ -111,15 +111,6 @@ class StatusBarPositionEdit:
 
 
 @dataclass
-class RegistrationEdit:
-    agent: str
-    name: str
-    before: dict | None
-    after: dict | None
-    owner: str
-
-
-@dataclass
 class UiStep:
     code: str
     feature: str
@@ -129,7 +120,7 @@ class UiStep:
 
 @dataclass
 class ChangeSet:
-    edits: list[FileEdit | SymlinkEdit | PreferenceEdit | RegistrationEdit | ProfileBarEdit | StatusBarPositionEdit | OmpEdit]
+    edits: list[FileEdit | SymlinkEdit | PreferenceEdit | ProfileBarEdit | StatusBarPositionEdit | OmpEdit]
     ui: list[UiStep]
     findings: list[Finding]
     consumers: dict[str, frozenset[str]] = field(default_factory=dict)

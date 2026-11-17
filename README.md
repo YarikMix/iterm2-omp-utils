@@ -207,15 +207,20 @@ TemporaryDirectory HOME, fake process/native adapters; не реальные aut
 ```sh
 python3 -m unittest discover -s tests -t . -v
 /bin/zsh tests/test_appearance_shell.zsh
+bun test tests/test_omp_config.ts tests/test_omp_identity.ts
 python3 tools/check_sources.py
 python3 tools/check_skill.py
 python3 tools/check_export.py
 python3 tools/build_release.py --destination dist
 ```
 
-Итоговые package/export checks и синхронизация удаляемого payload — отдельный
-шаг cutover. Не считать архив проверенным до их выполнения. Release содержит
-только явный список исходников, runtime, навыков, проверок и лицензий, не личную
-историю, receipts/auth/settings. Подключённый runtime не зависит от checkout.
+Source cutover removes the old active runtime/vendor/tests while retaining strict
+historical decode/recovery and receipt-authorized cleanup. The explicit archive
+allowlist includes all three bundles, native helpers, YAML distributable and
+licenses/artwork. No private SDD, author workspace, auth/settings or old binaries
+belong in it. Isolated extraction/bootstrap/shell/installed-helper regressions
+are authored but **NOT RUN**; source inventory does not prove standalone operation.
+Installed helper layout is `current/runtime/omp_config.ts` → `current/vendor/yaml/`.
+Native status/banner/keyboard/rendering acceptance also remains unverified.
 Лицензии: [MIT](LICENSE) и [условия внешних компонентов](THIRD_PARTY_NOTICES.md);
 происхождение зависимостей: [sources.lock.json](sources.lock.json).

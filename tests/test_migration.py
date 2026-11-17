@@ -449,3 +449,43 @@ class MigrationTests(MigrationFixture):
         self.assertEqual(new.read_bytes(), b'<svg id=\"new\"/>')
         self.assertEqual(json.loads(config.read_bytes()), {'asset':str(new), 'foreign':'keep'})
         self.assertEqual(result.receipt.legacy_cleanup, [])
+
+    def test_flat_and_pairwise_history_cleanup_keeps_each_original_inverse(self):
+        """Retire old cross-consumer state without reintroducing active consumers."""
+        for paired in (False, True):
+            with self.subTest(paired=paired):
+                paths = [self.home/('codex-paired.json' if paired else 'codex-flat.json'),
+                         self.home/('claude-paired.json' if paired else 'claude-flat.json')]
+                resources = []
+                for agent, path, original in zip(('codex', 'claude'), paths, (3, 5)):
+                    path.write_text('{"ours":1,"foreign":"keep"}')
+                    resources.append(self.json_resource(path, before=original,
+                        owners=(agent+':status',) if paired else ('status',)))
+                receipt = self.historical(resources, agents=('codex', 'claude'))
+                if paired:
+                    receipt.selection.agent_features = {'codex':[], 'claude':[]}
+                    receipt.selection.agent_shortcuts = {'codex':[], 'claude':[]}
+                self.save(receipt)
+                result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+                self.assertEqual([json.loads(path.read_bytes()) for path in paths],
+                    [{'ours':3, 'foreign':'keep'}, {'ours':5, 'foreign':'keep'}])
+                self.assertEqual(result.receipt.legacy_cleanup, [])
+                self.assertEqual(result.receipt.resources, [])
+                self.assertEqual(self.runner.calls, [])
+
+    def test_malformed_pairwise_receipt_does_not_authorize_cleanup(self):
+        path = self.home/'legacy.json'; path.write_text('{"ours":1,"foreign":7}')
+        raw = legacy_state.encode(self.historical([self.json_resource(path)], ('status',)))
+        raw['selection'].update(agent_features={'codex':['mcp']}, agent_shortcuts={'codex':[]})
+        receipt = self.context.paths.data/'receipt.json'
+        receipt.parent.mkdir(parents=True)
+        receipt.write_text(json.dumps(raw))
+        before = self.snapshot()
+        preview = migration.preview_omp_migration(self.context, self.runner)
+        self.assertTrue(any(f.state == 'conflict' for f in preview.changes.findings))
+        self.assertEqual(self.snapshot(), before)
+        result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertTrue(any(f.state == 'conflict' for f in result.findings))
+        self.assertEqual(path.read_text(), '{"ours":1,"foreign":7}')
+        self.assertEqual(json.loads(receipt.read_bytes()), raw)
+        self.assertEqual(self.runner.calls, [])

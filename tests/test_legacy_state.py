@@ -60,8 +60,13 @@ class LegacyStateTests(unittest.TestCase):
         raw = legacy_fixture()
         raw['selection'].update(agent_features={'codex':['clipboard']}, agent_shortcuts={'codex':[]})
         receipt = legacy_state.decode(raw)
-        self.assertEqual(receipt.selection.features_for('codex'), {'clipboard'})
-        self.assertEqual(receipt.selection.pairs, {'codex:clipboard'})
+        with TemporaryDirectory() as root:
+            path = Path(root)/'receipt.json'
+            state.save_recovery(path, receipt)
+            stored = state.load(path)
+        self.assertEqual(stored.selection.agent_features, {'codex':['clipboard']})
+        self.assertEqual(stored.selection.agent_shortcuts, {'codex':[]})
+        self.assertEqual(stored.resources, raw['resources'])
 
     def test_uninstall_journal_can_retain_owners_outside_remaining_selection(self):
         raw = legacy_fixture()

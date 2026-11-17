@@ -16,7 +16,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from . import state, legacy_state
 from .config import jsonfile, tomlfile, zshrc, preferences, omp, iterm, legacy_mcp
-from .models import SymlinkEdit, FileEdit, PreferenceEdit, RegistrationEdit, ProfileBarEdit, StatusBarPositionEdit, Receipt, Outcome, Finding, Plan, Context, Selection, OmpProfile, OmpEdit
+from .models import SymlinkEdit, FileEdit, PreferenceEdit, ProfileBarEdit, StatusBarPositionEdit, Receipt, Outcome, Finding, Plan, Context, Selection, OmpProfile, OmpEdit
 from .commands import Runner
 
 
@@ -134,8 +134,6 @@ def _compile(edit):
         # Resolve parents only. The pointer itself is the owned resource.
         path = edit.path.parent.resolve() / edit.path.name
         return [_resource('symlink',path,{},_value(edit.before,edit.before is not None),_value(edit.after,edit.after is not None),edit.owner)]
-    if isinstance(edit,RegistrationEdit):
-        raise ValueError('Registrations require receipt-authorized historical migration')
     if isinstance(edit,PreferenceEdit):
         return [_resource('preference',edit.domain,{'key':edit.key},_value(edit.before,edit.before is not None),_value(edit.after,edit.after is not None),edit.owner)]
     if not isinstance(edit,FileEdit) or not edit.path.is_absolute():
@@ -466,21 +464,6 @@ def _transaction(changes,result,context,runner, *, intent_receipt=None):
         return False,findings
 
 
-def pair_resources(resources, selection, context):
-    from .legacy_state import resource_pairs
-    result = copy.deepcopy(resources)
-    for resource in result:
-        owners = []
-        shared = next((o for o in resource['owners'] if o.startswith('shared:')), None)
-        for owner in resource['owners']:
-            if ':' in owner:
-                owners.append(owner)
-            else:
-                owners.extend(sorted(resource_pairs(selection, owner, resource['target'], context, shared)))
-        if shared == 'shared:hooks' and resource['target'].endswith('/hooks.json'):
-            owners = ['shared:codex-hooks' if o == shared else o for o in owners]
-        resource['owners'] = list(dict.fromkeys(owners))
-    return result
 
 
 def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozenset(), expected_receipt=...) -> Outcome:

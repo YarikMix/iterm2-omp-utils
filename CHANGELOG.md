@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+Removed obsolete active Codex/Claude runtime, restore tree and status vendor.
+Only strict historical data decoding, transaction recovery and receipt-authorized
+cleanup remain; no compatibility commands, registration transport or active
+pair-selection helpers survive. Retained generic doctor/checkpoint/TTY/atomic
+write/lock and real historical hook safety assertions use current fixtures.
+The historical beta hook fixture now excludes executable snapshots.
+The export allowlist includes the complete native import/helper/YAML closure and
+all three bundles; source locks/notices cover retained shell, YAML and artwork.
+Authored isolated extraction/bootstrap/shell/installed-parser coverage is queued
+to Task10, not executed or evidence of standalone/native UI acceptance.
+
 Shell launch now carries no omp profile and ignores inherited agent storage
 environment entirely. Explicit/recorded native profiles reach discovery without
 a second ambient resolution. Added invalid-environment real-discovery and
@@ -93,6 +104,8 @@ dedicated-profile retirement, without adding a shell/bootstrap prerequisite.
 Incremental shortcut installation preserves an existing resume key unless resume
 is explicitly selected again. Native binding guards compare canonical modifier
 order during both planning and staging, preserving conflicting inherited bindings.
+
+## Historical pre-omp changes (not current product contracts)
 
 Добавлен отдельный bootstrap-навык `iterm2-projects` для операций со списком
 проектов project-launcher; его receipt независим от receipts других skill/feature,

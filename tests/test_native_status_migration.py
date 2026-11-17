@@ -95,40 +95,29 @@ class NativeMigrationTests(MigrationFixture):
         self.assertTrue(any(f.code == 'legacy_writer_conflict' for f in result.findings))
 
     def test_real_beta1_receipt_cleans_hooks_without_old_executables(self):
-        import base64
         from pathlib import Path
         from iterm2_utils import legacy_state
-        source = Path(__file__).parent/'fixtures/beta1-status.json'
+        source = Path(__file__).parent/'fixtures/beta1-hooks.json'
         fixture = json.loads(source.read_bytes())
         self.assertEqual(fixture['source_commit'], '8c5643ed574f016bca46952ae6cd804d09195580')
         def expand(text):
-            return text.replace('@HOME@', str(self.home)).replace('@SOURCE@', str(self.context.paths.repo))
-        raw = fixture['receipt']
-        for resource in raw['resources']:
-            if resource['kind'] == 'file':
-                for key in ('before','installed'):
-                    if resource[key]['exists']:
-                        resource[key]['value'] = base64.b64encode(
-                            expand(base64.b64decode(resource[key]['value']).decode()).encode()).decode()
-        raw = json.loads(expand(json.dumps(raw)))
+            return text.replace('@HOME@', str(self.home))
+        raw = json.loads(expand(json.dumps(fixture['receipt'])))
         self.save(legacy_state.decode(raw))
         for name, value in fixture['files'].items():
             path = self.home/name; path.parent.mkdir(parents=True, exist_ok=True)
-            if 'symlink' in value:
-                path.symlink_to(expand(value['symlink']))
-            else:
-                path.write_text(expand(value['text']))
+            path.write_text(expand(value['text']))
         hooks = self.home/'codex/hooks.json'
         document = json.loads(hooks.read_bytes())
         foreign = {'hooks':[{'type':'command','command':'/foreign/helper'}]}
         document['hooks']['Stop'].append(foreign)
         hooks.write_text(json.dumps(document))
-        with patch('iterm2_utils.config.iterm.inspect', return_value={'complete':False,'sessions':[]}), \
-                patch('iterm2_utils.config.iterm.ensure_unreferenced', side_effect=ValueError('live profile')):
-            result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
         current = json.loads(hooks.read_bytes())['hooks']
         self.assertEqual(current['Stop'], [foreign])
         self.assertEqual(sum(len(entries) for entries in current.values()), 1)
+        self.assertEqual(sum(len(entries) for entries in
+            json.loads((self.home/'claude/settings.json').read_bytes())['hooks'].values()), 0)
         self.assertEqual(self.runner.calls, [])
         self.assertTrue(result.receipt.legacy_cleanup)
 

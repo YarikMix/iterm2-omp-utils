@@ -78,3 +78,32 @@ class ProcessBirth(TestCase):
         self.assertEqual(output.getvalue(), '"darwin-bsd:1800000000:123456"' + chr(10))
         probe.assert_called_once_with(123)
         shell.assert_not_called()
+
+
+class TerminalAddresses(TestCase):
+    def test_every_present_environment_source_is_valid_and_agrees(self):
+        from runtime.terminal_identity import terminal_from_environment
+        other = '11111111-2222-3333-4444-555555555555'
+        cases = [
+            ({'TERM_SESSION_ID':'w0t0p0:'+TID}, TID),
+            ({'ITERM_SESSION_ID':TID.lower()}, TID),
+            ({'TERM_SESSION_ID':'w12t3p4:'+TID.lower()}, TID),
+            ({'ITERM_SESSION_ID':'w1t2p3:'+TID.lower(), 'TERM_SESSION_ID':TID}, TID),
+            ({'ITERM_SESSION_ID':TID, 'TERM_SESSION_ID':'w0t0p0:'+other}, None),
+            ({'ITERM_SESSION_ID':'bad', 'TERM_SESSION_ID':TID}, None),
+            ({'ITERM_SESSION_ID':TID, 'TERM_SESSION_ID':'bad'}, None),
+            ({'ITERM_SESSION_ID':'', 'TERM_SESSION_ID':TID}, None),
+            ({'ITERM_SESSION_ID':TID, 'TERM_SESSION_ID':''}, None),
+            ({'TERM_SESSION_ID':TID+';touch bad'}, None),
+            ({'TERM_SESSION_ID':'$(bad):'+TID}, None),
+            ({}, None),
+        ]
+        for environment, expected in cases:
+            with self.subTest(environment=environment):
+                self.assertEqual(terminal_from_environment(environment), expected)
+
+    def test_terminal_targets_never_accept_active_all_or_command_text(self):
+        from runtime.terminal_identity import terminal_id
+        for value in ('active', 'all', '', TID+';bad', 'remote:'+TID, None):
+            with self.subTest(value=value):
+                self.assertIsNone(terminal_id(value))

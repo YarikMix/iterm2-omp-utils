@@ -1,9 +1,48 @@
-# Beta compatibility and verification
+# Current omp compatibility and historical evidence
 
-Release: **v0.1.0-beta.1**, 2026-10-23. Supported target: macOS + zsh with Python
-3.11+ (stdlib installer). Linux CI is configured for pure/fixture behavior and export only;
-it does not establish Linux product support. This beta has no stable-production
-acceptance claim.
+Current target: **macOS + zsh, Python 3.11+**, with one active omp consumer.
+Linux CI covers fixtures/export, not Linux product support. The existing beta
+archive version is not an omp acceptance claim. Historical agent integrations,
+wrappers, event engines and restore commands have been withdrawn without aliases.
+
+## Current capability and evidence boundary
+
+| Operation | Required only when selected |
+| --- | --- |
+| Skill bootstrap | Python stdlib; no agent/SDK/Bun/API probe, no features selected |
+| Shell integration | iTerm2 and zsh; no omp/Bun/SDK prerequisite |
+| One ordinary shell tab | Selected Python + official iTerm2 SDK/API and shell profile; no agent storage resolution |
+| New/handoff omp tab | Verified executable/wrapper, selected native storage profile, cwd/profile/config capabilities and one SDK create |
+| Exact resume | Exact saved file/header/cwd/profile and resume capability; identity/continuation proof is independent |
+| Native status/notifications | Selected native YAML addresses (bundled yaml 2.9.1 via Bun), explicit receiver evidence; no hook fallback |
+| Clipboard/shortcuts | Narrow CopySelection/native bindings; dedicated profile, not all Bun jobs |
+| Appearance/project buttons | Selected Python/SDK, typed native inventory, TTY/foreground and reference/CAS guards |
+| Observe MCP | Optional pinned stdio server, one owned omp JSON server address |
+
+Version strings are diagnostics, **not exact-version gates**. The design's
+inspection of omp **18.20.2** and its help/source is capability research, not
+native TUI/GUI acceptance. Later compatible versions are not rejected by string.
+Shell failure is not inferred from a missing optional dependency.
+
+All omp-only execution, RED/GREEN, extraction/build and live acceptance remain
+**NOT RUN until Task10**. The authored isolated extraction tests exercise real
+imports, all three independent bootstrap transactions, shell install/doctor,
+one fake-SDK shell create plus its real login-shell command, and the installed
+YAML transform after extracted sources are removed. Inventory/source absence is
+not standalone-operation evidence; these regressions must actually run.
+
+Native idle/working/blocked/done/error, one visible completion/error banner,
+EN/RU copy/paste/newline, Ctrl+Q, appearance/APS and project-button rendering are
+unverified. Settings readback/connectivity cannot clear those UI claims.
+SDK authorization/OS permission dialogs remain human actions; no automatic
+dependency installation, network/auth or GUI access belongs in fixture tests.
+
+The public allowlist includes all three skill bundles, native profile/history/
+terminal helpers, strict legacy decoder/cleanup, YAML/vendor licenses and the
+nine SVG/PNG pairs. Installed runtime keeps `runtime/omp_config.ts` beside root
+`vendor/yaml/`; it does not ship the retired hook/restorer/vendor trees.
+The historical hook fixture is a data-only projection of the earlier receipt,
+not a bundled copy of its executable runtime.
 
 ## Receipt v2 and historical recovery boundary — 2026-11-16
 
@@ -42,9 +81,18 @@ overrides resolve against process cwd without expanding `~`. Resolution is pure.
 The implementation is fixture-scoped; integrated and live verification remain
 separate acceptance gates.
 
+## Historical pre-omp evidence (not current acceptance)
+
+Everything below records the withdrawn product at its dated checkpoint.
+Its versions, commands, test counts, compatibility pins and live observations
+do **not** describe or verify the current omp-only product. Original dated
+specifications and validation reports remain historical; no previous result is
+promoted to omp acceptance.
+
+
 ## Codex API launch and exact resume — 2026-11-01
 
-Current `launch-codex` supports mutually exclusive `--handoff ABS_FILE` and
+Historical `launch-codex` supported mutually exclusive `--handoff ABS_FILE` and
 `--resume SESSION_UUID`; both require `--window WINDOW_ID --profile PROFILE_NAME
 --cwd ABS_DIR`. Existing handoff calls remain compatible. Resume validates one
 exact interactive transcript under effective `CODEX_HOME/sessions`; it never
