@@ -21,7 +21,7 @@ class LaunchRequest:
     window_id: str
     profile: str
     cwd: Path
-    omp_profile: OmpProfile
+    omp_profile: OmpProfile | None
     mode: str
     handoff: Path | None = None
     resume: ResumeTarget | None = None
@@ -52,8 +52,12 @@ def validate_request(request):
             not isinstance(request.profile,str) or not request.profile.strip() or
             any(ord(c)<32 or ord(c)==127 for c in request.window_id+request.profile)):
         raise ValueError('launch_invalid_target')
-    if (not isinstance(request.cwd,Path) or not request.cwd.is_absolute() or not request.cwd.is_dir() or
-            not request.omp_profile.agent_dir.is_absolute()):
+    if not isinstance(request.cwd,Path) or not request.cwd.is_absolute() or not request.cwd.is_dir():
+        raise ValueError('launch_invalid_path')
+    if request.mode=='shell':
+        if request.omp_profile is not None:
+            raise ValueError('launch_shell_agent_profile')
+    elif not isinstance(request.omp_profile,OmpProfile) or not request.omp_profile.agent_dir.is_absolute():
         raise ValueError('launch_invalid_path')
     if (request.handoff is not None) != (request.mode == 'handoff') or (request.resume is not None) != (request.mode == 'resume'):
         raise ValueError('launch_invalid_mode')

@@ -12,9 +12,11 @@ from iterm2_utils.launch_api import LaunchCreation
 
 
 class CliTests(MigrationFixture):
-    def invoke(self, argv):
+    def invoke(self, argv, *, environment=None):
         out, err = io.StringIO(), io.StringIO()
-        environment = {'HOME':str(self.home), 'OMP_PROFILE':'default', 'PI_CONFIG_DIR':'.omp'}
+        environment = {'HOME':str(self.home), 'OMP_PROFILE':'default', 'PI_CONFIG_DIR':'.omp',
+                       **(environment or {})}
+        environment = {key:value for key,value in environment.items() if value is not None}
         with patch.dict(os.environ, environment, clear=True), \
              patch.object(cli, 'resolve_paths', return_value=self.context.paths), \
              patch.object(cli, 'Runner', return_value=self.runner), \
@@ -110,6 +112,7 @@ class CliTests(MigrationFixture):
         executable = self.home/'omp'
         executable.write_text('fixture binary'); executable.chmod(0o700)
         def run(argv,**kwargs):
+            self.assertNotEqual(mode,'shell','Shell must not run any agent probe')
             self.assertIn(argv,([str(executable),'--help'],[str(executable),'--version']))
             return SimpleNamespace(returncode=0,stdout='--cwd --profile --config --resume')
         for mode in ('shell','new','handoff','resume'):
@@ -246,3 +249,93 @@ class CliTests(MigrationFixture):
         self.assertEqual(code,0,out+err)
         self.assertTrue(json.loads(out)['restore_external'])
         self.assertEqual(self.snapshot(),before)
+
+    def test_shell_mode_does_not_probe_or_launch_omp(self):
+        import shlex
+        from iterm2_utils import launch_checks
+        sdk = self.home/'fake-sdk'; sdk.mkdir()
+        log = sdk/'creates.jsonl'
+        (sdk/'iterm2.py').write_text("""
+import json, os
+from pathlib import Path
+from types import SimpleNamespace
+async def close(): pass
+async def connect(): return SimpleNamespace(websocket=SimpleNamespace(close=close))
+async def profiles(connection): return [SimpleNamespace(name='Shell',guid='G',command='')]
+class Window:
+    window_id = 'W'
+    async def async_create_tab(self,profile=None,command=None,select=True):
+        with Path(os.environ['FAKE_SDK_LOG']).open('a') as stream:
+            stream.write(json.dumps([self.window_id,profile,command,select])+'\\n')
+        return SimpleNamespace(tab_id='T',all_sessions=[SimpleNamespace(session_id='S')])
+async def async_get_app(connection):
+    return SimpleNamespace(get_window_by_id=lambda identifier: Window() if identifier=='W' else None)
+Connection = SimpleNamespace(async_create=connect)
+Profile = SimpleNamespace(async_get=profiles)
+""")
+        class Terminal:
+            def __init__(self,*args):pass
+            def select_window(self,window,environment):return 'W'
+            def profiles(self):return [dict(name='Shell',guid='G')]
+            def profile(self,name):return dict(name='Shell',guid='G',command='')
+            def panes(self):return [dict(terminal_id='S',tab_id='T',window_id='W')]
+            def variable(self,sid,name):
+                return {'session.profileName':'Shell','session.jobName':'zsh',
+                        'session.commandLine':'/bin/zsh -il'}[name]
+        before = self.snapshot()
+        invalid = {'OMP_PROFILE':'Work','PI_PROFILE':'INVALID!',
+                   'PI_CONFIG_DIR':'unused-config','PI_CODING_AGENT_DIR':'unused-agent',
+                   'PYTHONPATH':str(sdk)+os.pathsep+str(self.context.paths.repo),
+                   'PYTHONDONTWRITEBYTECODE':'1','FAKE_SDK_LOG':str(log)}
+        with patch.object(launch_checks.platform,'system',return_value='Darwin'), \
+             patch.object(launch_checks,'_iterm',return_value=(self.home,{})), \
+             patch.object(launch_checks.shutil,'which',return_value='/bin/zsh'), \
+             patch.object(launch_checks,'_shell_identity',side_effect=AssertionError('agent shell/config probe')), \
+             patch.object(cli,'resolve_omp_profile',side_effect=AssertionError('agent storage resolution')), \
+             patch.object(self.runner,'run',side_effect=AssertionError('agent help/version/config probe')), \
+             patch.object(launch,'prepare_handoff',side_effect=AssertionError('handoff')), \
+             patch.object(launch,'read_handoff',side_effect=AssertionError('handoff/ack')), \
+             patch.object(launch.tempfile,'mkdtemp',side_effect=AssertionError('launch artifact')), \
+             patch.object(launch_checks,'Terminal',Terminal),patch.object(launch,'Terminal',Terminal):
+            code,out,err=self.invoke(['launch-omp','--mode','shell','--window','W','--profile','Shell',
+                                      '--cwd',str(self.home),'--json'],environment=invalid)
+        self.assertEqual(code,0,out+err)
+        creates = [json.loads(line) for line in log.read_text().splitlines()]
+        self.assertEqual(len(creates),1)
+        self.assertEqual(creates[0][:2],['W','Shell'])
+        self.assertTrue(creates[0][3])
+        self.assertEqual(shlex.split(creates[0][2]),['/bin/sh','-c',
+                         'cd -- '+shlex.quote(str(self.home))+' && exec /bin/zsh -il'])
+        output=json.loads(out)
+        self.assertEqual((output['status'],output['command'],output['ack']),
+                         ('launched','verified','not_requested'))
+        after = self.snapshot()
+        after.pop(str(log.relative_to(self.home)))
+        self.assertEqual(after,before,'Shell must create no handoff, ack or config files')
+
+    def test_real_discovery_honors_explicit_and_recorded_profiles_over_invalid_environment(self):
+        from types import SimpleNamespace
+        from iterm2_utils import discovery
+        invalid_environments = ({'OMP_PROFILE':'Work','PI_PROFILE':'INVALID!'},
+                                {'OMP_PROFILE':None,'PI_PROFILE':'INVALID!'})
+        for invalid in invalid_environments:
+            with self.subTest(environment=invalid):
+                def run(argv,**kwargs):
+                    self.assertEqual(argv,['/bin/zsh','--version'])
+                    return SimpleNamespace(returncode=0,stdout='zsh 99.0.0',stderr='')
+                with patch.object(discovery.platform,'system',return_value='Darwin'), \
+                     patch.object(discovery,'_iterm',return_value=(self.home,{})), \
+                     patch.object(discovery.shutil,'which',return_value='/bin/zsh'), \
+                     patch.object(self.runner,'run',side_effect=run):
+                    for command in ('plan','install'):
+                        code,out,err=self.invoke([command,'--features','shell','--omp-profile','work','--json'],
+                                                 environment=invalid)
+                        self.assertEqual(code,0,out+err)
+                        self.assertEqual(json.loads(out)['selection']['omp_profile'],
+                            {'name':'work','agent_dir':str(self.home/'.omp/profiles/work/agent')})
+                    for command in ('doctor','update'):
+                        code,out,err=self.invoke([command,'--json'],environment=invalid)
+                        self.assertEqual(code,0,out+err)
+                        self.assertEqual(json.loads(out)['selection']['omp_profile']['name'],'work')
+                    code,out,err=self.invoke(['uninstall','--features','shell','--json'],environment=invalid)
+                    self.assertEqual(code,0,out+err)

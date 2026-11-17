@@ -73,20 +73,22 @@ class LaunchChecksTests(unittest.TestCase):
     def test_modes_and_exact_resume_header_are_validated(self):
         with TemporaryDirectory() as tmp:
             root=Path(tmp); profile=OmpProfile(None, root/'agent')
-            req=LaunchRequest('', 'Shell', root, profile, 'shell')
+            req=LaunchRequest('', 'Shell', root, None, 'shell')
             validate_request(req)
+            with self.assertRaises(ValueError): validate_request(replace(req,omp_profile=profile))
+            with self.assertRaises(ValueError): validate_request(replace(req,mode='new'))
             for mode in ('invalid', 'handoff', 'resume'):
                 with self.assertRaises(ValueError): validate_request(replace(req, mode=mode))
             from iterm2_utils.omp_sessions import resolve_resume
             history=root/'history.jsonl'; history.write_text(json.dumps(dict(type='session',id='exact-id',cwd=tmp))+'\n')
             target=resolve_resume(history,'exact-id',profile)
-            validate_request(replace(req,mode='resume',resume=target))
+            validate_request(replace(req,mode='resume',omp_profile=profile,resume=target))
             history.write_text(json.dumps(dict(type='session',id='substituted',cwd=tmp))+'\n')
-            with self.assertRaises(ValueError): validate_request(replace(req,mode='resume',resume=target))
+            with self.assertRaises(ValueError): validate_request(replace(req,mode='resume',omp_profile=profile,resume=target))
 
     def test_shell_mode_does_not_probe_omp(self):
         with TemporaryDirectory() as tmp:
-            root=Path(tmp); req=LaunchRequest('W','Shell',root,OmpProfile(None,root/'agent'),'shell')
+            root=Path(tmp); req=LaunchRequest('W','Shell',root,None,'shell')
             from types import SimpleNamespace
             terminal=SimpleNamespace(select_window=lambda *a:'W', profile=lambda *a:dict(name='Shell',guid='G',command=''), profiles=lambda:[dict(name='Shell',guid='G')])
             runner=SimpleNamespace(run=lambda *a,**kw: self.fail('shell must not run omp or login shell probes'))

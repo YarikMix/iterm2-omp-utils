@@ -8,7 +8,7 @@ import shutil
 import subprocess
 from pathlib import Path
 from .commands import Runner
-from .models import Context, Finding, Paths
+from .models import Context, Finding, OmpProfile, Paths
 from .omp_profile import resolve_omp_profile
 
 
@@ -58,8 +58,13 @@ def _iterm(paths):
     return None,{}
 
 
-def discover(paths: Paths, runner: Runner, *, features: frozenset[str] = frozenset()) -> Context:
-    """Probe only selected dependencies; an empty/bootstrap selection probes no agent."""
+def discover(paths: Paths, runner: Runner, *, features: frozenset[str] = frozenset(),
+             omp_profile: OmpProfile | None = None) -> Context:
+    """Probe selected dependencies, preserving supplied profile authority.
+
+    Standalone discovery resolves ambient storage once when no selection was
+    supplied; CLI callers pass their explicit or recorded profile unchanged.
+    """
     executables,versions,capabilities = {},{},set()
     if platform.system()=='Darwin':
         capabilities.add('macos')
@@ -127,7 +132,7 @@ def discover(paths: Paths, runner: Runner, *, features: frozenset[str] = frozens
             except (OSError,ValueError,AttributeError,TypeError):
                 continue
     return Context(paths,executables,versions,frozenset(capabilities),profiles,{},preferences,
-                   omp_profile=resolve_omp_profile(paths.home,dict(os.environ)))
+                   omp_profile=omp_profile if omp_profile is not None else resolve_omp_profile(paths.home,dict(os.environ)))
 
 
 def live_status(context: Context, runner: Runner, selection=None) -> list:

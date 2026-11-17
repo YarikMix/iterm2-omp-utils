@@ -13,6 +13,12 @@ The selected iTerm profile must have no startup command. Preflight checks exact
 name/GUID; SDK creation rechecks them and the window. Creation supplies the full
 command, once. No terminal typing, restart, close, or retry is used. Shell launch
 needs neither omp, Bun, identity installation nor agent/config probing.
+It does not resolve or validate omp storage/profile environment. The internal
+`LaunchRequest.omp_profile` is `None` for shell and required for all omp modes;
+preflight rejects a shell request carrying agent storage rather than inventing
+a placeholder profile. Explicit/recorded selections passed to feature discovery
+remain authoritative through its `omp_profile` keyword; only standalone discovery
+without a supplied selection resolves ambient profile variables.
 
 omp preflight inspects (never executes) the login-shell function/alias. A single
 `command omp [literal options] "$@"` passthrough is accepted; literal profile,

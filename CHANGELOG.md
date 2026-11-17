@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Shell launch now carries no omp profile and ignores inherited agent storage
+environment entirely. Explicit/recorded native profiles reach discovery without
+a second ambient resolution. Added invalid-environment real-discovery and
+one-create fake-SDK shell regressions; execution remains NOT RUN until Task10.
+
 Exposed the omp-only public CLI: `launch-omp --mode shell|new|handoff|resume`,
 exact `--resume-file`/`--resume-id`, explicit preview-default `migrate-omp`, and
 profile-aware independent skill bootstrap. Removed historical agent selectors

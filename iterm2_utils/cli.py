@@ -130,11 +130,14 @@ def main(argv=None):
     except SystemExit as error:
         return int(error.code)
     runner, paths = Runner(), resolve_paths()
-    try:
-        selected = resolve_omp_profile(paths.home,dict(os.environ),args.omp_profile)
-    except ValueError:
-        return _problem(args,'invalid_omp_profile','Select a valid omp profile.')
-    context = Context(paths,{}, {},frozenset(),{}, {},omp_profile=selected)
+    selected = None
+    shell = args.command=='launch-omp' and args.mode=='shell'
+    recorded_profile = args.command in {'update','uninstall','doctor','reconcile'} and args.omp_profile is None
+    if not shell and not recorded_profile:
+        try:
+            selected = resolve_omp_profile(paths.home,dict(os.environ),args.omp_profile)
+        except ValueError:
+            return _problem(args,'invalid_omp_profile','Select a valid omp profile.')
     if args.command == 'launch-omp':
         from .launch import launch
         from .launch_checks import LaunchRequest
@@ -147,6 +150,8 @@ def main(argv=None):
             return _problem(args,'launch_invalid_request','Exact launch inputs could not be validated; no fallback was attempted.')
         _emit(args,output)
         return status
+    if args.command in {'bootstrap-skill','migrate-omp'}:
+        context = Context(paths,{}, {},frozenset(),{}, {},omp_profile=selected)
     if args.command == 'bootstrap-skill':
         from . import skill_install
         findings = skill_install.install(context,runner,dry_run=args.dry_run,skill=args.skill)
@@ -168,7 +173,7 @@ def main(argv=None):
                         for raw in previous.legacy_cleanup:
                             intended |= frozenset(raw['selection']['features']) & FEATURES
                 if intended:
-                    context = replace(discover(paths,runner,features=intended),omp_profile=selected)
+                    context = discover(paths,runner,features=intended,omp_profile=selected)
             except (OSError,ValueError):
                 pass  # Migration emits its bounded ownership/recovery finding.
         result = migration.migrate_to_omp(context,runner,dry_run=not args.apply,restore_external=args.restore_external)
@@ -185,11 +190,16 @@ def main(argv=None):
     if isinstance(receipt,LegacyReceipt):
         return _problem(args,'migration_required','Run migrate-omp for explicit preview, then migrate-omp --apply; historical ownership was not changed.')
     if receipt and args.command not in {'plan','install'}:
-        if args.omp_profile is not None and selected != receipt.selection.omp_profile:
+        if selected is not None and selected != receipt.selection.omp_profile:
             return _problem(args,'selection_conflict','Keep the recorded omp profile until owned features are removed.')
         selected = receipt.selection.omp_profile
-    context = replace(discover(paths,runner,features=(features if args.command in {'plan','install'} else frozenset()) |
-                              (receipt.selection.features if receipt else frozenset())),omp_profile=selected)
+    if selected is None:
+        try:
+            selected = resolve_omp_profile(paths.home,dict(os.environ),args.omp_profile)
+        except ValueError:
+            return _problem(args,'invalid_omp_profile','Select a valid omp profile.')
+    context = discover(paths,runner,features=(features if args.command in {'plan','install'} else frozenset()) |
+                       (receipt.selection.features if receipt else frozenset()),omp_profile=selected)
     if args.command in {'plan','install'}:
         context.appearance_config = args.appearance_config
         context.project_launcher_config = args.project_launcher_config
