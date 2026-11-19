@@ -92,6 +92,41 @@ class CliTests(MigrationFixture):
         self.assertNotIn('PRIVATE_',out+err)
         self.assertEqual(self.runner.calls,[])
 
+    def test_migration_preview_reports_retirement_without_agent_discovery(self):
+        import base64
+        import sys
+        from types import SimpleNamespace
+        from iterm2_utils import legacy_state
+        from iterm2_utils.models import Receipt, Selection
+        path = self.context.paths.data/'releases/old/helper.py'; path.parent.mkdir(parents=True)
+        path.write_bytes(b'old')
+        current = self.context.paths.data/'current'; current.symlink_to(path.parent)
+        resources = [
+            self.resource('file', path, {'mode':0o600}, self.value(exists=False),
+                self.value(base64.b64encode(b'old').decode()), ('shared:runtime','status')),
+            self.resource('symlink', current, {}, self.value(exists=False),
+                self.value(str(path.parent)), ('shared:runtime','status')),
+        ]
+        self.save(Receipt('2', Selection(frozenset(), frozenset(), 'Default', self.profile),
+            [], [], [legacy_state.encode(self.historical(resources))]))
+        before = self.snapshot()
+        def respond(argv, **kwargs):
+            self.assertEqual(argv[0], sys.executable)
+            self.assertEqual(json.loads(kwargs['stdin']), {'operation':'sessions_empty'})
+            self.assertEqual(kwargs['timeout'], 10)
+            return SimpleNamespace(returncode=0, stdout=json.dumps(response))
+        with patch.object(cli, 'discover', side_effect=AssertionError('discovery')), \
+             patch.object(self.runner, 'run', side_effect=respond):
+            for response, expected, exit_code in (
+                    ({'status':'ok','value':True}, 'legacy_resource_cleanup', 0),
+                    ({'status':'conflict'}, 'legacy_runtime_deferred', 3)):
+                code, out, err = self.invoke(['migrate-omp','--dry-run','--json'])
+                self.assertEqual(code, exit_code, out+err)
+                self.assertIn(expected, out)
+                self.assertEqual(self.snapshot(), before)
+                self.assertEqual(current.readlink(), path.parent)
+                self.assertFalse((self.context.paths.data/'transaction.lock').exists())
+
     def test_invalid_receipt_is_not_treated_as_empty_install(self):
         path = self.context.paths.data/'receipt.json'
         path.parent.mkdir(parents=True); path.write_text('{PRIVATE_INVALID')

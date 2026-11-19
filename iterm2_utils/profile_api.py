@@ -36,7 +36,7 @@ def _request(request):
         fields.update({'value','expected'})
         validator = validate_bar if operation == 'write_bar' else validate_position
         validator(request.get('value')); existing(request.get('expected'), validator)
-    if operation not in {'inspect','read_bar','write_bar','read_position','write_position'} or set(request) != fields:
+    if operation not in {'sessions_empty','inspect','read_bar','write_bar','read_position','write_position'} or set(request) != fields:
         raise ValueError()
     return operation
 
@@ -125,6 +125,16 @@ async def _operate(request):
         operation = _request(request)
         import iterm2
         connection = await iterm2.Connection.async_create()
+        if operation == 'sessions_empty':
+            response = await iterm2.rpc.async_list_sessions(connection)
+            if not response.HasField('list_sessions_response'):
+                raise ValueError('Native session coverage unavailable')
+            sessions = response.list_sessions_response
+            empty = not sessions.buried_sessions and all(
+                tab.HasField('root') and not tab.root.links and
+                not tab.minimized_sessions and not tab.active_session_id
+                for window in sessions.windows for tab in window.tabs)
+            return {'status':'ok','value':empty}
         snapshot = await _inventory(iterm2, connection, request.get('reference_guids', ()), request.get('replaced_bars', ()))
         if operation == 'inspect':
             return {'status':'ok','value':snapshot}

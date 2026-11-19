@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Historical runtime retirement now uses a bounded, read-only SDK session snapshot
+through the invoking Python, independent of status-bar/profile schema and agent
+discovery. Missing envelopes/roots or live, minimized and buried sessions defer
+cleanup; receipt ownership, persisted-reference checks and locked revalidation
+still apply. Keep sessions closed during authorized apply; no sessions are closed
+automatically and this does not establish live migration acceptance.
+
 Final omp-only source corrections preserve migrated appearance PNGs and guarded
 original binding inverses; native config/MCP FIFO reads fail without mutation.
 Resume no longer treats missing identity records as proof a dialog is closed.

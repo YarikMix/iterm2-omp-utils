@@ -36,6 +36,7 @@ class AdapterTests(unittest.TestCase):
 
     def respond(self, value):
         self.runner.responses['python3'] = json.dumps(value)
+        self.runner.responses[Path(sys.executable).name] = json.dumps(value)
 
     def test_inspect_uses_selected_python_bounded_stdin_protocol(self):
         self.assertEqual(iterm.inspect(self.context, self.runner), inventory())
@@ -44,6 +45,33 @@ class AdapterTests(unittest.TestCase):
         self.assertEqual(timeout, 10)
         self.assertEqual(json.loads(stdin), {'operation': 'inspect'})
         self.assertNotIn('parent-guid', ' '.join(argv))
+
+    def test_sessions_empty_uses_invoking_python_without_discovery(self):
+        for value in (True, False):
+            self.respond({'status':'ok','value':value})
+            self.assertIs(iterm.sessions_empty(self.runner), value)
+            argv, timeout, stdin = self.runner.calls[-1]
+            self.assertEqual(argv[0], sys.executable)
+            self.assertEqual(timeout, 10)
+            self.assertEqual(json.loads(stdin), {'operation':'sessions_empty'})
+
+    def test_sessions_empty_rejects_nonboolean_missing_and_timeout_responses(self):
+        for response in ({'status':'ok','value':0}, {'status':'ok','value':None},
+                         {'status':'ok'}, {'status':'conflict'}):
+            self.respond(response)
+            with self.subTest(response=response), self.assertRaises(ValueError):
+                iterm.sessions_empty(self.runner)
+        with patch.object(self.runner, 'run', side_effect=subprocess.TimeoutExpired('fixture', 10)):
+            with self.assertRaises(ValueError):
+                iterm.sessions_empty(self.runner)
+
+    def test_sessions_empty_rejects_unusable_invoking_python(self):
+        for executable, version in (('python3', (3, 13)), ('/fixture/python3', (3, 10))):
+            with self.subTest(executable=executable, version=version), \
+                 patch.object(iterm.sys, 'executable', executable), \
+                 patch.object(iterm.sys, 'version_info', version), self.assertRaises(ValueError):
+                iterm.sessions_empty(self.runner)
+        self.assertEqual(self.runner.calls, [])
 
     def test_launcher_schema_is_evidence_not_application_version(self):
         snapshot = inventory()
@@ -139,6 +167,11 @@ class NativeSdkTests(unittest.IsolatedAsyncioTestCase):
         self.writes = []
         self.position = 0
         self.closed = []
+        self.list_sessions = SimpleNamespace(windows=[], buried_sessions=[])
+        self.list_sessions_present = True
+        async def list_sessions(connection):
+            return SimpleNamespace(list_sessions_response=self.list_sessions,
+                HasField=lambda field: field == 'list_sessions_response' and self.list_sessions_present)
         async def close(): self.closed.append(True)
         self.connection = SimpleNamespace(websocket=SimpleNamespace(close=close))
         async def connect(): return self.connection
@@ -156,11 +189,54 @@ class NativeSdkTests(unittest.IsolatedAsyncioTestCase):
             Profile=SimpleNamespace(async_get=profiles, async_get_default=default), async_get_app=app,
             preferences=SimpleNamespace(PreferenceKey=SimpleNamespace(STATUS_BAR_POSITION=SimpleNamespace(value='StatusBarPosition')),
                 async_get_preference=get_preference, async_set_preference=set_preference),
-            rpc=SimpleNamespace(async_set_profile_properties_json=set_properties))
+            rpc=SimpleNamespace(async_set_profile_properties_json=set_properties, async_list_sessions=list_sessions))
         self.patch = patch.dict(sys.modules, {'iterm2': self.sdk}); self.patch.start(); self.addCleanup(self.patch.stop)
 
     async def operate(self, **request):
         return await profile_api._operate(request)
+
+    async def test_sessions_empty_ignores_profile_schema(self):
+        self.properties['Show Status Bar'] = 0
+        self.properties['Status Bar Layout'] = 'future-schema'
+        self.assertEqual(await self.operate(operation='inspect'), {'status':'conflict'})
+        self.assertEqual(await self.operate(operation='sessions_empty'), {'status':'ok','value':True})
+        self.assertEqual(self.writes, [])
+        self.assertEqual(self.closed, [True, True])
+
+    async def test_sessions_empty_fails_closed_for_incomplete_and_nonempty_snapshots(self):
+        self.assertEqual(await self.operate(operation='sessions_empty'), {'status':'ok','value':True})
+        self.list_sessions_present = False
+        self.assertEqual(await self.operate(operation='sessions_empty'), {'status':'conflict'})
+        self.list_sessions_present = True
+        self.list_sessions.windows = [SimpleNamespace(tabs=[])]
+        self.assertEqual(await self.operate(operation='sessions_empty'), {'status':'ok','value':True})
+        for tabs, buried in (
+                ([SimpleNamespace(HasField=lambda field: False, minimized_sessions=[], active_session_id='')], []),
+                ([SimpleNamespace(HasField=lambda field: True,
+                                  root=SimpleNamespace(links=[SimpleNamespace(session=object())]),
+                                  minimized_sessions=[], active_session_id='')], []),
+                ([SimpleNamespace(HasField=lambda field: True,
+                                  root=SimpleNamespace(links=[SimpleNamespace(node=SimpleNamespace(links=[]))]),
+                                  minimized_sessions=[], active_session_id='')], []),
+                ([SimpleNamespace(HasField=lambda field: True, root=SimpleNamespace(links=[]),
+                                  minimized_sessions=[object()], active_session_id='')], []),
+                ([SimpleNamespace(HasField=lambda field: True, root=SimpleNamespace(links=[]),
+                                  minimized_sessions=[], active_session_id='active')], []),
+                ([], [object()])):
+            self.list_sessions.windows = [SimpleNamespace(tabs=tabs)]
+            self.list_sessions.buried_sessions = buried
+            with self.subTest(tabs=tabs, buried=buried):
+                self.assertEqual(await self.operate(operation='sessions_empty'), {'status':'ok','value':False})
+        self.list_sessions.windows = [SimpleNamespace(tabs=[SimpleNamespace(
+            HasField=lambda field: field == 'root', root=SimpleNamespace(links=[]),
+            minimized_sessions=[], active_session_id='')])]
+        self.list_sessions.buried_sessions = []
+        self.assertEqual(await self.operate(operation='sessions_empty'), {'status':'ok','value':True})
+        self.assertEqual(self.writes, [])
+
+    async def test_sessions_empty_rejects_extra_fields_before_connect(self):
+        self.assertEqual(await self.operate(operation='sessions_empty', guid='parent-guid'), {'status':'conflict'})
+        self.assertEqual(self.closed, [])
 
     async def test_group_write_only_two_fields_and_exact_guid(self):
         result = await self.operate(operation='write_bar', guid='parent-guid', value=AFTER, expected={'exists': True, 'value': BEFORE})

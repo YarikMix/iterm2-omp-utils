@@ -248,7 +248,7 @@ class MigrationTests(MigrationFixture):
         resource = self.resource('file', release, {'mode':0o600}, self.value(exists=False),
             self.value(base64.b64encode(b'old shell helper').decode()), ('shared:runtime','status'))
         self.save(self.historical([resource]))
-        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[{'id':'live'}]}):
+        with patch('iterm2_utils.config.iterm.sessions_empty', return_value=False):
             result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
         self.assertEqual(release.read_bytes(), b'old shell helper')
         self.assertEqual(result.receipt.legacy_cleanup[0]['resources'], [resource])
@@ -259,14 +259,44 @@ class MigrationTests(MigrationFixture):
         path.write_bytes(b'old')
         resource = self.resource('file', path, {'mode':0o600}, self.value(exists=False),
             self.value(base64.b64encode(b'old').decode()), ('shared:runtime','status'))
-        self.save(self.historical([resource]))
-        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[], 'complete':True}):
+        current = self.context.paths.data/'current'
+        current.symlink_to(path.parent)
+        link = self.resource('symlink', current, {}, self.value(exists=False),
+            self.value(str(path.parent)), ('shared:runtime','status'))
+        self.save(self.historical([resource, link]))
+        with patch('iterm2_utils.config.iterm.sessions_empty', return_value=True):
             first = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
             self.assertTrue(path.exists())
             self.assertTrue(first.receipt.legacy_cleanup)
+            self.assertEqual(current.readlink(), path.parent)
+            self.assertEqual(path.read_bytes(), b'old')
             result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
         self.assertFalse(path.exists())
+        self.assertFalse(current.is_symlink())
         self.assertEqual(result.receipt.legacy_cleanup, [])
+
+    def test_session_reappears_before_runtime_retirement_preserves_files(self):
+        path = self.context.paths.data/'releases/old/helper.py'; path.parent.mkdir(parents=True)
+        path.write_bytes(b'old')
+        current = self.context.paths.data/'current'; current.symlink_to(path.parent)
+        resources = [
+            self.resource('file', path, {'mode':0o600}, self.value(exists=False),
+                self.value(base64.b64encode(b'old').decode()), ('shared:runtime','status')),
+            self.resource('symlink', current, {}, self.value(exists=False),
+                self.value(str(path.parent)), ('shared:runtime','status')),
+        ]
+        receipt = Receipt('2', Selection(frozenset(), frozenset(), 'Default', self.profile),
+            [], [], [legacy_state.encode(self.historical(resources))])
+        self.save(receipt)
+        before = (self.context.paths.data/'receipt.json').read_bytes()
+        with patch('iterm2_utils.config.iterm.sessions_empty', side_effect=[True, False]) as evidence:
+            result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
+        self.assertEqual(evidence.call_count, 2)
+        self.assertTrue(any(f.code == 'migration_stale_preview' for f in result.findings))
+        self.assertEqual(path.read_bytes(), b'old')
+        self.assertEqual(current.readlink(), path.parent)
+        self.assertEqual(state.load(self.context.paths.data/'receipt.json'), receipt)
+        self.assertEqual((self.context.paths.data/'receipt.json').read_bytes(), before)
 
     def test_registration_uses_only_companion_receipted_exact_storage_address(self):
         path = self.home/'custom-config.toml'
@@ -391,7 +421,7 @@ class MigrationTests(MigrationFixture):
         ]
         self.save(self.historical(resources, ('shell',)))
         shell_before = self.context.paths.zshrc.read_bytes()
-        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[], 'complete':True}):
+        with patch('iterm2_utils.config.iterm.sessions_empty', return_value=True):
             first = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
             self.assertTrue(any(resource['kind'] == 'zsh' for resource in first.receipt.resources))
             second = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
@@ -422,7 +452,7 @@ class MigrationTests(MigrationFixture):
                 owners=('codex:appearance',)),
         ]
         self.save(self.historical(resources, ('appearance',)))
-        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[], 'complete':True}):
+        with patch('iterm2_utils.config.iterm.sessions_empty', return_value=True):
             migration.migrate_to_omp(self.context, self.runner, dry_run=False)
             result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
         self.assertTrue(current.is_symlink())
@@ -445,7 +475,7 @@ class MigrationTests(MigrationFixture):
         receipt = Receipt('2', Selection(frozenset({'appearance'}), frozenset(), 'Default', self.profile),
             [active], [], [legacy_state.encode(self.historical([deferred]))])
         self.save(receipt)
-        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[], 'complete':True}):
+        with patch('iterm2_utils.config.iterm.sessions_empty', return_value=True):
             migration.migrate_to_omp(self.context, self.runner, dry_run=False)
             result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
         self.assertEqual(config.read_bytes(), content)
@@ -462,7 +492,7 @@ class MigrationTests(MigrationFixture):
             self.value(base64.b64encode(sibling.read_bytes()).decode()), ('shared:runtime','appearance'))
         self.save(Receipt('2', Selection(frozenset({'appearance'}), frozenset(), 'Default', self.profile),
             [active], [], [legacy_state.encode(self.historical([deferred]))]))
-        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[], 'complete':True}):
+        with patch('iterm2_utils.config.iterm.sessions_empty', return_value=True):
             migration.migrate_to_omp(self.context, self.runner, dry_run=False)
             result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
         self.assertEqual(active_file.read_bytes(), b'import sibling\n')
@@ -481,7 +511,7 @@ class MigrationTests(MigrationFixture):
             self.value(base64.b64encode(old.read_bytes()).decode()), ('shared:runtime','appearance'))
         self.save(Receipt('2', Selection(frozenset({'appearance'}), frozenset(), 'Default', self.profile),
             [active], [], [legacy_state.encode(self.historical([deferred]))]))
-        with patch('iterm2_utils.config.iterm.inspect', return_value={'sessions':[], 'complete':True}):
+        with patch('iterm2_utils.config.iterm.sessions_empty', return_value=True):
             result = migration.migrate_to_omp(self.context, self.runner, dry_run=False)
         self.assertFalse(old.exists())
         self.assertEqual(new.read_bytes(), b'<svg id=\"new\"/>')

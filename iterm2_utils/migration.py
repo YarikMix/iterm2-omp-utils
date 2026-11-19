@@ -244,7 +244,7 @@ def _prepare_scope(context, runner, *, restore_external, bootstrap):
                 if _runtime(resource, context):
                     if runtime_safe is None:
                         try:
-                            inventory = iterm.inspect(context, runner)
+                            sessions_empty = iterm.sessions_empty(runner)
                             detached = isinstance(previous, Receipt) and all(
                                 _runtime(other, context) or (external_writer(other) and
                                     engine._same(_observe(other, context, runner), other['installed']))
@@ -252,8 +252,8 @@ def _prepare_scope(context, runner, *, restore_external, bootstrap):
                             if detached:
                                 detached = not _active_runtime_references(
                                     result.resources, all_resources, context, runner, observations)
-                            runtime_safe = detached and inventory.get('complete') is True and not inventory['sessions']
-                            observations.append(('runtime_inventory', inventory))
+                            runtime_safe = detached and sessions_empty
+                            observations.append(('runtime_inventory', sessions_empty))
                         except (ValueError, OSError, RuntimeError, KeyError):
                             runtime_safe = False
                             observations.append(('runtime_inventory', 'unavailable'))
