@@ -1,33 +1,105 @@
-# Beta compatibility and verification
+# Current omp compatibility and historical evidence
 
-Release: **v0.1.0-beta.1**, 2026-10-23. Supported target: macOS + zsh with Python
-3.11+ (stdlib installer). Linux CI is configured for pure/fixture behavior and export only;
-it does not establish Linux product support. This beta has no stable-production
-acceptance claim.
+Current target: **macOS + zsh, Python 3.11+**, with one active omp consumer.
+Linux CI covers fixtures/export, not Linux product support. The existing beta
+archive version is not an omp acceptance claim. Historical agent integrations,
+wrappers, event engines and restore commands have been withdrawn without aliases.
 
-## omp skill bootstrap — 2026-11-16
+## Current capability and evidence boundary
 
-`bootstrap-skill --agent omp` supports all three public bundles in the native
-macOS omp skill directory. Directory/profile semantics follow the public source
-of omp 18.20.2: default `HOME/.omp/agent/skills`, named profile
-`HOME/.omp/profiles/<name>/agent/skills`, `OMP_PROFILE` over legacy `PI_PROFILE`,
-`PI_CONFIG_DIR`, and default-profile-only `PI_CODING_AGENT_DIR`.
-An explicitly empty OMP_PROFILE selects default; invalid profiles block writes.
-Use OMP_PROFILE on the bootstrap invocation; a separate omp process's --profile
-flag is not discovered. Existing profile copies are retained, not migrated.
+| Operation | Required only when selected |
+| --- | --- |
+| Skill bootstrap | Python stdlib; no agent/SDK/Bun/API probe, no features selected |
+| Shell integration | iTerm2 and zsh; no omp/Bun/SDK prerequisite |
+| One ordinary shell tab | Selected Python + official iTerm2 SDK/API and shell profile; no agent storage resolution |
+| New/handoff omp tab | Verified executable/wrapper, selected native storage profile, cwd/profile/config capabilities and one SDK create |
+| Exact resume | Exact saved file/header/cwd/profile and resume capability; identity/continuation proof is independent |
+| Native status/notifications | Selected native YAML addresses (bundled yaml 2.9.1 via Bun), explicit receiver evidence; no hook fallback |
+| Clipboard/shortcuts | Narrow CopySelection/native bindings; dedicated profile, not all Bun jobs |
+| Appearance/project buttons | Selected Python/SDK, typed native inventory, TTY/foreground and reference/CAS guards |
+| Observe MCP | Optional pinned stdio server, one owned omp JSON server address |
 
-The host is separate from the configured consumer: setup/projects still manage
-Codex/Claude features; launch hosted in omp still launches Codex. `both` remains
-Codex + Claude. No omp executable, settings, status integration or iTerm2 API is
-probed or modified by bootstrap. Standard per-skill receipts/CAS apply.
+Version strings are diagnostics, **not exact-version gates**. The design's
+inspection of omp **18.20.2** and its help/source is capability research, not
+native TUI/GUI acceptance. Later compatible versions are not rejected by string.
+Shell failure is not inferred from a missing optional dependency.
 
-Isolated installer/release fixtures and a temporary-HOME CLI smoke exercise file
-installation and update safety only. They do not establish refresh of discovery
-in an active omp session or live Codex handoff/resume acceptance from omp.
+All omp-only execution, RED/GREEN, extraction/build and live acceptance remain
+**NOT RUN until Task10**. The authored isolated extraction tests exercise real
+imports, all three independent bootstrap transactions, shell install/doctor,
+one fake-SDK shell create plus its real login-shell command, and the installed
+YAML transform after extracted sources are removed. Inventory/source absence is
+not standalone-operation evidence; these regressions must actually run.
+
+Native idle/working/blocked/done/error, one visible completion/error banner,
+EN/RU copy/paste/newline, Ctrl+Q, appearance/APS and project-button rendering are
+unverified. Settings readback/connectivity cannot clear those UI claims.
+SDK authorization/OS permission dialogs remain human actions; no automatic
+dependency installation, network/auth or GUI access belongs in fixture tests.
+
+The public allowlist includes all three skill bundles, native profile/history/
+terminal helpers, strict legacy decoder/cleanup, YAML/vendor licenses and the
+nine SVG/PNG pairs. Installed runtime keeps `runtime/omp_config.ts` beside root
+`vendor/yaml/`; it does not ship the retired hook/restorer/vendor trees.
+The historical hook fixture is a data-only projection of the earlier receipt,
+not a bundled copy of its executable runtime.
+
+## Receipt v2 and historical recovery boundary — 2026-11-16
+
+The current receipt has exactly `version: "2"`, `selection`, `resources`,
+`pending_ui`, and `legacy_cleanup`. Its selection contains explicit feature and
+shortcut lists, the iTerm2 `parent_profile`, `omp_profile` (`name` and absolute
+`agent_dir`), nullable `resume_key`, and boolean `notify_errors`. The default omp
+profile is represented by `name: null`; it is not an agent or iTerm2 profile.
+Current paths and selection have no Codex/Claude agent fields.
+
+Resource address schema version remains `"1"` independently of the receipt
+version. Before-values, installed values, owners, typed native values, CAS,
+symlink guards, backups and durable intent-before-write ordering are unchanged.
+Reapplying an owned address preserves its original inverse.
+
+`legacy_cleanup` is a list of complete, strictly validated v1 receipt objects.
+This preserves deferred/unresolved historical resources together with their
+original before-values, pending UI and bounded native UI snapshots. It does not
+promote them into current resource ownership. Normal install, update, uninstall,
+reconcile and doctor dispatch historical receipts as `migration_required`
+without discovering or invoking historical agent executables.
+
+`state.load` returns a current receipt, a distinct historical receipt, or `None`;
+malformed/unsupported state grants no ownership. `state.save` accepts current
+receipts only. Recovery alone uses `save_recovery` to finish a historical commit
+as v1 or retain an unresolved historical journal as v1. A user-modified address
+is never overwritten, and its original inverse remains retryable. Historical
+CLI registrations are deferred instead of calling their old agent commands.
+Bootstrap receipts remain under their separate existing per-bundle state paths.
+
+Profile resolution follows the existing omp-bootstrap implementation: explicit
+choice, then `OMP_PROFILE`, then `PI_PROFILE`; empty/`default` selects default.
+`PI_CONFIG_DIR` uses Node-style HOME-prefixed joining even for absolute-looking
+values. Named profiles ignore `PI_CODING_AGENT_DIR`; default-only relative
+overrides resolve against process cwd without expanding `~`. Resolution is pure.
+The implementation is fixture-scoped; integrated and live verification remain
+separate acceptance gates.
+
+## Historical pre-omp evidence (not current acceptance)
+
+Everything below records the withdrawn product at its dated checkpoint.
+Its versions, commands, test counts, compatibility pins and live observations
+do **not** describe or verify the current omp-only product. Original dated
+specifications and validation reports remain historical; no previous result is
+promoted to omp acceptance.
+
+The intermediate multi-host bootstrap from [PR #15](https://github.com/YarikMix/iterm2-utils/pull/15)
+installed the old skill bundles in an omp profile without changing their
+Codex/Claude consumers. The current bootstrap supersedes that interface:
+select the bundle and omp profile, not an `--agent` host. Profile resolution
+and receipt-guarded updates remain; installing or launching the retired
+consumers is not supported.
+
 
 ## Codex API launch and exact resume — 2026-11-01
 
-Current `launch-codex` supports mutually exclusive `--handoff ABS_FILE` and
+Historical `launch-codex` supported mutually exclusive `--handoff ABS_FILE` and
 `--resume SESSION_UUID`; both require `--window WINDOW_ID --profile PROFILE_NAME
 --cwd ABS_DIR`. Existing handoff calls remain compatible. Resume validates one
 exact interactive transcript under effective `CODEX_HOME/sessions`; it never

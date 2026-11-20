@@ -6,7 +6,7 @@ import struct
 import zlib
 
 from runtime.appearance import BUILTIN_ICONS, load_rules
-from .. import state
+from .. import engine, state
 from ..models import ChangeSet, Context, FileEdit, Finding, Selection, UiStep
 
 
@@ -77,14 +77,17 @@ def _png(path):
 
 def build(context: Context, selection: Selection) -> ChangeSet:
     changes = ChangeSet([], [], [])
-    if not selection.agents_for('appearance'):
+    if 'appearance' not in selection.features:
         return changes
     installed = context.paths.config/'appearance.json'
     receipt = state.load(context.paths.data/'receipt.json')
-    owned = receipt and any(r['target'] == str(installed.resolve()) and
-        {'appearance','codex:appearance'} & set(r['owners']) for r in receipt.resources)
+    resources = [r for r in receipt.resources if r['target']==str(installed.resolve())
+                 and 'appearance' in r['owners']] if receipt else []
+    owned = bool(resources) and all(engine._same(engine._read(r,None,context),r['installed']) for r in resources)
+    if resources and not owned:
+        raise ValueError('Transferred appearance configuration changed')
     if context.appearance_config is None and not owned:
-        changes.findings.append(Finding('appearance','codex','appearance_config_required','conflict',
+        changes.findings.append(Finding('appearance','omp','appearance_config_required','conflict',
             'First installation requires --appearance-config with valid project rules; repeat installation uses the owned installed configuration.'))
         return changes
     before = installed.read_bytes() if installed.exists() else None
@@ -113,8 +116,8 @@ def build(context: Context, selection: Selection) -> ChangeSet:
         changes.edits.append(FileEdit(path, path.read_bytes() if path.exists() else None, content, 0o600, 'appearance'))
     content = (json.dumps({'projects':rules}, ensure_ascii=False, sort_keys=True, indent=2)+'\n').encode()
     changes.edits.append(FileEdit(installed, before, content, 0o600, 'appearance'))
-    changes.findings.append(Finding('appearance','codex','appearance_api','pending_ui',
+    changes.findings.append(Finding('appearance','omp','appearance_api','pending_ui',
         'Explicit session Python API access and rendered appearance are not verified.'))
-    changes.ui.append(UiStep('appearance_api', 'appearance', 'codex',
+    changes.ui.append(UiStep('appearance_api', 'appearance', 'omp',
         'Enable iTerm2 Python API and authorize the selected Python, then reconcile appearance_api in an explicit iTerm2 session. This verifies access, not rendered appearance.'))
     return changes

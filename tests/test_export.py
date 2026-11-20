@@ -1,5 +1,6 @@
 """Public beta export is allowlisted, provenance checked and independently usable."""
 import hashlib
+import os
 import json
 from pathlib import Path
 import shutil
@@ -14,105 +15,175 @@ from tools import build_release, check_export
 
 ROOT = Path(__file__).resolve().parents[1]
 
-LAUNCH_SMOKE = r"""import importlib, json, os, pathlib, sys
-from unittest.mock import patch
-from iterm2_utils import launch
+IMPORT_AND_BOOTSTRAP = r"""
+import contextlib, importlib, io, json, pathlib, socket, sys
+from iterm2_utils import cli, state
 from iterm2_utils.discovery import resolve_paths
-from iterm2_utils.launch_checks import LaunchInspection, LaunchRequest, _identity
-from runtime.codex_restore.codexlib.iterm import ITerm
-from tests.restore.helpers import TerminalTools
-from tests.support import Fixture
+from iterm2_utils.skill_install import _context
+from iterm2_utils.models import Context
 
-for root in ('iterm2_utils', 'runtime'):
-    for path in pathlib.Path(root).rglob('*.py'):
+root = pathlib.Path.cwd().resolve()
+home = pathlib.Path.home()
+sys.modules['iterm2'] = None  # An unselected SDK must not be imported.
+def no_network(*args, **kwargs): raise AssertionError('Unexpected network access')
+socket.socket.connect = no_network
+for folder in ('iterm2_utils', 'runtime'):
+    for path in (root/folder).rglob('*.py'):
         if path.name != '__main__.py':
-            module = importlib.import_module('.'.join(path.with_suffix('').parts))
-            assert pathlib.Path(module.__file__).resolve().is_relative_to(pathlib.Path.cwd())
-assert issubclass(launch.LaunchITerm, ITerm)
-with Fixture() as f:
+            module = importlib.import_module('.'.join(path.relative_to(root).with_suffix('').parts))
+            assert pathlib.Path(module.__file__).resolve().is_relative_to(root)
+for skill in ('iterm2-setup', 'iterm2-launch', 'iterm2-projects'):
+    output = io.StringIO()
+    with contextlib.redirect_stdout(output):
+        code = cli.main(['bootstrap-skill', '--skill', skill, '--omp-profile', 'work', '--json'])
+    assert code == 0, output.getvalue()
+    source = root/'skills'/skill
+    target = home/'.omp/profiles/work/agent/skills'/skill
+    assert {p.relative_to(target):p.read_bytes() for p in target.rglob('*') if p.is_file()} == {
+        p.relative_to(source):p.read_bytes() for p in source.rglob('*') if p.is_file()}
     paths = resolve_paths()
-    assert not (paths.data/'receipt.json').exists()
-    handoff = f.home/'поручение.md'
-    handoff.write_text('PRIVATE_HANDOFF_SENTINEL')
-    tools = TerminalTools(f.home)
-    sid = '11111111-1111-4111-8111-111111111111'
-    tools.set_inventory([dict(id=sid, tab_id='T-new', window_id='W1')],
-                        [dict(id='T-new', index=0, window_id='W1')], [dict(id='W1')])
-    tools.it2.write_text(tools.it2.read_text()+'''
-    elif command == "profile-show":
-        print(json.dumps(dict(name="Codex fixture", guid="profile-one", command="codex OTHER")))
-    elif command == "session-get-var":
-        values = {"session.profileName": "Codex fixture", "session.jobName": "codex",
-                  "session.processTitle": "codex", "session.commandLine": pathlib.Path(COMMAND_FILE).read_text()}
-        print(json.dumps(values[sys.argv[3]]))
-'''.replace('COMMAND_FILE', repr(str(f.home/'command-line'))).replace('pathlib.Path', '__import__("pathlib").Path'))
-    (f.home/'iterm2.py').write_text('''import json, os
+    isolated = _context(Context(paths, {}, {}, frozenset(), {}, {}), skill)
+    receipt = state.load(isolated.paths.data/'receipt.json')
+    assert receipt.selection.omp_profile.name == 'work'
+    assert receipt.selection.features == {'bootstrap-skill'}
+assert not (resolve_paths().data/'receipt.json').exists()
+assert not any((home/name).exists() for name in ('.codex', '.claude'))
+"""
+
+SHELL_INSTALL = r"""
+import contextlib, io, json, os, pathlib, plistlib, shutil, socket, subprocess, sys
+from unittest.mock import patch
+from iterm2_utils import cli, state
+from iterm2_utils.discovery import resolve_paths
+home = pathlib.Path.home()
+root = pathlib.Path.cwd()
+sys.modules['iterm2'] = None
+def no_network(*args, **kwargs): raise AssertionError('Unexpected network access')
+socket.socket.connect = no_network
+app = home/'iTerm.app'
+(app/'Contents/MacOS').mkdir(parents=True)
+(app/'Contents/Info.plist').write_bytes(plistlib.dumps({
+    'CFBundleIdentifier':'com.googlecode.iterm2', 'CFBundleExecutable':'iTerm2',
+    'CFBundleShortVersionString':'99.0.0'}))
+binary = app/'Contents/MacOS/iTerm2'
+binary.write_text('#!/bin/sh\nexit 97\n')
+binary.chmod(0o700)
+os.environ['ITERM2_APP'] = str(app)
+calls = []
+class Runner:
+    def run(self, argv, **kwargs):
+        calls.append(argv)
+        assert argv == [shutil.which('zsh'), '--version'], argv
+        return subprocess.CompletedProcess(argv, 0, 'zsh 5.9', '')
+with patch('iterm2_utils.discovery.platform.system', return_value='Darwin'), patch.object(cli, 'Runner', Runner):
+    for command in ('plan', 'install', 'doctor'):
+        output = io.StringIO()
+        args = [command, '--json']
+        if command != 'doctor': args += ['--features', 'shell', '--omp-profile', 'work']
+        with contextlib.redirect_stdout(output):
+            code = cli.main(args)
+        assert code == 0, output.getvalue()
+paths = resolve_paths()
+receipt = state.load(paths.data/'receipt.json')
+assert receipt.selection.features == {'shell'}
+assert receipt.selection.omp_profile.name == 'work'
+assert not (home/'.omp/profiles/work/agent/config.yml').exists()
+assert calls and all(pathlib.Path(c[0]).name == 'zsh' for c in calls)
+current = paths.data/'current'
+assert (current/'vendor/shell_integration/LICENSE').is_file()
+assert not (home/'forbidden-probe').exists()
+"""
+
+SHELL_LAUNCH = r"""
+import contextlib, io, json, os, pathlib, plistlib, shlex, shutil, subprocess, sys
+from unittest.mock import patch
+from iterm2_utils import cli
+home = pathlib.Path.home()
+root = pathlib.Path.cwd()
+app = home/'iTerm.app'
+(app/'Contents/MacOS').mkdir(parents=True)
+(app/'Contents/Resources/utilities').mkdir(parents=True)
+(app/'Contents/Info.plist').write_bytes(plistlib.dumps({
+    'CFBundleIdentifier':'com.googlecode.iterm2', 'CFBundleExecutable':'iTerm2'}))
+binary = app/'Contents/MacOS/iTerm2'; binary.write_text('#!/bin/sh\nexit 97\n'); binary.chmod(0o700)
+os.environ.update(ITERM2_APP=str(app), OMP_PROFILE='INVALID!', PI_PROFILE='INVALID!')
+sdk = home/'sdk'; sdk.mkdir()
+log = home/'sdk-log.jsonl'
+(sdk/'iterm2.py').write_text('''
+import json, os
 from types import SimpleNamespace
 async def close(): pass
-class Connection:
-    @staticmethod
-    async def async_create(): return SimpleNamespace(websocket=SimpleNamespace(close=close))
-class Profile:
-    @staticmethod
-    async def async_get(connection): return [SimpleNamespace(name="Codex fixture", guid="profile-one")]
+async def connect(): return SimpleNamespace(websocket=SimpleNamespace(close=close))
+async def profiles(connection): return [SimpleNamespace(name="Shell",guid="shell-guid")]
 class Window:
-    window_id = "W1"
+    window_id = "W"
     async def async_create_tab(self, **kwargs):
-        with open(os.environ['SDK_LOG'], 'a') as stream:
-            stream.write(json.dumps(kwargs)+'\\n')
-        return SimpleNamespace(tab_id="T-new", all_sessions=[SimpleNamespace(session_id="11111111-1111-4111-8111-111111111111")])
+        with open(os.environ["SDK_LOG"], "a") as out: out.write(json.dumps(kwargs)+"\\n")
+        return SimpleNamespace(tab_id="T", all_sessions=[SimpleNamespace(session_id="S")])
 async def async_get_app(connection):
-    return SimpleNamespace(get_window_by_id=lambda wid: Window() if wid == "W1" else None)
+    return SimpleNamespace(get_window_by_id=lambda wid: Window() if wid=="W" else None)
+Connection = SimpleNamespace(async_create=connect)
+Profile = SimpleNamespace(async_get=profiles)
 ''')
-    identity = _identity(dict(executable=str(f.bin/'codex'), version='codex-cli 0.167.0',
-        home=str(f.home), codex_home=str(paths.codex_home), zdotdir=str(f.home),
-        functions={}, alias='', restore_root='', python=''))
-    inspection = LaunchInspection(tools.it2, f.bin/'zsh', 'profile-one', identity)
-    for resume in (False, True):
-        request = LaunchRequest('W1', 'Codex fixture', f.home,
-                                None if resume else handoff, sid if resume else None)
-        arguments = ('resume '+sid+' -C '+str(f.home) if resume else
-                     '-C '+str(f.home)+' Read the handoff file at '+str(handoff)+' and carry out the task described there.')
-        (f.home/'command-line').write_text('codex '+arguments)
-        with patch.object(launch, 'inspect_launch', return_value=(inspection, [])), patch.dict(os.environ,
-                PYTHONPATH=str(f.home), SDK_LOG=str(f.home/'sdk-log')):
-            code, result = launch.launch(request, paths, f.runner)
-        assert (code, result['status']) == (0, 'launched'), result
-        assert (result['window_id'], result['tab_id'], result['session_id']) == ('W1', 'T-new', sid)
-        assert result['launch_mode'] == ('resume' if resume else 'handoff')
-        assert result['resume_session_id'] == (sid if resume else None)
-    creates = [json.loads(row) for row in (f.home/'sdk-log').read_text().splitlines()]
-    assert len(creates) == 2, creates
-    assert all(row['profile'] == 'Codex fixture' and row['select'] is True for row in creates)
-    assert all('CODEX_RESTORE_NO_AUTO=1' in row['command'] for row in creates)
-    assert all('--no-alt-screen' not in row['command'] for row in creates)
-    assert 'PRIVATE_HANDOFF_SENTINEL' not in json.dumps(result)+json.dumps(creates)
-    assert [row for row in tools.calls() if row[1:3] == ['tab', 'new']] == []
-    assert not (paths.data/'receipt.json').exists()
+zsh = shutil.which('zsh')
+it2 = app/'Contents/Resources/utilities/it2'
+it2.write_text('#!'+sys.executable+'\n'+'''
+import json, sys
+kind, operation = sys.argv[1:3]
+if operation=="list":
+    value = {"window":[{"id":"W"}], "tab":[{"id":"T","window_id":"W","index":0}],
+             "session":[{"id":"S","tab_id":"T","window_id":"W"}],
+             "profile":[{"name":"Shell","guid":"shell-guid"}]}[kind]
+elif kind=="profile":
+    value = {"name":"Shell","guid":"shell-guid","command":""}
+else:
+    value = {"session.profileName":"Shell","session.jobName":"zsh",
+             "session.commandLine":SHELL_LINE}[sys.argv[3]]
+print(json.dumps(value))
+'''.replace('SHELL_LINE', repr(shlex.join([zsh, '-il']))))
+it2.chmod(0o700)
+os.environ.update(PYTHONPATH=str(sdk)+os.pathsep+str(root), SDK_LOG=str(log))
+output = io.StringIO()
+with patch('iterm2_utils.launch_checks.platform.system', return_value='Darwin'), contextlib.redirect_stdout(output):
+    code = cli.main(['launch-omp', '--mode', 'shell', '--window', 'W', '--profile', 'Shell',
+                     '--cwd', str(home), '--json'])
+assert code == 0, output.getvalue()
+result = json.loads(output.getvalue())
+assert (result['status'], result['command'], result['identity'], result['ack']) == (
+    'launched', 'verified', 'unverified', 'not_requested'), result
+creates = [json.loads(line) for line in log.read_text().splitlines()]
+assert len(creates) == 1 and creates[0]['profile'] == 'Shell' and creates[0]['select'] is True, creates
+assert shlex.split(creates[0]['command']) == [
+    '/bin/sh', '-c', 'cd -- '+shlex.quote(str(home))+' && exec '+shlex.join([zsh, '-il'])]
+# Execute the actual selected login-shell command, not a command-text assertion.
+(home/'.zshrc').write_text('print -r -- shell-started > "$HOME/shell-proof"\n')
+shell = subprocess.run(shlex.split(creates[0]['command']), input='exit\n',
+    cwd=home, env=dict(os.environ, ZDOTDIR=str(home)), text=True, capture_output=True, timeout=10)
+assert shell.returncode == 0, shell.stderr
+assert (home/'shell-proof').read_text().strip() == 'shell-started'
+assert not (home/'.omp').exists()
+assert not (home/'forbidden-probe').exists()
 """
 
 
 class ExportTests(unittest.TestCase):
-    def test_export_requires_unique_native_contract_paths(self):
-        required = {'runtime/native_status.py', 'tests/test_native_status.py',
-                    'tests/test_native_status_migration.py', 'tests/fixtures/beta1-status.json',
-                    'docs/native-status-events.md', 'iterm2_utils/launch.py',
-                    'iterm2_utils/launch_checks.py', 'skills/iterm2-launch/SKILL.md',
-                    'skills/iterm2-launch/references/handoff.md',
-                    'skills/iterm2-launch/references/resume.md', 'tests/test_launch.py',
-                    'tests/test_launch_checks.py', 'tests/restore/test_iterm.py'}
+    def test_export_requires_unique_current_contract_paths(self):
+        required = {
+            'iterm2_utils/config/legacy_mcp.py', 'iterm2_utils/legacy_state.py',
+            'iterm2_utils/omp_profile.py', 'iterm2_utils/omp_sessions.py', 'iterm2_utils/terminal.py',
+            'runtime/terminal_identity.py', 'runtime/omp_config.ts', 'runtime/omp_identity.ts',
+            'vendor/yaml/LICENSE', 'vendor/yaml/package.json', 'vendor/yaml/dist/index.js',
+            'tests/native_features_support.py', 'tests/test_omp_identity.ts',
+            'tests/test_native_status_migration.py', 'docs/omp-launch.md', 'docs/omp-identity.md'}
         self.assertTrue(required <= set(check_export.EXPORT_FILES))
+        retired = ('runtime/codex', 'runtime/hook.py', 'runtime/native_status.py',
+                   'runtime/events.py', 'runtime/notifier.py', 'runtime/focus.py',
+                   'runtime/claude_notifications.py', 'vendor/codex_status/', 'tests/restore/')
+        self.assertFalse(any(name.startswith(retired) for name in check_export.EXPORT_FILES))
         self.assertEqual(len(check_export.EXPORT_FILES), len(set(check_export.EXPORT_FILES)))
-        sources = {entry['path']: entry for entry in json.loads((ROOT/'sources.lock.json').read_text())['sources']}
-        for name in ('vendor/codex_status/status.py', 'vendor/codex_status/iterm_support.py'):
-            self.assertIn(name, check_export.EXPORT_FILES)
-            self.assertEqual(hashlib.sha256((ROOT/name).read_bytes()).hexdigest(), sources[name]['sha256'])
-            self.assertEqual(sources[name]['license_file'], 'vendor/codex_status/LICENSE')
-            self.assertEqual(sources[name]['attribution_file'], 'THIRD_PARTY_NOTICES.md')
-        self.assertFalse(any(Path(name).name in {'cc-status', 'it2'} for name in sources))
         with patch.object(check_export, 'EXPORT_FILES',
-                          (*check_export.EXPORT_FILES, 'runtime/native_status.py')):
-            self.assertIn('Duplicate export path: runtime/native_status.py', check_export.check(ROOT))
+                          (*check_export.EXPORT_FILES, 'runtime/terminal_identity.py')):
+            self.assertIn('Duplicate export path: runtime/terminal_identity.py', check_export.check(ROOT))
 
     def test_appearance_delivery_contract(self):
         names = {'ios', 'android', 'kotlett', 'ios-mail', 'ios-cloud', 'android-mail', 'android-cloud',
@@ -162,7 +233,7 @@ class ExportTests(unittest.TestCase):
                 names = {m.name.split('/', 1)[1] for m in members if '/' in m.name}
                 self.assertEqual(len(names), len(members))
                 self.assertIn('skills/iterm2-setup/SKILL.md', names)
-                self.assertIn('vendor/codex_status/LICENSE', names)
+                self.assertIn('vendor/yaml/LICENSE', names)
                 self.assertIn('runtime/assets/appearance/android-mail.png', names)
                 self.assertIn('runtime/appearance.py', names)
                 self.assertIn('runtime/appearance.zsh', names)
@@ -177,9 +248,8 @@ class ExportTests(unittest.TestCase):
                     if relative in {'runtime/appearance.py', 'runtime/appearance.zsh', 'iterm2_utils/launch_checks.py'}:
                         self.assertEqual(content, (ROOT/relative).read_bytes())
                 self.assertEqual(names, set(check_export.EXPORT_FILES))
-                self.assertTrue({'runtime/native_status.py', 'tests/test_native_status.py',
-                                 'tests/test_native_status_migration.py',
-                                 'tests/fixtures/beta1-status.json',
+                self.assertTrue({'runtime/omp_identity.ts', 'runtime/terminal_identity.py',
+                                 'tests/test_native_status_migration.py', 'tests/fixtures/beta1-hooks.json',
                                  'docs/native-status-events.md'} <= names)
             checksum = archive.with_name(archive.name+'.sha256').read_text()
             self.assertEqual(checksum, hashlib.sha256(archive.read_bytes()).hexdigest()+'  '+archive.name+'\n')
@@ -227,36 +297,79 @@ class ExportTests(unittest.TestCase):
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_bytes(tar.extractfile(member).read())
                 path.chmod(member.mode)
-        return destination/'iterm2-utils-v0.1.0-beta.1'
+        return destination/('iterm2-utils-'+build_release.VERSION)
 
     def isolated_env(self, home):
-        return {'HOME': str(home), 'PATH': '/usr/bin:/bin', 'PYTHONNOUSERSITE': '1',
-                'PYTHONDONTWRITEBYTECODE': '1', 'PYTHONPATH': '', 'TMUX': '',
-                'ITERM_SESSION_ID': '12345678-1234-1234-1234-123456789abc',
-                'TERM_SESSION_ID': 'w0t0p0:12345678-1234-1234-1234-123456789abc'}
+        traps = home/'forbidden-bin'
+        traps.mkdir(parents=True, exist_ok=True)
+        for name in ('codex', 'claude', 'omp', 'bun', 'uvx', 'fzf', 'terminal-notifier'):
+            path = traps/name
+            path.write_text('#!/bin/sh\n: > "$HOME/forbidden-probe"\nexit 97\n')
+            path.chmod(0o700)
+        return {'HOME':str(home), 'ZDOTDIR':str(home), 'PATH':str(traps)+':/usr/bin:/bin',
+                'PYTHONNOUSERSITE':'1', 'PYTHONDONTWRITEBYTECODE':'1', 'PYTHONPATH':'', 'TMUX':''}
 
     def run_python(self, extracted, home, *args):
         home.mkdir(exist_ok=True)
         return subprocess.run([sys.executable, *args], cwd=extracted, env=self.isolated_env(home),
                               text=True, capture_output=True, timeout=120)
 
-    def test_extracted_release_launch_without_restore_install(self):
+    def test_fresh_extract_imports_and_bootstraps_all_bundles_without_optional_dependencies(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve(); repo = self.fixture(root)
+            extracted = self.extract(build_release.build(repo, root/'dist'), root/'extract')
+            shutil.rmtree(repo)
+            shutil.rmtree(root/'dist')
+            result = self.run_python(extracted, root/'home', '-c', IMPORT_AND_BOOTSTRAP)
+            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+            self.assertFalse((root/'home/forbidden-probe').exists())
+
+    def test_extracted_release_installs_and_observes_shell_without_sdk_or_agent(self):
         with TemporaryDirectory() as tmp:
             root = Path(tmp); repo = self.fixture(root)
-            archive = build_release.build(repo, root/'dist')
-            extracted = self.extract(archive, root/'extract')
-            repo.rename(root/'checkout-unavailable')
-            result = self.run_python(extracted, root/'home', '-c', LAUNCH_SMOKE)
+            extracted = self.extract(build_release.build(repo, root/'dist'), root/'extract')
+            shutil.rmtree(repo)
+            result = self.run_python(extracted, root/'home', '-c', SHELL_INSTALL)
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
-            for args in ([], ['--skill', 'iterm2-launch']):
-                result = self.run_python(extracted, root/'home', '-m', 'iterm2_utils',
-                                        'bootstrap-skill', '--agent', 'codex', '--json', *args)
-                self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
-            for skill in ('iterm2-setup', 'iterm2-launch'):
-                source = extracted/'skills'/skill
-                for path in source.rglob('*.md'):
-                    installed = root/'home/.codex/skills'/skill/path.relative_to(source)
-                    self.assertEqual(installed.read_bytes(), path.read_bytes())
+
+    def test_extracted_shell_mode_uses_one_supervised_sdk_create_and_real_login_shell(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp); repo = self.fixture(root)
+            extracted = self.extract(build_release.build(repo, root/'dist'), root/'extract')
+            shutil.rmtree(repo)
+            result = self.run_python(extracted, root/'home', '-c', SHELL_LAUNCH)
+            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+
+    def test_installed_parser_runs_after_extracted_sources_are_removed(self):
+        bun = shutil.which('bun')
+        self.assertIsNotNone(bun, 'Integrated native YAML coverage requires Bun')
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp); repo = self.fixture(root)
+            extracted = self.extract(build_release.build(repo, root/'dist'), root/'extract')
+            shutil.rmtree(repo)
+            script = SHELL_INSTALL + r"""
+notices = {name:(root/name).read_bytes() for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md')}
+shutil.rmtree(root)
+os.chdir(home)
+for name, content in notices.items(): assert (current/name).read_bytes() == content
+result = subprocess.run([BUN, '--no-install', '--no-env-file', '--config=/dev/null',
+    str(current/'runtime/omp_config.ts')], input=json.dumps({
+        'op':'patch', 'raw':'# keep\nterminal: {programStatus: false}\nmodel: unchanged\n',
+        'pointer':['terminal','programStatus'], 'expected':{'exists':True,'value':False},
+        'next':{'exists':True,'value':True}}), cwd=home, env=dict(os.environ),
+        capture_output=True, text=True, timeout=5)
+assert result.returncode == 0, result.stderr
+raw = json.loads(result.stdout)['raw']
+assert raw == '# keep\nterminal: {programStatus: true}\nmodel: unchanged\n', raw
+""".replace('BUN,', repr(bun)+',')
+            result = self.run_python(extracted, root/'home', '-c', script)
+            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+
+    def test_extracted_skill_validator_covers_three_bundles(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp); repo = self.fixture(root)
+            extracted = self.extract(build_release.build(repo, root/'dist'), root/'extract')
+            shutil.rmtree(repo)
             result = self.run_python(extracted, root/'home', 'tools/check_skill.py')
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
             (extracted/'skills/iterm2-launch/SKILL.md').write_text('invalid')
@@ -265,189 +378,37 @@ class ExportTests(unittest.TestCase):
             result = self.run_python(extracted, root/'home', 'tools/check_skill.py', 'skills/iterm2-setup')
             self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
 
-    def test_extracted_release_bootstraps_projects_skill_without_source_checkout(self):
+    def test_current_workflows_execute_from_extracted_release_without_original_checkout(self):
+        bun = shutil.which('bun')
+        self.assertIsNotNone(bun, 'Integrated native YAML coverage requires Bun')
         with TemporaryDirectory() as tmp:
-            root = Path(tmp); repo = self.fixture(root)
-            archive = build_release.build(repo, root/'dist')
-            extracted = self.extract(archive, root/'extract')
-            repo.rename(root/'checkout-unavailable')
-            shutil.rmtree(root/'checkout-unavailable')
-            shutil.rmtree(root/'dist')
-            result = self.run_python(extracted, root/'home', '-m', 'iterm2_utils',
-                                     'bootstrap-skill', '--skill', 'iterm2-projects',
-                                     '--agent', 'both', '--json')
-            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
-            source = extracted/'skills/iterm2-projects'
-            expected = {path.relative_to(source): path.read_bytes() for path in source.rglob('*.md')}
-            for host in ('.codex', '.claude'):
-                target = root/'home'/host/'skills/iterm2-projects'
-                self.assertEqual({path.relative_to(target): path.read_bytes() for path in target.rglob('*.md')}, expected)
-                skill = (target/'SKILL.md').read_text()
-                self.assertIn('(references/projects.md)', skill)
-                self.assertNotIn('checkout-unavailable', skill)
-                self.assertNotIn(str(root), skill)
-
-    def test_extracted_release_bootstraps_omp_without_source_checkout(self):
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp); repo = self.fixture(root)
-            archive = build_release.build(repo, root/'dist')
-            extracted = self.extract(archive, root/'extract')
+            root = Path(tmp).resolve(); repo = self.fixture(root)
+            extracted = self.extract(build_release.build(repo, root/'dist'), root/'extract')
             shutil.rmtree(repo)
-            for skill in ('iterm2-setup', 'iterm2-launch', 'iterm2-projects'):
-                result = self.run_python(extracted, root/'home', '-m', 'iterm2_utils',
-                                         'bootstrap-skill', '--skill', skill, '--agent', 'omp', '--json')
-                self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
-                source = extracted/'skills'/skill
-                target = root/'home/.omp/agent/skills'/skill
-                self.assertEqual({p.relative_to(target): p.read_bytes() for p in target.rglob('*.md')},
-                                 {p.relative_to(source): p.read_bytes() for p in source.rglob('*.md')})
-            self.assertFalse((root/'home/.codex').exists())
-            self.assertFalse((root/'home/.claude').exists())
+            home = root/'home'; home.mkdir()
+            env = self.isolated_env(home)
+            selected = home/'selected-bin'; selected.mkdir()
+            (selected/'bun').symlink_to(bun)
+            env['PATH'] = str(selected)+os.pathsep+env['PATH']
+            result = subprocess.run([sys.executable, '-m', 'unittest', 'tests.test_cli',
+                'tests.test_agent_workflow', 'tests.test_skill_install', 'tests.test_lifecycle',
+                'tests.test_payload', '-v'], cwd=extracted, env=env,
+                text=True, capture_output=True, timeout=120)
+            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+            self.assertFalse((home/'forbidden-probe').exists())
 
-    def test_launch_and_standalone_restore_after_source_removed(self):
+    def test_provenance_rejects_stripped_retained_metadata(self):
+        import copy
         with TemporaryDirectory() as tmp:
-            root = Path(tmp); repo = self.fixture(root)
-            archive = build_release.build(repo, root/'dist')
-            extracted = self.extract(archive, root/'extract')
-            repo.rename(root/'checkout-unavailable')
-            shutil.rmtree(root/'checkout-unavailable')
-            shutil.rmtree(root/'dist')
-            script = LAUNCH_SMOKE+r'''
-import shutil
-from tests.test_lifecycle import LifecycleFixture
-from tests.restore import test_cli
-installed = LifecycleFixture(); installed.setUp()
-restore = test_cli.CLITests(); restore.setUp()
-try:
-    installed.assertSuccess(installed.install('restore'))
-    wrapper = installed.context.paths.data/'current/codex_restore/codex-sessions'
-    assert wrapper.is_file()
-    shutil.rmtree(pathlib.Path.cwd())
-    result = restore.command('--help', executable=wrapper)
-    assert result.returncode == 0, result.stderr
-    with patch.object(test_cli, 'WRAPPER', wrapper):
-        restore.test_restore_cli_nul_protocol_list_and_cancel()
-    assert not any('checkout-unavailable' in row for row in sys.path)
-finally:
-    restore.doCleanups()
-    installed.doCleanups()
-'''
-            result = self.run_python(extracted, root/'home', '-c', script)
-            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
-
-    def test_fresh_extract_has_no_source_checkout_dependency(self):
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp); repo = self.fixture(root)
-            archive = build_release.build(repo, root/'dist')
-            extracted = self.extract(archive, root/'extract')
-            repo.rename(root/'checkout-unavailable')
-            script = '''import importlib, pathlib
-for root in ('iterm2_utils', 'runtime', 'vendor/codex_status'):
-    for path in pathlib.Path(root).rglob('*.py'):
-        if path.name == '__main__.py':
-            continue
-        name = '.'.join(path.with_suffix('').parts)
-        importlib.import_module(name)
-from tools.check_export import check
-assert not check(pathlib.Path.cwd())
-'''
-            result = self.run_python(extracted, root/'home', '-c', script)
-            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
-
-    def test_release_cli_scenarios_are_hermetic(self):
-        with TemporaryDirectory() as tmp:
-            root = Path(tmp); repo = self.fixture(root)
-            archive = build_release.build(repo, root/'dist')
-            extracted = self.extract(archive, root/'extract')
-            repo.rename(root/'checkout-unavailable')
-            result = self.run_python(extracted, root/'home', '-m', 'unittest',
-                                    'tests.test_cli', 'tests.test_agent_workflow',
-                                    'tests.test_skill_install', 'tests.test_lifecycle', 'tests.test_payload', '-v')
-            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
-            # Runtime installed into a fixture must survive removal of its extracted source too.
-            script = r'''import json, os, pathlib, subprocess, sys
-from tests.test_lifecycle import LifecycleFixture
-f=LifecycleFixture(); f.setUp()
-try:
-    result=f.install('status','notifications','restore','shell')
-    assert not [x for x in result.findings if x.state in {'conflict','unavailable','missing_dependency'}]
-    current=f.context.paths.data/'current'
-    settings=f.context.paths.config/'runtime.json'
-    configured=json.loads(settings.read_text())
-    assert configured['status_backend']=='cc-status'
-    app=pathlib.Path(configured['iterm2_app'])
-    utilities=app/'Contents/Resources/utilities'
-    utilities.mkdir(parents=True)
-    capture=f.context.paths.home/'native-calls.jsonl'
-    trap=f.context.paths.home/'path-fallback'
-    fake_path=f.context.paths.home/'fake-path'
-    fake_path.mkdir()
-    for name in ('cc-status','it2'):
-        path=fake_path/name
-        path.write_text('#!'+sys.executable+'\nfrom pathlib import Path\nPath('+repr(str(trap))+').touch()\n')
-        path.chmod(0o700)
-    def replace_utilities(version):
-        native=utilities/'cc-status'
-        native.write_text('#!'+sys.executable+'\n'+
-            'import json, os, pathlib, subprocess, sys\n'+
-            'sibling=subprocess.check_output([str(pathlib.Path(__file__).with_name("it2"))],text=True).strip()\n'+
-            'record={"version":'+repr(version)+',"sibling":sibling,"argv":sys.argv,"payload":json.load(sys.stdin),'+
-            '"terminal":os.environ["TERM_SESSION_ID"],"iterm":os.environ["ITERM_SESSION_ID"]}\n'+
-            'with open('+repr(str(capture))+',"a") as stream: stream.write(json.dumps(record)+"\\n")\n')
-        native.chmod(0o700)
-        sibling=utilities/'it2'
-        sibling.write_text('#!'+sys.executable+'\nprint('+repr(version)+')\n')
-        sibling.chmod(0o700)
-    replace_utilities('before-update')
-    runtime_bytes={str(p.relative_to(current)):p.read_bytes() for p in current.rglob('*') if p.is_file()}
-    assert not {'cc-status','it2','receipt.json','raw-event.json'} & {pathlib.Path(p).name for p in runtime_bytes}
-    assert all(not pathlib.Path(r['target']).is_relative_to(app) for r in result.receipt.resources)
-    notices={name: pathlib.Path(name).read_bytes() for name in ('LICENSE','THIRD_PARTY_NOTICES.md')}
-    import shutil
-    shutil.rmtree(pathlib.Path.cwd())
-    for name, expected in notices.items():
-        assert (current/name).read_bytes()==expected
-    env=dict(os.environ, HOME=str(f.context.paths.home),PATH=str(fake_path),PYTHONPATH='',TMUX='')
-    uuid='12345678-1234-1234-1234-123456789abc'
-    env['TERM_SESSION_ID']=env['ITERM_SESSION_ID']='w0t0p0:'+uuid
-    raw={'hook_event_name':'UserPromptSubmit','session_id':'fixture-session','prompt':'PRIVATE_EVENT_SENTINEL'}
-    def invoke():
-        r=subprocess.run([sys.executable,str(current/'hook.py'),'--settings',str(settings),'--agent','codex'],
-                         input=json.dumps(raw),cwd=f.context.paths.home,env=env,
-                         capture_output=True,text=True,timeout=3)
-        assert (r.returncode,r.stdout,r.stderr)==(0,'{}\n',''), (r.returncode,r.stdout,r.stderr)
-    invoke()
-    replace_utilities('after-update')
-    invoke()
-    calls=[json.loads(line) for line in capture.read_text().splitlines()]
-    assert len(calls)==2, calls
-    assert [c['version'] for c in calls]==['before-update','after-update']
-    assert [c['sibling'] for c in calls]==['before-update','after-update']
-    for call in calls:
-        assert call['argv']==[str(utilities/'cc-status'),'--agent','codex'], call
-        assert call['payload']=={'hook_event_name':'UserPromptSubmit'}, call
-        assert call['terminal']==call['iterm']=='w0t0p0:'+uuid.upper()
-    for missing in ('cc-status','it2'):
-        replace_utilities('unavailable')
-        (utilities/missing).unlink()
-        invoke()
-        assert len(capture.read_text().splitlines())==2
-    assert not trap.exists(), 'Native transport searched PATH'
-    configured['status']=False
-    settings.write_text(json.dumps(configured))
-    replace_utilities('disabled')
-    invoke()
-    assert len(capture.read_text().splitlines())==2
-    assert runtime_bytes=={str(p.relative_to(current)):p.read_bytes() for p in current.rglob('*') if p.is_file()}
-    for folder in (f.context.paths.config, f.context.paths.cache, f.context.paths.data):
-        assert all(b'PRIVATE_EVENT_SENTINEL' not in p.read_bytes() for p in folder.rglob('*') if p.is_file())
-    r=subprocess.run([sys.executable,str(current/'codex_restore/codex-sessions'),'--help'],cwd=f.context.paths.home,capture_output=True,text=True)
-    assert r.returncode==0, r.stderr
-finally:
-    f.doCleanups()
-'''
-            result = self.run_python(extracted, root/'runtime-home', '-c', script)
-            self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
+            repo = self.fixture(Path(tmp))
+            lock = repo/'sources.lock.json'
+            data = json.loads(lock.read_bytes())
+            self.assertFalse(check_export.check(repo))
+            for field in ('url', 'license', 'license_file', 'attribution_file'):
+                altered = copy.deepcopy(data)
+                altered['sources'][0].pop(field)
+                lock.write_text(json.dumps(altered))
+                self.assertTrue(check_export.check(repo), field)
 
 
 if __name__ == '__main__':

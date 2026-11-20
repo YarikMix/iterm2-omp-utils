@@ -25,6 +25,10 @@ class Connection:
     @property
     def websocket(self): return self
     async def close(self): pass
+class Transaction:
+    def __init__(self, connection): pass
+    async def __aenter__(self): return self
+    async def __aexit__(self, *args): pass
 class Session:
     def __init__(self, terminal): self.terminal = terminal
     async def async_get_variable(self, name):
@@ -38,7 +42,15 @@ class Session:
             out.write(json.dumps([self.terminal, kind, value])+'\n')
     async def async_set_variable(self, name, value): self.mutate('snapshot', value)
     async def async_set_profile_properties(self, profile): self.mutate('profile', profile.values)
+    async def async_get_profile(self):
+        from types import SimpleNamespace
+        properties = {'Tab Color': None, 'Tab Color (Light)': None, 'Tab Color (Dark)': None,
+                      'Use Tab Color': True, 'Use Tab Color (Light)': True, 'Use Tab Color (Dark)': True,
+                      'Icon': 2, 'Custom Icon Path': ''}
+        return SimpleNamespace(local_write_only_copy=SimpleNamespace(
+            values={key: json.dumps(value) for key, value in properties.items()}))
 class App:
+    terminal_windows = []
     def get_session_by_id(self, terminal):
         return Session(terminal) if terminal in read() else None
 async def async_get_app(connection): return App()
@@ -54,52 +66,80 @@ def Color(*rgb): return list(rgb)
 '''
 
 
-class PayloadTests(test_shell.ShellFixture, unittest.TestCase):
-    def test_payload_survives_checkout_move(self):
-        checkout=self.root/'checkout'; checkout.mkdir()
+class PayloadTests(test_shell.ShellFixture):
+    def checkout(self):
+        checkout = self.root/'checkout'
+        checkout.mkdir()
         for name in ('runtime','vendor'):
             shutil.copytree(self.context.paths.repo/name,checkout/name)
-        for name in ('LICENSE','THIRD_PARTY_NOTICES.md'):
+        for name in ('LICENSE','THIRD_PARTY_NOTICES.md','sources.lock.json'):
             shutil.copy2(self.context.paths.repo/name,checkout/name)
-        self.context.paths=replace(self.context.paths,repo=checkout)
-        changes=runtime_payload(self.context,self.selection(('status',)))
+        self.context.paths = replace(self.context.paths,repo=checkout)
+        return checkout
+
+    def install_payload(self, changes):
         for edit in changes.edits:
             edit.path.parent.mkdir(parents=True,exist_ok=True)
-            if isinstance(edit,SymlinkEdit): edit.path.symlink_to(edit.after)
-            else: edit.path.write_bytes(edit.after)
+            if isinstance(edit,SymlinkEdit):
+                edit.path.symlink_to(edit.after)
+            else:
+                edit.path.write_bytes(edit.after)
+
+    def test_payload_survives_checkout_move_and_preserves_yaml_import_layout(self):
+        checkout = self.checkout()
+        changes = runtime_payload(self.context,self.selection())
+        self.install_payload(changes)
         shutil.rmtree(checkout)
-        self.assertTrue((self.context.paths.data/'current/codex.zsh').is_file())
-        self.assertTrue((self.context.paths.data/'current/native_status.py').is_file())
-        self.assertFalse(any(e.path.name in {'cc-status','it2'} for e in changes.edits))
-        self.assertFalse(any(str(checkout).encode() in e.after for e in changes.edits if isinstance(e,FileEdit)))
-        self.assertTrue(changes.consumers)
-        import subprocess
-        result=subprocess.run(['/bin/zsh','-dfc','source "$1"; whence -w codex','fixture',str(self.context.paths.data/'current/codex.zsh')],capture_output=True,text=True)
+        current = self.context.paths.data/'current'
+        helper = current/'runtime/omp_config.ts'
+        self.assertTrue(helper.is_file())
+        self.assertTrue((helper.parent/'../vendor/yaml/dist/index.js').is_file())
+        result = subprocess.run(['bun','--no-install','--no-env-file','--config=/dev/null',str(helper)],
+            input=json.dumps({'op':'read','raw':'terminal: {programStatus: true}\n','pointer':['terminal','programStatus']}),
+            capture_output=True,text=True,cwd=self.home,env={**os.environ,'HOME':str(self.home)},timeout=5)
         self.assertEqual(result.returncode,0,result.stderr)
-        self.assertEqual(result.stdout.strip(),'codex: function')
-    def test_release_identity_changes_with_payload_not_in_place(self):
-        checkout=self.root/'checkout'; checkout.mkdir()
-        for name in ('runtime','vendor'):
-            shutil.copytree(self.context.paths.repo/name,checkout/name)
-        for name in ('LICENSE','THIRD_PARTY_NOTICES.md'):
-            shutil.copy2(self.context.paths.repo/name,checkout/name)
-        self.context.paths=replace(self.context.paths,repo=checkout)
-        first=runtime_payload(self.context,self.selection())
-        (checkout/'runtime/new_helper.py').write_text('VALUE = 42\n')
-        second=runtime_payload(self.context,self.selection())
-        a=next(e.after for e in first.edits if isinstance(e,SymlinkEdit))
-        b=next(e.after for e in second.edits if isinstance(e,SymlinkEdit))
-        self.assertNotEqual(a,b)
-        self.assertTrue(any(isinstance(e,FileEdit) and e.path.name=='new_helper.py' for e in second.edits))
-    def test_source_symlink_is_rejected_before_edits(self):
-        checkout=self.root/'checkout'; checkout.mkdir()
-        for name in ('runtime','vendor'):
-            shutil.copytree(self.context.paths.repo/name,checkout/name)
-        (checkout/'runtime/foreign.py').symlink_to('/not-read')
-        for name in ('LICENSE','THIRD_PARTY_NOTICES.md'):
-            shutil.copy2(self.context.paths.repo/name,checkout/name)
-        self.context.paths=replace(self.context.paths,repo=checkout)
-        with self.assertRaises(ValueError): runtime_payload(self.context,self.selection())
+        self.assertEqual(json.loads(result.stdout),{'value':{'exists':True,'value':True}})
+        self.assertFalse(any((current/name).exists() for name in
+                             ('codex.zsh','hook.py','native_status.py','notifier.py','codex_restore','vendor/codex_status')))
+
+    def test_allowlist_ignores_arbitrary_runtime_and_vendor_sources(self):
+        checkout = self.checkout()
+        first = runtime_payload(self.context,self.selection())
+        (checkout/'runtime/private.py').write_text('PRIVATE = True\\n')
+        (checkout/'vendor/private.py').write_text('PRIVATE = True\\n')
+        second = runtime_payload(self.context,self.selection())
+        self.assertEqual(next(e.after for e in first.edits if isinstance(e,SymlinkEdit)),
+                         next(e.after for e in second.edits if isinstance(e,SymlinkEdit)))
+        self.assertFalse(any(e.path.name=='private.py' for e in second.edits))
+
+    def test_selected_source_symlink_is_rejected_before_edits(self):
+        checkout = self.checkout()
+        target = checkout/'runtime/omp_config.ts'
+        target.unlink()
+        target.symlink_to('/not-read')
+        with self.assertRaises(ValueError):
+            runtime_payload(self.context,self.selection())
+
+    def test_appearance_requires_real_identity_source_not_placeholder(self):
+        checkout = self.checkout()
+        source = checkout/'runtime/omp_identity.ts'
+        source.unlink(missing_ok=True)
+        with self.assertRaisesRegex(ValueError,'runtime source'):
+            runtime_payload(self.context,self.selection(('appearance',)))
+
+    def test_runtime_json_is_an_immutable_byte_payload_not_address_recomposition(self):
+        from iterm2_utils import engine
+        from iterm2_utils.models import Plan
+        changes = runtime_payload(self.context,self.selection())
+        source = self.context.paths.repo/'vendor/yaml/package.json'
+        package = next(e for e in changes.edits if e.path.parts[-3:]==('vendor','yaml','package.json'))
+        result = engine.apply(Plan(self.selection(),changes,'payload'),self.context,self.runner)
+        self.assertSuccess(result)
+        self.assertEqual(package.path.read_bytes(),source.read_bytes())
+        self.assertEqual(next(r['kind'] for r in result.receipt.resources if r['target']==str(package.path.resolve())),'file')
+        repeated = runtime_payload(self.context,self.selection())
+        self.assertEqual(next(e.after for e in repeated.edits if isinstance(e,SymlinkEdit)),
+                         next(e.after for e in changes.edits if isinstance(e,SymlinkEdit)))
 
 
 class AppearancePayloadTests(test_shell.ShellFixture, unittest.TestCase):
@@ -108,7 +148,7 @@ class AppearancePayloadTests(test_shell.ShellFixture, unittest.TestCase):
         checkout.mkdir()
         for name in ('runtime', 'vendor'):
             shutil.copytree(self.context.paths.repo/name, checkout/name)
-        for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
+        for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md', 'sources.lock.json'):
             shutil.copy2(self.context.paths.repo/name, checkout/name)
         self.context.paths = replace(self.context.paths, repo=checkout)
         return checkout
@@ -125,7 +165,7 @@ class AppearancePayloadTests(test_shell.ShellFixture, unittest.TestCase):
         self.assertEqual({p for p in files if p.startswith('assets/')},
                          {f'assets/appearance/{name}.{ext}' for name in names for ext in ('png', 'svg')})
         self.assertTrue({'appearance.py', 'appearance.zsh', 'LICENSE', 'THIRD_PARTY_NOTICES.md',
-                         'vendor/shell_integration/LICENSE', 'vendor/codex_status/LICENSE'} <= files.keys())
+                         'vendor/shell_integration/LICENSE', 'vendor/yaml/LICENSE'} <= files.keys())
 
     def test_builtin_bytes_change_release_and_appearance_plan_identity(self):
         from iterm2_utils.planner import plan
@@ -243,7 +283,8 @@ assert (current/'LICENSE').is_file() and (current/'THIRD_PARTY_NOTICES.md').is_f
         self.addCleanup(os.close, master)
         self.addCleanup(os.close, slave)
         terminal = '12345678-1234-4234-8234-123456789ABC'
-        initial = {terminal: dict(tty=os.ttyname(slave), profile={'color': 'parent'}, snapshot='saved')}
+        initial = {terminal: dict(tty=os.ttyname(slave), profile={'color': 'parent'},
+                                  snapshot=json.dumps({'launch_id': None, 'properties': None}))}
         state = home/'sdk-state.json'
         state.write_text(json.dumps(initial))
         mutations = home/'sdk-mutations.jsonl'
@@ -252,12 +293,14 @@ assert (current/'LICENSE').is_file() and (current/'THIRD_PARTY_NOTICES.md').is_f
                    ITERM2_UTILS_PYTHON=sys.executable, ITERM2_UTILS_APPEARANCE_CONFIG=str(config),
                    PYTHONPATH=str(home))
         for phase in ('shell', 'launch', 'return'):
-            result = subprocess.run([sys.executable, str(current/'appearance.py'), '--config', str(config),
-                                     '--cwd', str(project), '--phase', phase],
-                                    env=env, capture_output=True, text=True, timeout=5)
-            self.assertEqual((result.returncode, result.stdout, result.stderr), (0, 'ignored\n', ''))
-            self.assertEqual(json.loads(state.read_text()), initial)
-            self.assertFalse(mutations.exists())
+            for tty_args in ([], ['--tty', '/dev/null']):
+                with self.subTest(phase=phase, tty_args=tty_args):
+                    result = subprocess.run([sys.executable, str(current/'appearance.py'), '--config', str(config),
+                                             '--cwd', str(project), '--phase', phase, *tty_args],
+                                            env=env, capture_output=True, text=True, timeout=5)
+                    self.assertEqual((result.returncode, result.stdout, result.stderr), (0, 'ignored\n', ''))
+                    self.assertEqual(json.loads(state.read_text()), initial)
+                    self.assertFalse(mutations.exists())
         def own_terminal():
             os.setsid()
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
@@ -266,12 +309,22 @@ assert (current/'LICENSE').is_file() and (current/'THIRD_PARTY_NOTICES.md').is_f
                                 preexec_fn=own_terminal, text=True, timeout=7)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
         updated = json.loads(state.read_text())[terminal]
-        self.assertIsNone(updated['snapshot'])
+        if sys.platform == 'darwin':
+            baseline = json.loads(updated['snapshot'])
+            self.assertIsNone(baseline['launch_id'])
+            self.assertIsNone(baseline['properties'])
+            self.assertEqual(baseline['shell_baseline']['owner'][0], terminal)
+            self.assertEqual(baseline['shell_baseline']['cwd'], str(project.resolve()))
+        else:
+            # A scoped PTY permits cd styling, but cannot prove a resumable native baseline.
+            self.assertIsNone(updated['snapshot'])
         self.assertEqual(updated['profile']['tab_color'], [18, 52, 86])
         self.assertEqual(updated['profile']['custom_icon_path'], str(current.resolve()/'assets/appearance/ios.png'))
         records = [json.loads(line) for line in mutations.read_text().splitlines()]
         self.assertEqual([(sid, kind) for sid, kind, _ in records],
-                         [(terminal, 'snapshot'), (terminal, 'profile')])
+                         [(terminal, 'snapshot'), (terminal, 'profile')] +
+                         ([(terminal, 'snapshot')] if sys.platform == 'darwin' else []))
+        self.assertEqual(records[0], [terminal, 'snapshot', None])
 
     def test_installed_chpwd_hook_survives_source_removal(self):
         from tests.test_lifecycle import LifecycleFixture
@@ -332,6 +385,11 @@ await_calls 3 || exit 15
         self.assertEqual(result.returncode, 0, result.stdout+result.stderr)
         self.assertEqual(result.stdout+result.stderr, '')
         records = [json.loads(line) for line in calls.read_text().splitlines()]
+        shell_pids = {row[1]['--shell-pid'] for row in records}
+        self.assertEqual(len(shell_pids), 1)
+        shell_pid = shell_pids.pop()
+        self.assertTrue(shell_pid.isdigit())
         self.assertEqual(records, [[str(current.resolve()/'appearance.py'),
-                                   {'--config': str(config), '--cwd': str(cwd.resolve()), '--phase': 'shell', '--tty': tty}]
+                                   {'--config': str(config), '--cwd': str(cwd.resolve()), '--phase': 'shell',
+                                    '--tty': tty, '--shell-pid': shell_pid}]
                                   for cwd in (home, project, home)])

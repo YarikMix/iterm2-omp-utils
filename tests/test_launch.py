@@ -1,687 +1,527 @@
-"""One explicit creation, truthful observations and inert shell argument values."""
-import importlib
-import fcntl
-import pty
-import termios
-import importlib.util
+"""Safety regressions with native selection and SDK boundaries isolated."""
 import json
 import os
-import select
-import signal
+from pathlib import Path
 import shlex
-import subprocess
-import sys
+from tempfile import TemporaryDirectory
+import time
+from types import SimpleNamespace
 import unittest
 from dataclasses import replace
-from itertools import product
-from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import patch
-
-from iterm2_utils.discovery import resolve_paths
+from iterm2_utils import launch as m
+from iterm2_utils.launch_checks import LaunchRequest, LaunchInspection, LaunchIdentity
 from iterm2_utils.launch_api import LaunchCreation
-from iterm2_utils.launch_checks import LaunchInspection, LaunchRequest, _identity, _metadata_command
-from tests.support import Fixture
-
-SID = '11111111-1111-4111-8111-111111111111'
+from iterm2_utils.models import OmpProfile
+from iterm2_utils.omp_sessions import SessionBinding, binding_record, resolve_resume
+from iterm2_utils.terminal import Terminal
 
 
 class LaunchTests(unittest.TestCase):
-    def test_preflight_in_other_project_preserves_parent_appearance_and_snapshot(self):
-        from iterm2_utils.commands import Runner
-        from tests.test_launch_checks import LaunchChecksTests, transcript, RESUME_ID
-        from tests.test_payload import APPEARANCE_SDK
-        child_id = '22222222-2222-4222-8222-222222222222'
-        for resume in (False, True):
-            with self.subTest(resume=resume), Fixture() as f:
-                checks, paths, request, _, _ = LaunchChecksTests().setup_launch(f)
-                project = f.home/'other-project'; project.mkdir()
-                request = replace(request, cwd=project)
-                if resume:
-                    request = replace(request, handoff=None, resume_session_id=RESUME_ID)
-                    transcript(paths.codex_home/'sessions'/('rollout-'+RESUME_ID+'.jsonl'), project)
-                config = f.home/'appearance.json'
-                icon = paths.repo/'runtime/assets/appearance/ios.png'
-                config.write_text(json.dumps({'projects': [dict(root=str(project), color='#123456', icon=str(icon))]}))
-                (f.home/'iterm2.py').write_text(APPEARANCE_SDK)
-                master, slave = pty.openpty()
-                self.addCleanup(os.close, master)
-                self.addCleanup(os.close, slave)
-                parent_master, parent_slave = pty.openpty()
-                self.addCleanup(os.close, parent_master)
-                self.addCleanup(os.close, parent_slave)
-                parent = dict(tty=os.ttyname(parent_slave), profile={'color': 'parent', 'icon': 'manual'}, snapshot='saved parent')
-                initial = {SID: parent, child_id: dict(tty=os.ttyname(slave), profile={}, snapshot='child saved')}
-                state_path = f.home/'sdk-state.json'
-                state_path.write_text(json.dumps(initial))
-                mutations = f.home/'sdk-mutations.jsonl'
-                (f.bin/'zsh').unlink(); (f.bin/'zsh').symlink_to('/bin/zsh')
-                (f.bin/'codex').write_text('#!'+sys.executable+'\n'+'''import json, os, pathlib, sys
-if sys.argv[1:] == ['--version']:
-    print('codex-cli 0.167.0')
-else:
-    assert sys.argv[1:] == ['app-server', '--stdio'], sys.argv
-    initialize = json.loads(input()); assert initialize['method'] == 'initialize'
-    print(json.dumps({'id': initialize['id'], 'result': {'userAgent': 'codex/0.167.0'}}), flush=True)
-    assert json.loads(input())['method'] == 'initialized'
-    request = json.loads(input()); assert request['method'] == 'config/read'
-    pathlib.Path(os.environ['HOME']+'/protocol.json').write_text(json.dumps(
-        dict(cwd=request['params']['cwd'], ids=[os.environ.get(key) for key in ('ITERM_SESSION_ID','TERM_SESSION_ID')])))
-    print(json.dumps({'id': request['id'], 'result': {'config': {'tui': {'copy_on_select': 'never'}}}}), flush=True)
-    sys.stdin.read()
-''')
-                # Isolate the fixture from host login startup while retaining its own .zshrc.
-                (f.home/'.zshenv').write_text('unsetopt GLOBAL_RCS\n')
-                startup = f.home/'zshrc-startup'
-                (f.home/'.zshrc').write_text(
-                    'export PATH='+shlex.quote(str(f.bin))+':/usr/bin:/bin\n'
-                    'print -r -- "${options[globalrcs]}:${options[rcs]}:${TERM_SESSION_ID-unbound}" >> '+shlex.quote(str(startup))+'\n'
-                    'source '+shlex.quote(str(paths.repo/'runtime/appearance.zsh'))+'\n')
-                os.environ.update(ZDOTDIR=str(f.home), TERM_PROGRAM='iTerm.app',
-                                  ITERM_SESSION_ID='w0t0p0:'+SID, TERM_SESSION_ID=SID,
-                                  ITERM2_UTILS_PYTHON=sys.executable, ITERM2_UTILS_APPEARANCE_CONFIG=str(config),
-                                  PYTHONPATH=str(f.home))
-                before = dict(os.environ)
-                f.runner.codex_config = Runner().codex_config
-                inspection, findings = checks.inspect_launch(paths, request, f.runner)
-                self.assertEqual(findings, [])
-                self.assertIsNotNone(inspection)
-                self.assertEqual(dict(os.environ), before)
-                self.assertEqual(json.loads((f.home/'protocol.json').read_text()), dict(cwd=str(project), ids=[None, None]))
-                self.assertEqual(json.loads(state_path.read_text()), initial)
-                self.assertFalse(mutations.exists(), 'preflight must not even invalidate a snapshot')
-                self.assertEqual(startup.read_text().splitlines(), ['off:on:unbound'])
-                def own_terminal():
-                    os.setsid()
-                    fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
-                child_env = dict(before, ITERM_SESSION_ID='w0t1p0:'+child_id, TERM_SESSION_ID=child_id)
-                with subprocess.Popen(['/bin/zsh', '-ilc', 'true'], env=child_env, cwd=project,
-                                      stdin=slave, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                                      preexec_fn=own_terminal, text=True) as child:
-                    try:
-                        stdout, stderr = child.communicate(timeout=7)
-                    except subprocess.TimeoutExpired as exc:
-                        try:
-                            os.killpg(child.pid, signal.SIGKILL)
-                        except ProcessLookupError:
-                            pass
-                        child.wait(timeout=2)
-                        self.fail('child login shell timed out after 7 seconds; '
-                                  f'stdout tail={(exc.stdout or b"")[-4096:]!r}; '
-                                  f'stderr tail={(exc.stderr or b"")[-4096:]!r}')
-                self.assertEqual((child.returncode, stdout, stderr), (0, '', ''))
-                self.assertEqual(startup.read_text().splitlines(), ['off:on:unbound', 'off:on:'+child_id])
-                final = json.loads(state_path.read_text())
-                self.assertEqual(final[SID], parent)
-                self.assertEqual(final[child_id]['profile']['tab_color'], [18, 52, 86])
-                self.assertEqual(final[child_id]['profile']['custom_icon_path'], str(icon))
-                self.assertIsNone(final[child_id]['snapshot'])
-                records = [json.loads(line) for line in mutations.read_text().splitlines()]
-                self.assertEqual([(sid, kind) for sid, kind, _ in records],
-                                 [(child_id, 'snapshot'), (child_id, 'profile')])
+    def fixture(self, root, mode='new'):
+        profile=OmpProfile('work',root/'agent')
+        request=LaunchRequest('W','Omp',root,profile,mode)
+        identity=LaunchIdentity(root/'omp',(),((str(root/'omp'),),(str(root/'bun'),str(root/'omp'))),'future')
+        inspection=LaunchInspection(root/'it2',Path('/bin/zsh'),'G','W',identity)
+        binding=SessionBinding('S','T','W',root/'new.jsonl','fresh',root,profile,123,'birth','generation')
+        binding.session_file.write_text(json.dumps(dict(type='session',id='fresh',cwd=str(root)))+'\n')
+        state=dict(argv=None,creates=0,now=0.,command_bad=False,job='bun',creation=None,bindings=[binding])
+        class Transport:
+            deadline=None
+            def __init__(self,*args):pass
+            def bindings(self):return state['bindings']
+            def process_start(self,pid):return 'birth'
+            def observe(self,sid):return binding_record(binding)
+            def panes(self):return [dict(terminal_id='S',tab_id='T',window_id='W')]
+            def complete_panes(self):return self.panes()
+            def ordinary_shell(self,pane,zsh):return False
+            def profile(self,name):return dict(name='Omp',guid='G')
+            def variable(self,sid,name):
+                return {'session.profileName':'Omp','session.jobName':state['job'],'session.commandLine':('malformed "' if state['command_bad'] else shlex.join(state['argv']))}[name]
+        async def create(w,p,g,command,**kwargs):
+            nonlocal binding
+            state['creates']+=1
+            argv=shlex.split(command)
+            login=shlex.split(argv[2].split(' && exec ',1)[1])
+            inner=shlex.split(login[2].split('; exec ',1)[1]); state['argv']=inner[3:]
+            if '--resume' not in state['argv']:
+                settings={}
+                layers=[request.omp_profile.agent_dir/'config.yml',request.cwd/'.omp/config.yml']
+                layers.extend(Path(state['argv'][index+1]) for index,value in enumerate(state['argv']) if value=='--config')
+                state['selection_layers']=[]
+                for path in layers:
+                    if path.exists():
+                        settings.update(json.loads(path.read_text()))
+                        state['selection_layers'].append(path)
+                auto_resume=settings.get('autoResume',True)
+                state['selected_session_id']='old' if auto_resume else 'fresh'
+                binding=replace(binding,session_id='old' if auto_resume else 'fresh')
+                state['bindings']=[binding]
+                binding.session_file.write_text(json.dumps(dict(type='session',id=binding.session_id,cwd=str(root)))+'\n')
+            return state['creation'] or LaunchCreation('created_unverified','W','T','S',state['now']+30,())
+        return request,inspection,binding,state,Transport,create
 
-    def test_resume_arguments_are_exact_and_normalized(self):
-        with Fixture() as f:
-            m, paths, request, inspection, state = self.fixture(f)
-            sid = 'abcdefab-1234-4123-8123-abcdefabcdef'
-            request = replace(request, handoff=None, resume_session_id=sid.upper())
-            self.assertEqual(m._codex_arguments(request), ['resume', sid, '-C', str(f.home)])
-            with patch.object(m, 'inspect_launch', return_value=(None, [])):
-                code, output = m.launch(request, paths, f.runner)
-            self.assertEqual(code, 2)
-            self.assertEqual(output['launch_mode'], 'resume')
-            self.assertEqual(output['resume_session_id'], sid)
-            state['command_line'] = 'codex resume '+sid+' -C '+str(f.home)
-            code, output = m.launch(request, paths, f.runner)
-            self.assertEqual(code, 0, output)
-            self.assertEqual(output['launch_mode'], 'resume')
-            self.assertEqual(output['resume_session_id'], sid)
-
-    def module(self):
-        self.assertIsNotNone(importlib.util.find_spec('iterm2_utils.launch'), 'Launch is not implemented')
-        return importlib.import_module('iterm2_utils.launch')
-
-    def fixture(self, f):
-        m = self.module()
-        paths = resolve_paths()
-        handoff = f.home/'handoff.txt'
-        handoff.write_text('PRIVATE_HANDOFF_CONTENT')
-        request = LaunchRequest('window-one', 'Кодекс personal', f.home, handoff)
-        identity = _identity(dict(executable=str(f.bin/'codex'), version='codex-cli 0.167.0',
-            home=str(f.home), codex_home=str(paths.codex_home), zdotdir=str(f.home),
-            functions={}, alias='', restore_root='', python=''))
-        inspection = LaunchInspection(f.app/'Contents/Resources/utilities/it2', f.bin/'zsh', 'profile-one', identity)
-        state = dict(title='codex', command_line='codex -C '+str(request.cwd)+
-                     ' Read the handoff file at '+str(request.handoff)+' and carry out the task described there.',
-                     job='codex', applied=request.profile, guid='profile-one', sdk_calls=[],
-                     now=0., create_seconds=0., creation=None, observed_window=request.window_id,
-                     observed_tab='tab-one', observed_session=SID, extra_session=False,
-                     create_error=False, inventory_error=False, no_sessions=False, calls=[], active='window-one')
-
-        def run(transport, argv, c_locale=False):
-            state['calls'].append(argv)
-            self.assertLessEqual(transport.timeout, 3)
-            self.assertIsNotNone(transport.deadline)
-            args = argv[1:]
-            if args == ['tab', 'list', '--json']:
-                return json.dumps([dict(id=state['observed_tab'], window_id=state['observed_window'], index=0)])
-            if args == ['window', 'list', '--json']:
-                return json.dumps([dict(id=state['observed_window'])])
-            if args == ['session', 'list', '--json']:
-                if state['inventory_error']:
-                    return '[{"id":null}]'
-                sessions = [dict(id=state['observed_session'], tab_id=state['observed_tab'],
-                                 window_id=state['observed_window'])]
-                if state['extra_session']:
-                    sessions.append(dict(sessions[0], id='22222222-2222-4222-8222-222222222222'))
-                return json.dumps([] if state['no_sessions'] else sessions)
-            if args == ['profile', 'show', request.profile, '--json']:
-                return json.dumps(dict(name=state.get('profile_name', request.profile), guid=state['guid'], command='codex OTHER'))
-            if args[:2] == ['session', 'get-var']:
-                self.assertEqual(args[3:], ['--session', state['observed_session'].upper()])
-                if state.get('variable_error'):
-                    raise subprocess.CalledProcessError(1, argv, stderr='PRIVATE_STDERR')
-                return json.dumps(state[{'session.profileName': 'applied', 'session.jobName': 'job',
-                    'session.processTitle': 'title', 'session.commandLine': 'command_line'}[args[2]]])+'\n'
-            raise AssertionError('Unexpected/mutating call: '+repr(argv))
-
-        self.addCleanup(patch.stopall)
-        patch.object(m, 'inspect_launch', return_value=(inspection, [])).start()
-        patch.object(m.LaunchITerm, '_run', run).start()
-        async def create(window, profile, guid, command):
-            state['sdk_calls'].append((window, profile, guid, command))
-            state['active'] = 'window-other'
-            deadline = state['now']+30
-            state['now'] += state['create_seconds']
-            if state['creation'] is not None:
-                return state['creation']
-            if state['create_error']:
-                return LaunchCreation('unknown', window, None, None, deadline, ())
-            return LaunchCreation('created_unverified', window, 'tab-one', SID, deadline, ())
-
-        patch.object(m, 'create_tab', create, create=True).start()
-        patch.object(m.time, 'monotonic', side_effect=lambda: state['now']).start()
-        patch.object(m.time, 'sleep', side_effect=lambda seconds: state.update(now=state['now']+seconds)).start()
-        return m, paths, request, inspection, state
-
-    def test_launch_selects_exact_window_profile_and_one_process(self):
-        with Fixture() as f:
-            m, paths, request, inspection, state = self.fixture(f)
-            code, output = m.launch(request, paths, f.runner)
-            self.assertEqual(output['launch_mode'], 'handoff')
-            self.assertIsNone(output['resume_session_id'])
-            self.assertEqual((code, output['status']), (0, 'launched'))
-            self.assertEqual((output['window_id'], output['tab_id'], output['session_id']), ('window-one', 'tab-one', SID))
-            creates = state['sdk_calls']
-            self.assertEqual(len(creates), 1)
-            self.assertEqual(creates[0][:3], ('window-one', request.profile, inspection.profile_guid))
-            command = creates[0][3]
-            self.assertIn('CODEX_RESTORE_NO_AUTO=1', command)
-            self.assertNotIn('--no-alt-screen', command)
-            self.assertNotIn('PRIVATE_HANDOFF_CONTENT', command)
-            self.assertFalse(any(a[1:3] in (['session', 'run'], ['session', 'focus'], ['session', 'close'], ['tab', 'close']) for a in state['calls']))
-            self.assertEqual(output['mode'], 'launch_codex')
-
-    def test_launch_ignores_restore_transport_override(self):
-        from runtime.codex_restore.codexlib.iterm import IT2_DEFAULT
-        with Fixture() as f:
-            m, paths, request, inspection, state = self.fixture(f)
-            inspection = replace(inspection, it2=Path(IT2_DEFAULT))
-            m.inspect_launch.return_value = (inspection, [])
-            with patch.dict('os.environ', {'CODEX_RESTORE_IT2': str(f.home/'unverified-it2')}):
-                code, output = m.launch(request, paths, f.runner)
-            self.assertEqual((code, output['status']), (0, 'launched'))
-            self.assertTrue(state['calls'])
-            self.assertTrue(all(argv[0] == IT2_DEFAULT for argv in state['calls']))
-            self.assertEqual(len(state['sdk_calls']), 1)
-
-    def test_mutation_timeout_never_retries(self):
-        with Fixture() as f:
-            m, paths, request, _, state = self.fixture(f)
-            state['create_error'] = True
-            code, output = m.launch(request, paths, f.runner)
-            self.assertEqual((code, output['status']), (3, 'unknown'))
-            self.assertIsNone(output['tab_id'])
-            self.assertIsNone(output['session_id'])
-            self.assertEqual(len(state['sdk_calls']), 1)
-
-    def test_no_job_is_created_unverified(self):
-        with Fixture() as f:
-            m, paths, request, _, state = self.fixture(f)
-            state['job'] = 'zsh'
-            code, output = m.launch(request, paths, f.runner)
-            self.assertEqual((code, output['status'], output['session_id']), (3, 'created_unverified', SID))
-            self.assertEqual(len(state['sdk_calls']), 1)
-
-    def test_helper_or_incomplete_command_line_is_not_launched(self):
-        for command_line in ('codex --version', 'codex --help', '', 'codex app-server --stdio',
-                             'codex -C /other Read the handoff file at /other', 'codex -C'):
-            with self.subTest(command_line=command_line), Fixture() as f:
-                m, paths, request, _, state = self.fixture(f)
-                state['command_line'] = command_line
-                code, output = m.launch(request, paths, f.runner)
-                self.assertEqual((code, output['status']), (3, 'created_unverified'))
-                self.assertEqual(len(state['sdk_calls']), 1)
-                patch.stopall()
-
-    def test_missing_or_malformed_process_evidence_is_unverified(self):
-        for field in ('title', 'command_line'):
-            for value in ('', None, {}, 123):
-                with self.subTest(field=field, value=value), Fixture() as f:
-                    m, paths, request, _, state = self.fixture(f)
-                    state[field] = value
-                    code, output = m.launch(request, paths, f.runner)
-                    self.assertEqual((code, output['status']), (3, 'created_unverified'))
-                    patch.stopall()
-
-    def test_observation_preserves_literal_argument_values(self):
-        with Fixture() as f:
-            m, paths, request, _, state = self.fixture(f)
-            request = replace(request, cwd=f.home/'space \" quote\nКириллица',
-                              handoff=f.home/"handoff ' $(literal)")
-            state['title'] = '/package path/vendor/codex'
-            state['command_line'] = state['title']+' --no-daemon -C '+str(request.cwd)+' Read the handoff file at '+str(request.handoff)+' and carry out the task described there.'
-            code, output = m.launch(request, paths, f.runner)
-            self.assertEqual((code, output['status']), (0, 'launched'))
-            self.assertNotIn(state['command_line'], json.dumps(output))
-
-    def test_live_double_quoted_handoff_prompt_is_launched(self):
-        with Fixture() as f:
-            m, paths, request, _, state = self.fixture(f)
-            state['command_line'] = ('codex --no-daemon -C '+str(request.cwd)+
-                ' "Read the handoff file at '+str(request.handoff)+' and carry out the task described there."')
-            code, output = m.launch(request, paths, f.runner)
-            self.assertEqual((code, output['status']), (0, 'launched'))
-            self.assertNotIn(state['command_line'], json.dumps(output))
-
-    def test_quoted_command_line_preserves_exact_argv_values_and_wrapper_limit(self):
-        for resume, count in product((False, True), range(4)):
-            with self.subTest(resume=resume, count=count), Fixture() as f:
-                m, paths, request, _, state = self.fixture(f)
-                sentinel = f.home/'SENTINEL'
-                cwd = f.home/('space "quote" \nКириллица $(touch '+str(sentinel)+')')
-                handoff = f.home/("handoff 'quote' `touch "+str(sentinel)+'`')
-                request = replace(request, cwd=cwd, handoff=None if resume else handoff,
-                                  resume_session_id=SID if resume else None)
-                mode_argv = (['resume', SID, '-C', str(cwd)] if resume else
-                    ['-C', str(cwd), 'Read the handoff file at '+str(handoff)+' and carry out the task described there.'])
-                state['title'] = '/package path/vendor/codex'
-                state['command_line'] = shlex.join([state['title'], *(['--no-daemon']*count), *mode_argv])
-                code, output = m.launch(request, paths, f.runner)
-                self.assertEqual(code, 0 if count <= 2 else 3, output)
-                self.assertFalse(sentinel.exists())
-                patch.stopall()
-
-    def test_quoted_command_line_rejects_wrong_or_malformed_argv(self):
-        for resume, mutation in product((False, True),
-                ('malformed', 'helper', 'cwd', 'mode-value', 'extra', 'misplaced-flag')):
-            with self.subTest(resume=resume, mutation=mutation), Fixture() as f:
-                m, paths, request, _, state = self.fixture(f)
-                if resume:
-                    request = replace(request, handoff=None, resume_session_id=SID)
-                    argv = ['codex', 'resume', SID, '-C', str(request.cwd)]
+    def test_wrong_window_profile_duplicate_session_and_extra_argv_fail_proof(self):
+        for fault in ('window','profile','split','extra'):
+            with self.subTest(fault=fault),TemporaryDirectory() as tmp:
+                root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+                if fault=='window':
+                    transport.panes=lambda self:[dict(terminal_id='S',tab_id='T',window_id='other')]
+                elif fault=='profile':
+                    transport.profile=lambda self,name:dict(name='Omp',guid='wrong')
+                elif fault=='split':
+                    transport.panes=lambda self:[dict(terminal_id='S',tab_id='T',window_id='W'),dict(terminal_id='extra',tab_id='T',window_id='W')]
                 else:
-                    argv = ['codex', '-C', str(request.cwd),
-                            'Read the handoff file at '+str(request.handoff)+' and carry out the task described there.']
-                if mutation == 'helper':
-                    argv = ['codex', '--help']
-                elif mutation == 'cwd':
-                    argv[argv.index('-C')+1] = '/other project'
-                elif mutation == 'mode-value':
-                    argv[2 if resume else 3] = ('22222222-2222-4222-8222-222222222222' if resume else 'Other prompt')
-                elif mutation == 'extra':
-                    argv.append('extra prompt')
-                elif mutation == 'misplaced-flag':
-                    argv.append('--no-daemon')
-                # Force a quoted representation even when every value could be written bare.
-                state['command_line'] = ' '.join("'"+value+"'" for value in argv)
-                if mutation == 'malformed':
-                    state['command_line'] += ' "unterminated'
-                code, output = m.launch(request, paths, f.runner)
-                self.assertEqual((code, output['status']), (3, 'created_unverified'))
-                self.assertEqual(output['session_id'], SID)
-                patch.stopall()
+                    original=create
+                    async def create(w,p,g,c,**kwargs):
+                        result=await original(w,p,g,c)
+                        state['argv']+=['--continue']
+                        return result
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['status']),(3,'created_unverified'))
+                self.assertEqual(state['creates'],1)
 
-    def test_delayed_helpers_guard_refusal_and_actual_tui(self):
-        # Pipes hold each real fake invocation at an exact phase; no timing is launch evidence.
-        chains = ('direct', 'passthrough', 'simple', 'dispatcher', 'restore',
-                  'restore-passthrough', 'restore-simple', 'restore-dispatcher')
-        for chain, resume in product(chains, (False, True)):
-            for phase in ('version-refused', 'tui', *(['help'] if chain.startswith('restore') else [])):
-                with self.subTest(chain=chain, phase=phase, resume=resume), Fixture() as f:
-                    m, paths, request, inspection, state = self.fixture(f)
-                    if resume:
-                        request = replace(request, handoff=None, resume_session_id=SID)
-                    fake = '''import json, os, sys
-if os.environ.get('LAUNCH_TEST_OBSERVE'):
-    os.write(int(os.environ['LAUNCH_TEST_OBSERVE']), (json.dumps(sys.argv)+'\\n').encode())
-    os.read(int(os.environ['LAUNCH_TEST_GATE']), 1)
-if sys.argv[1:] == ['--version']:
-    print('codex-cli 0.167.0')
-elif sys.argv[1:] == ['--help']:
-    print('--no-daemon')
-else:
-    open(os.environ['HOME']+'/tui-ran', 'w').write('yes')
-'''
-                    (f.bin/'codex').write_text('#!'+sys.executable+'\n'+fake)
-                    startup = 'export PATH='+shlex.quote(str(f.bin))+':/usr/bin:/bin\n'
-                    if 'passthrough' in chain:
-                        startup += 'function codex { command codex "$@" }\n'
-                    if 'simple' in chain:
-                        startup += 'function codex { command codex --no-daemon "$@" }\n'
-                    if 'dispatcher' in chain:
-                        startup += 'source '+shlex.quote(str(paths.repo/'runtime/codex.zsh'))+'\n'
-                    if chain.startswith('restore'):
-                        startup += 'source '+shlex.quote(str(paths.repo/'runtime/codex_restore/codex-resume.zsh'))+'\n'
-                    (f.home/'.zshrc').write_text(startup)
-                    env = dict(HOME=str(f.home), ZDOTDIR=str(f.home), PATH=str(f.bin)+':/usr/bin:/bin',
-                               CODEX_RESTORE_NO_AUTO='1', ITERM2_UTILS_CODEX_NO_DAEMON='1')
-                    raw = subprocess.run(['/bin/zsh', '-ilc', _metadata_command(paths)], env=env,
-                                         capture_output=True, text=True, timeout=3, cwd=f.home)
-                    self.assertEqual(raw.returncode, 0, raw.stderr)
-                    identity = _identity(json.loads(raw.stdout)['iterm2_launch_identity'])
-                    if phase == 'version-refused':
-                        identity = replace(identity, home=f.home/'different')
-                    inspection = replace(inspection, zsh=Path('/bin/zsh'), identity=identity)
-                    m.inspect_launch.return_value = (inspection, [])
-                    observe_read, observe_write = os.pipe()
-                    gate_read, gate_write = os.pipe()
-                    env.update(LAUNCH_TEST_OBSERVE=str(observe_write), LAUNCH_TEST_GATE=str(gate_read))
-                    process = subprocess.Popen(shlex.split(m.build_command(request, inspection, paths)),
-                        env=env, cwd=f.home, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                        stderr=subprocess.DEVNULL, start_new_session=True, pass_fds=(observe_write, gate_read))
-                    os.close(observe_write)
-                    os.close(gate_read)
-                    try:
-                        stages = ['--version']
-                        if phase != 'version-refused' and chain.startswith('restore'):
-                            stages.append('--help')
-                        if phase == 'tui':
-                            stages.append('tui')
-                        for index, stage in enumerate(stages):
-                            self.assertTrue(select.select([observe_read], [], [], 4)[0], 'fake invocation timed out')
-                            argv = json.loads(os.read(observe_read, 16384))
-                            if stage == 'tui':
-                                count = 2 if chain == 'restore-simple' else int(chain not in ('direct', 'passthrough'))
-                                expected = (['resume', SID, '-C', str(request.cwd)] if resume else
-                                    ['-C', str(request.cwd), 'Read the handoff file at '+str(request.handoff)+' and carry out the task described there.'])
-                                self.assertEqual(argv[1:], ['--no-daemon']*count+expected)
-                            else:
-                                self.assertEqual(argv[1:], [stage])
-                            if index == len(stages)-1:
-                                state.update(title=argv[0], command_line=' '.join(argv))
-                                code, output = m.launch(request, paths, f.runner)
-                                wanted = (0, 'launched') if phase == 'tui' else (3, 'created_unverified')
-                                self.assertEqual((code, output['status']), wanted)
-                                self.assertEqual(len(state['sdk_calls']), 1)
-                            os.write(gate_write, b'x')
-                        if phase == 'version-refused':
-                            self.assertEqual(process.wait(timeout=4), 0)
-                            self.assertFalse((f.home/'tui-ran').exists())
-                        elif phase == 'tui':
-                            self.assertEqual(process.wait(timeout=4), 0)
-                            self.assertTrue((f.home/'tui-ran').exists())
-                    finally:
-                        if process.poll() is None:
-                            os.killpg(process.pid, signal.SIGKILL)
-                        process.wait(timeout=4)
-                        os.close(observe_read)
-                        os.close(gate_write)
-                    patch.stopall()
+    def test_paths_and_prompt_remain_single_literal_arguments(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);request,inspection,_,_,_,_=self.fixture(root)
+            cwd=root/'space \" quote $(touch NEVER)'
+            handoff=m.Handoff(root/"handoff ' quote.md",'nonce',root/'ack.json',cwd)
+            request=replace(request,mode='handoff',cwd=cwd,handoff=handoff.path)
+            overlay=root/'overlay \" file.json'
+            argv=m.build_argv(request,inspection,overlay,handoff)
+            self.assertEqual(argv[:7],[str(root/'omp'),'--profile','work','--cwd',str(cwd),'--config',str(overlay)])
+            self.assertEqual(argv[7],'--')
+            outer=shlex.split(m.build_command(request,inspection,argv))
+            login=shlex.split(outer[2].split(' && exec ',1)[1])
+            executed=shlex.split(login[2].split('; exec ',1)[1])
+            self.assertEqual(executed[3:],argv)
+            self.assertFalse((root/'NEVER').exists())
 
-    def test_wrong_profile_is_not_launched(self):
-        for field in ('applied', 'guid', 'profile_name'):
-            with self.subTest(field=field), Fixture() as f:
-                m, paths, request, _, state = self.fixture(f)
-                state[field] = 'wrong'
-                code, output = m.launch(request, paths, f.runner)
-                self.assertEqual((code, output['status']), (3, 'created_unverified'))
-                self.assertEqual(output['session_id'], SID)
-                patch.stopall()
+    def run_launch(self,root,request,inspection,state,transport,create):
+        paths=SimpleNamespace(data=root/'data')
+        with patch.object(m,'inspect_launch',return_value=(inspection,[])),patch.object(m,'Terminal',transport),patch.object(m,'create_tab',create),patch.object(m.time,'monotonic',side_effect=lambda:state['now']),patch.object(m.time,'sleep',side_effect=lambda n:state.update(now=state['now']+n)):
+            return m.launch(request,paths,SimpleNamespace())
 
-    def test_failed_observation_preserves_ids(self):
-        for failure in ('inventory_error', 'variable_error', 'no_sessions'):
-            with self.subTest(failure=failure), Fixture() as f:
-                m, paths, request, _, state = self.fixture(f)
-                state[failure] = True
-                code, output = m.launch(request, paths, f.runner)
-                self.assertEqual((code, output['status']), (3, 'created_unverified'))
-                self.assertEqual(output['tab_id'], 'tab-one')
-                self.assertEqual(output['session_id'], SID)
-                patch.stopall()
+    def test_new_handoff_overrides_auto_resume_without_persisting(self):
+        for mode in ('new','handoff'):
+            with self.subTest(mode=mode),TemporaryDirectory() as tmp:
+                root=Path(tmp); request,inspection,binding,state,transport,create=self.fixture(root)
+                global_config=request.omp_profile.agent_dir/'config.yml'
+                project_config=request.cwd/'.omp/config.yml'
+                default_config=root/'.omp/agent/config.yml'
+                base_overlay=root/'preserved-config.json'
+                for path in (global_config,project_config,default_config,base_overlay):
+                    path.parent.mkdir(parents=True,exist_ok=True)
+                    path.write_text(json.dumps(dict(autoResume=path!=default_config,model='unchanged')))
+                persisted=(global_config,project_config,default_config,base_overlay)
+                before=[p.read_bytes() for p in persisted]
+                inspection=replace(inspection,identity=replace(inspection.identity,arguments=('--config',str(base_overlay))))
+                if mode=='handoff':
+                    artifact=m.prepare_handoff(root,'Task to read'); request=replace(request,mode='handoff',handoff=artifact.path)
+                    plain=create
+                    async def create(w,p,g,c,**kwargs):
+                        result=await plain(w,p,g,c)
+                        artifact.ack_path.write_text(json.dumps(dict(request_id=artifact.request_id,thread_id=state['selected_session_id'],cwd=str(artifact.cwd),accepted_task='Read task',first_step='Inspect materials')))
+                        artifact.ack_path.chmod(0o600)
+                        return result
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['status']),(0,'launched'),out)
+                argv=state['argv']; configs=[argv[i+1] for i,value in enumerate(argv) if value=='--config']
+                self.assertEqual(configs[0],str(base_overlay));self.assertEqual(len(configs),2)
+                self.assertEqual(state['selection_layers'],[global_config,project_config,base_overlay,Path(configs[-1])])
+                actual=state['bindings'][0]
+                self.assertEqual(actual.session_id,'fresh')
+                self.assertEqual(state['selected_session_id'],actual.session_id)
+                self.assertEqual(json.loads(actual.session_file.read_text())['id'],actual.session_id)
+                self.assertEqual(out['identity'],'verified')
+                self.assertEqual([p.read_bytes() for p in persisted],before)
+                self.assertNotIn('--session-dir',argv)
+                if mode=='handoff':
+                    self.assertEqual(out['ack'],'received')
+                    ack=json.loads(artifact.ack_path.read_text())
+                    self.assertEqual(ack['thread_id'],actual.session_id)
 
-    def test_launch_never_uses_legacy_creation(self):
-        for resume in (False, True):
-            with self.subTest(resume=resume), Fixture() as f:
-                m, paths, request, _, state = self.fixture(f)
-                if resume:
-                    request = replace(request, handoff=None, resume_session_id=SID)
-                    state['command_line'] = 'codex resume '+SID+' -C '+str(f.home)
-                code, output = m.launch(request, paths, f.runner)
-                self.assertEqual(code, 0, output)
-                self.assertEqual(len(state['sdk_calls']), 1)
-                it2_mutations = [a for a in state['calls'] if a[1:3] not in
-                    (['session', 'list'], ['tab', 'list'], ['window', 'list'],
-                     ['profile', 'show'], ['session', 'get-var'])]
-                self.assertEqual(it2_mutations, [])
-                patch.stopall()
+    def test_timeout_after_creation_does_not_create_second_tab(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+            state['creation']=LaunchCreation('unknown','W','T',None,30,())
+            code,out=self.run_launch(root,request,inspection,state,transport,create)
+            self.assertEqual((code,out['status'],out['tab_id']),(3,'created_unverified','T'))
+            self.assertEqual(state['creates'],1)
 
-    def test_creation_and_verification_share_deadline(self):
-        for used in (29.5, 30.):
-            with self.subTest(used=used), Fixture() as f:
-                m, paths, request, _, state = self.fixture(f)
-                state.update(create_seconds=used, job='zsh')
-                code, output = m.launch(request, paths, f.runner)
-                self.assertEqual((code, output['status']), (3, 'created_unverified'))
-                self.assertLessEqual(state['now'], 30.)
-                self.assertEqual(output['session_id'], SID)
-                self.assertEqual(bool(state['calls']), used < 30)
-                patch.stopall()
+    def test_wrong_process_complete_argv_and_extra_options_are_unverified(self):
+        for change in (dict(command_bad=True),dict(job='zsh')):
+            with self.subTest(change=change),TemporaryDirectory() as tmp:
+                root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root);state.update(change)
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['status']),(3,'created_unverified'));self.assertEqual(state['creates'],1)
 
-    def test_observation_subprocesses_receive_only_remaining_budget(self):
-        m = self.module()
-        real_run = m.LaunchITerm._run
-        with Fixture() as f:
-            m, paths, request, _, state = self.fixture(f)
-            fake_observe = m.LaunchITerm._run
-            state['create_seconds'] = 28.75
-            budgets = []
+    def test_moved_tab_and_incomplete_live_candidate_never_auto_duplicate(self):
+        for observation in ('moved','missing'):
+            with self.subTest(observation=observation),TemporaryDirectory() as tmp:
+                root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+                target=resolve_resume(binding.session_file,binding.session_id,binding.profile)
+                request=replace(request,mode='resume',resume=target)
+                transport.observe=lambda self,sid: ({**binding_record(binding),'tab_id':'moved','window_id':'other'} if observation=='moved' else None)
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual(state['creates'],0)
+                self.assertEqual(out['status'],'already_open' if observation=='moved' else 'blocked')
 
-            def popen(argv, **kwargs):
-                stdout = fake_observe(SimpleNamespace(timeout=3, deadline=30), argv)
-                def communicate(timeout):
-                    self.assertAlmostEqual(timeout, 30-state['now'])
-                    budgets.append(timeout)
-                    state['now'] += min(.2, timeout)
-                    return stdout, ''
-                return SimpleNamespace(communicate=communicate, returncode=0)
+    def test_live_matching_id_without_session_file_never_creates_duplicate(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+            target=resolve_resume(binding.session_file,binding.session_id,binding.profile)
+            request=replace(request,mode='resume',resume=target)
+            incomplete=replace(binding,session_file=None)
+            state['bindings']=[incomplete]
+            transport.observe=lambda self,sid:binding_record(incomplete)
+            code,out=self.run_launch(root,request,inspection,state,transport,create)
+            self.assertEqual(state['creates'],0)
+            self.assertEqual((code,out['status']),(2,'blocked'))
 
-            with patch.object(m.LaunchITerm, '_run', real_run), patch.object(m.subprocess, 'Popen', popen):
-                code, output = m.launch(request, paths, f.runner)
-            self.assertEqual((code, output['status']), (3, 'created_unverified'))
-            self.assertEqual(output['session_id'], SID)
-            self.assertTrue(budgets)
-            self.assertLessEqual(max(budgets), 1.25)
-            self.assertEqual(state['now'], 30)
+    def test_target_startup_profile_inputs_are_rechecked_before_exec(self):
+        import subprocess
+        from iterm2_utils.commands import Runner
+        from iterm2_utils.launch_checks import _shell_identity
+        for changed in ('HOME','PI_CONFIG_DIR','PI_CODING_AGENT_DIR'):
+            with self.subTest(changed=changed),TemporaryDirectory() as tmp:
+                root=Path(tmp).resolve();target=root/'target';target.mkdir()
+                caller=root/'caller';caller.mkdir()
+                binary=root/'bin';binary.mkdir();omp=binary/'omp'
+                marker=root/'executed'
+                omp.write_text('#!/bin/sh\nprintf launched > '+shlex.quote(str(marker))+'\n')
+                omp.chmod(0o700)
+                (root/'.zshenv').write_text('unsetopt GLOBAL_RCS\n')
+                startup=('export PATH='+shlex.quote(str(binary))+':/usr/bin:/bin\n'+
+                         'if [[ $PWD == '+shlex.quote(str(target))+' ]]; then export PI_CONFIG_DIR=target-config; else export PI_CONFIG_DIR=caller-config; fi\n')
+                name=None if changed=='PI_CODING_AGENT_DIR' else 'work'
+                if name is None:startup+='export PI_CODING_AGENT_DIR=relative-agent\n'
+                (root/'.zshrc').write_text(startup)
+                env={'HOME':str(root),'ZDOTDIR':str(root),'PATH':'/usr/bin:/bin'}
+                executable,args,wrapper,effective,selected=_shell_identity(Path('/bin/zsh'),Runner(),env,target,name or 'default')
+                self.assertEqual(effective['PI_CONFIG_DIR'],'target-config')
+                # The caller directory would resolve another named-profile storage root.
+                _,_,_,caller_env,_=_shell_identity(Path('/bin/zsh'),Runner(),env,caller,name or 'default')
+                self.assertEqual(caller_env['PI_CONFIG_DIR'],'caller-config')
+                expected=target/'relative-agent' if name is None else root/'target-config/profiles/work/agent'
+                self.assertEqual(selected,OmpProfile(name,expected))
+                request=LaunchRequest('W','Omp',target,selected,'new')
+                identity=LaunchIdentity(executable,tuple(args),((str(executable),),),'',wrapper)
+                inspection=LaunchInspection(root/'it2',Path('/bin/zsh'),'G','W',identity)
+                command=m.build_command(request,inspection,[str(omp)])
+                result=subprocess.run(shlex.split(command),env=env,cwd=caller,capture_output=True,timeout=10)
+                self.assertEqual(result.returncode,0,result.stderr)
+                self.assertTrue(marker.exists())
+                marker.unlink()
+                (root/'.zshrc').write_text(startup+'export '+changed+'='+shlex.quote(str(root/'drift'))+'\n')
+                result=subprocess.run(shlex.split(command),env=env,cwd=caller,capture_output=True,timeout=10)
+                self.assertNotEqual(result.returncode,0)
+                self.assertFalse(marker.exists(),'profile-directory drift must stop before exec')
 
-    def test_sdk_session_uuid_is_normalized_for_comparison_and_it2(self):
-        with Fixture() as f:
-            m, paths, request, _, state = self.fixture(f)
-            terminal = 'abcdefab-1111-4111-8111-111111111111'
-            state['creation'] = LaunchCreation('created_unverified', request.window_id,
-                                               'tab-one', terminal.upper(), 30., ())
-            state['observed_session'] = terminal.upper()
-            code, output = m.launch(request, paths, f.runner)
-            self.assertEqual(code, 0, output)
-            self.assertEqual(output['session_id'], terminal)
-            variables = [argv for argv in state['calls'] if argv[1:3] == ['session', 'get-var']]
-            self.assertEqual(len(variables), 4)
-            self.assertTrue(all(argv[-2:] == ['--session', terminal.upper()] for argv in variables))
+    def test_exact_resume_command_no_prompt_restore_or_fallback(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp); request,inspection,binding,state,transport,create=self.fixture(root)
+            request=replace(request,mode='resume',resume=resolve_resume(binding.session_file,'fresh',binding.profile))
+            argv=m.build_argv(request,inspection,None)
+            self.assertEqual(argv,[str(root/'omp'),'--profile','work','--cwd',str(root),'--resume',str(binding.session_file)])
 
-    def test_sdk_partial_and_blocked_results_preserve_known_ids(self):
-        for status, tab, session, wanted in (
-                ('blocked', None, None, (2, 'blocked')),
-                ('unknown', None, None, (3, 'unknown')),
-                ('unknown', 'tab-one', None, (3, 'created_unverified')),
-                ('unknown', 'tab-one', 'malformed', (3, 'created_unverified')),
-                ('unknown', 'tab-one', SID, (0, 'launched'))):
-            with self.subTest(status=status, tab=tab, session=session), Fixture() as f:
-                m, paths, request, _, state = self.fixture(f)
-                state['creation'] = LaunchCreation(status, 'window-one' if status != 'blocked' else None,
-                                                   tab, session, 30., ())
-                code, output = m.launch(request, paths, f.runner)
-                self.assertEqual((code, output['status']), wanted)
-                self.assertEqual((output['tab_id'], output['session_id']), (tab, session))
-                self.assertEqual(len(state['sdk_calls']), 1)
-                patch.stopall()
+    def test_ack_wrong_nonce_identity_stale_or_symlink_is_not_receipt(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp); artifact=m.prepare_handoff(root,'task')
+            for changes in (dict(request_id='wrong'),dict(thread_id='wrong'),dict(cwd='/wrong')):
+                ack=dict(request_id=artifact.request_id,thread_id='actual',cwd=tmp,accepted_task='task',first_step='read');ack.update(changes)
+                artifact.ack_path.write_text(json.dumps(ack));artifact.ack_path.chmod(0o600)
+                self.assertFalse(m.valid_ack(artifact,'actual',0))
+            artifact.ack_path.write_text(json.dumps(dict(request_id=artifact.request_id,thread_id='actual',cwd=str(artifact.cwd),accepted_task='task',first_step='read')))
+            artifact.ack_path.chmod(0o600)
+            os.utime(artifact.ack_path,ns=(1,1))
+            self.assertFalse(m.valid_ack(artifact,'actual',2))
+            artifact.ack_path.unlink(); artifact.ack_path.symlink_to(artifact.path)
+            self.assertFalse(m.valid_ack(artifact,'actual',0))
 
-    def test_exact_sdk_identity_and_single_session_are_required(self):
-        for field, value in (('observed_window', 'other'), ('observed_tab', 'other'),
-                             ('observed_session', '22222222-2222-4222-8222-222222222222'),
-                             ('extra_session', True), ('profile_name', 'other')):
-            with self.subTest(field=field), Fixture() as f:
-                m, paths, request, _, state = self.fixture(f)
-                state[field] = value
-                code, output = m.launch(request, paths, f.runner)
-                self.assertEqual((code, output['status']), (3, 'created_unverified'))
-                self.assertEqual((output['tab_id'], output['session_id']), ('tab-one', SID))
-                patch.stopall()
+    def test_resume_without_registry_requires_independent_dialog_evidence_or_opt_in(self):
+        for situation in ('missing','unavailable','unrelated','instrumented-other','opt-in','stale'):
+            with self.subTest(situation=situation),TemporaryDirectory() as tmp:
+                root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+                request=replace(request,mode='resume',resume=resolve_resume(binding.session_file,'fresh',binding.profile),
+                                allow_duplicate=situation=='opt-in')
+                state['bindings']=[] if situation!='unrelated' else [replace(binding,session_id='other')]
+                if situation=='unavailable':
+                    transport.bindings=lambda self: (_ for _ in ()).throw(OSError('private registry unavailable'))
+                if situation=='stale':
+                    state['bindings']=[binding]
+                    transport.process_start=lambda self,pid:'reused-pid'
+                if situation=='instrumented-other':
+                    other=root/'other.jsonl'
+                    other.write_text(json.dumps(dict(type='session',id='other',cwd=str(root)))+'\n')
+                    current=replace(binding,session_id='other',session_file=other)
+                    state['bindings']=[current]
+                    transport.observe=lambda self,sid:binding_record(current)
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                allowed=situation in {'instrumented-other','opt-in'}
+                self.assertEqual(state['creates'],int(allowed))
+                self.assertEqual((code,out['status']),(0,'launched') if allowed else (2,'blocked'))
 
-    def test_resume_requires_exact_argv(self):
-        for resume in (False, True):
-            for count in (0, 1, 2, 3):
-                with self.subTest(resume=resume, count=count), Fixture() as f:
-                    m, paths, request, _, state = self.fixture(f)
-                    if resume:
-                        request = replace(request, handoff=None, resume_session_id=SID)
-                        args = 'resume '+SID+' -C '+str(request.cwd)
-                    else:
-                        args = state['command_line'][len('codex '):]
-                    state['command_line'] = 'codex '+('--no-daemon '*count)+args
-                    code, output = m.launch(request, paths, f.runner)
-                    self.assertEqual(code, 0 if count <= 2 else 3, output)
-                    patch.stopall()
-        for command in ('codex', 'codex --help', 'codex --version', 'codex app-server --stdio',
-                        'codex resume OTHER -C CWD', 'codex resume SID -C /other',
-                        'codex resume SID -C CWD extra prompt', 'codex resume SID --no-daemon -C CWD',
-                        'codex resume SID -C CWD --no-daemon'):
-            with self.subTest(command=command), Fixture() as f:
-                m, paths, request, _, state = self.fixture(f)
-                request = replace(request, handoff=None, resume_session_id=SID)
-                state['command_line'] = command.replace('SID', SID).replace('CWD', str(request.cwd))
-                self.assertEqual(m.launch(request, paths, f.runner)[0], 3)
-                patch.stopall()
+    def test_resume_command_proof_never_implies_foreign_fresh_fork_or_missing_history(self):
+        for actual in ('foreign','fresh','fork','missing'):
+            with self.subTest(actual=actual),TemporaryDirectory() as tmp:
+                root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+                saved=root/'requested.jsonl'
+                saved.write_text(json.dumps(dict(type='session',id='requested',cwd=str(root)))+'\n')
+                request=replace(request,mode='resume',resume=resolve_resume(saved,'requested',binding.profile),
+                                allow_duplicate=True)
+                if actual=='fork':
+                    binding.session_file.write_text(json.dumps(dict(type='session',id='fresh',cwd=str(root),
+                                                                   parentSession='requested'))+'\n')
+                elif actual=='foreign':
+                    foreign=root/'foreign';foreign.mkdir()
+                    state['bindings']=[replace(binding,profile=OmpProfile(None,foreign))]
+                elif actual=='missing':state['bindings']=[]
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['status'],out['command'],out['history']),
+                                 (0,'launched','verified','unverified'))
+                self.assertEqual((out['window_id'],out['tab_id'],out['session_id']),('W','T','S'))
+                self.assertEqual(state['creates'],1)
+                if actual=='missing':self.assertEqual(out['identity'],'unverified')
 
-    def test_subprocess_stderr_is_not_echoed(self):
-        with Fixture() as f:
-            m, paths, request, _, state = self.fixture(f)
-            state['variable_error'] = True
-            _, output = m.launch(request, paths, f.runner)
-            self.assertNotIn('PRIVATE_STDERR', json.dumps(output))
-            self.assertNotIn('PRIVATE_HANDOFF_CONTENT', json.dumps(output))
+    def test_handoff_ack_has_separate_120_seconds_and_never_recreates(self):
+        for ack in ('late','missing','invalid'):
+            with self.subTest(ack=ack),TemporaryDirectory() as tmp:
+                root=Path(tmp).resolve();request,inspection,binding,state,transport,create=self.fixture(root)
+                artifact=m.prepare_handoff(root,'private task')
+                self.addCleanup(__import__('shutil').rmtree,artifact.path.parent)
+                request=replace(request,mode='handoff',handoff=artifact.path)
+                observe=transport.observe
+                def observed(self,sid):
+                    if state['now']>=45 and ack!='missing' and not artifact.ack_path.exists():
+                        artifact.ack_path.write_text(json.dumps(dict(request_id=artifact.request_id,
+                            thread_id='fresh' if ack=='late' else 'wrong',cwd=str(root),
+                            accepted_task='read',first_step='inspect')))
+                        artifact.ack_path.chmod(0o600)
+                    return observe(self,sid)
+                transport.observe=observed
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['command'],out['ack']),
+                                 (0,'verified','received' if ack=='late' else 'unconfirmed'))
+                self.assertGreaterEqual(state['now'],45 if ack=='late' else 120)
+                self.assertLess(state['now'],46 if ack=='late' else 121)
+                self.assertEqual((out['window_id'],out['tab_id'],out['session_id']),('W','T','S'))
+                self.assertEqual(state['creates'],1)
 
-    def test_blocked_prerequisite_never_creates(self):
-        from iterm2_utils.models import Finding
-        with Fixture() as f:
-            m, paths, request, _, state = self.fixture(f)
-            finding = Finding('launch', 'codex', 'launch_dependency', 'unavailable', 'Unavailable.')
-            m.inspect_launch.return_value = (None, [finding])
-            code, output = m.launch(request, paths, f.runner)
-            self.assertEqual((code, output['status']), (2, 'blocked'))
-            self.assertEqual(state['calls'], [])
-            self.assertEqual(state['sdk_calls'], [])
+    def test_complete_command_observation_accepts_literal_and_quoted_exact_forms(self):
+        for form in ('literal','quoted','interpreter-literal','interpreter-quoted','extra','wrong-cwd','wrong-id','wrong-handoff','malformed'):
+            with self.subTest(form=form),TemporaryDirectory(prefix="space ' quote ") as tmp:
+                root=Path(tmp).resolve();request,inspection,binding,state,transport,create=self.fixture(root)
+                target=resolve_resume(binding.session_file,'fresh',binding.profile)
+                request=replace(request,mode='resume',resume=target,allow_duplicate=True)
+                original=transport.variable
+                def variable(self,sid,name):
+                    if name!='session.commandLine':return original(self,sid,name)
+                    argv=list(state['argv'])
+                    if form.startswith('interpreter'):argv=[str(root/'bun'),*argv]
+                    if form=='extra':argv+=['--continue']
+                    if form=='wrong-cwd':argv[argv.index('--cwd')+1]='/wrong'
+                    if form=='wrong-id':argv[-1]=str(root/'other.jsonl')
+                    if form=='wrong-handoff':argv+=['--','Read another task']
+                    line=' '.join(argv) if form.endswith('literal') else shlex.join(argv)
+                    return line+" '" if form=='malformed' else line
+                transport.variable=variable
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual(out['command'],'verified' if form in {
+                    'literal','quoted','interpreter-literal','interpreter-quoted'} else 'unverified')
+                self.assertEqual(state['creates'],1)
 
-    def shell_fixture(self, f):
-        m = self.module()
-        paths = resolve_paths()
-        log_code = 'import json,os,sys; open(os.environ["HOME"]+"/args.json","w").write(json.dumps(sys.argv[1:])); open(os.environ["HOME"]+"/invocations","a").write("1\\n"); open(os.environ["HOME"]+"/restore-auto","w").write(os.environ.get("CODEX_RESTORE_NO_AUTO", ""))'
-        function = 'function codex { '+shlex.join([sys.executable, '-c', log_code])+' "$@"; }\n'
-        (f.bin/'codex').write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo "codex-cli 0.167.0"; else echo BYPASSED >> "$HOME/bypass"; fi\n')
-        (f.home/'.zshrc').write_text('export PATH='+shlex.quote(str(f.bin))+':/usr/bin:/bin\n'
-            'print -r -- "$CODEX_RESTORE_NO_AUTO" >> "$HOME/startup"\n'
-            'print -r -- "$PWD" > "$HOME/startup-cwd"\n'
-            '[[ $CODEX_RESTORE_NO_AUTO == 1 ]] || print RESTORE > "$HOME/restore"\n'+function)
-        env = dict(HOME=str(f.home), ZDOTDIR=str(f.home), PATH=str(f.bin)+':/usr/bin:/bin', CODEX_RESTORE_NO_AUTO='1')
-        result = subprocess.run(['/bin/zsh', '-ilc', _metadata_command(paths)], env=env,
-                                cwd=f.home, capture_output=True, text=True, timeout=3)
-        self.assertEqual(result.returncode, 0, result.stderr)
-        identity = _identity(json.loads(result.stdout)['iterm2_launch_identity'])
-        inspection = LaunchInspection(f.app/'Contents/Resources/utilities/it2', Path('/bin/zsh'), 'profile-one', identity)
-        (f.home/'startup').unlink()
-        return m, paths, inspection, env
+    def abbreviated_fixture(self, root, mode, prefix=()):
+        request,inspection,binding,state,transport,create=self.fixture(root)
+        request=replace(request,mode=mode,omp_profile=None if mode=='shell' else request.omp_profile)
+        state.update(job='zsh' if mode=='shell' else Path(prefix[0]).name if prefix else 'omp',
+                     pid=123,tty='/dev/ttys007',image=Path('/bin/zsh') if mode=='shell' else Path(prefix[0]) if prefix else root/'omp',
+                     kernel_calls=0)
+        original=transport.variable
+        def variable(self,sid,name):
+            if name=='tty':return state['tty']
+            if name=='session.profileName':return 'Omp'
+            if name=='session.jobName':return state['job']
+            if name!='session.commandLine':return original(self,sid,name)
+            argv=[str(inspection.zsh),'-il'] if mode=='shell' else [*prefix,*state['argv']]
+            argv[0]=Path(argv[0]).name
+            argv+=state.get('extra',[])
+            if state.get('wrong_script'):argv[1]=str(root/'other-omp')
+            if state.get('wrong_cwd'):argv[argv.index('--cwd')+1]='/wrong'
+            line=' '.join(argv) if state.get('literal') else shlex.join(argv)
+            return line+" '" if state.get('malformed') else line
+        transport.variable=variable
+        def job_pid(self,sid):
+            runner=SimpleNamespace(run=lambda *a,**kw:SimpleNamespace(returncode=0,stdout=json.dumps(state['pid'])))
+            return Terminal(Path('/it2'),runner).job_pid(sid)
+        # Exercise the real numeric transport decoder beneath the launch consumer.
+        transport.job_pid=job_pid
+        def foreground(self,pid,birth,tty):
+            state['kernel_calls']+=1
+            return state.get('foreground',True) and (pid,birth,tty)==(123,'birth','/dev/ttys007')
+        transport.foreground_process=foreground
+        transport.process_image=lambda self,pid:str(state['image']) if state['image'] else None
+        async def created(*args,**kwargs):
+            if mode=='shell':
+                state['creates']+=1
+                return LaunchCreation('created_unverified','W','T','S',30,())
+            return await create(*args,**kwargs)
+        return request,inspection,state,transport,created
 
-    def execute_command(self, command, env):
-        # iTerm parses --command into an argv; emulate exactly that boundary.
-        return subprocess.run(shlex.split(command), env=env, stdin=subprocess.DEVNULL,
-                              capture_output=True, text=True, timeout=4)
+    def test_basename_shell_native_and_interpreter_require_kernel_job_proof(self):
+        for mode,prefix,literal in (('shell',(),False),('new',(),False),('new',('bun',),False),('new',('bun',),True)):
+            with self.subTest(mode=mode,prefix=prefix,literal=literal),TemporaryDirectory(prefix="space ' quote ") as tmp:
+                root=Path(tmp)
+                prefix=(str(root/'bun'),) if prefix else ()
+                request,inspection,state,transport,create=self.abbreviated_fixture(root,mode,prefix)
+                state['literal']=literal
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['status'],out['command']),(0,'launched','verified'))
+                self.assertEqual(state['creates'],1)
+                self.assertGreaterEqual(state['kernel_calls'],2)
 
-    def test_login_shell_keeps_function_and_blocks_auto_restore(self):
-        with Fixture() as f:
-            m, paths, inspection, env = self.shell_fixture(f)
-            cwd = f.home/'working directory'
-            cwd.mkdir()
-            handoff = f.home/'handoff.md'
-            handoff.write_text('PRIVATE_HANDOFF_CONTENT')
-            request = LaunchRequest('window-one', 'Codex', cwd, handoff)
-            env.pop('CODEX_RESTORE_NO_AUTO')
-            result = self.execute_command(m.build_command(request, inspection, paths), env)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            args = json.loads((f.home/'args.json').read_text())
-            self.assertEqual(args[:2], ['-C', str(cwd)])
-            self.assertEqual(len(args), 3)
-            self.assertIn(str(handoff), args[2])
-            self.assertNotIn('PRIVATE_HANDOFF_CONTENT', args[2])
-            self.assertEqual((f.home/'invocations').read_text(), '1\n')
-            self.assertEqual(set((f.home/'startup').read_text().splitlines()), {'1'})
-            self.assertEqual((f.home/'startup-cwd').read_text().rstrip('\n'), str(cwd))
-            self.assertFalse((f.home/'restore').exists())
-            self.assertFalse((f.home/'bypass').exists())
+    def test_basename_wrong_tail_never_uses_kernel_evidence(self):
+        for fault in ('extra','script','cwd','malformed'):
+            with self.subTest(fault=fault),TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                request,inspection,state,transport,create=self.abbreviated_fixture(root,'new',(str(root/'bun'),))
+                state.update(extra=['--continue'] if fault=='extra' else [],wrong_script=fault=='script')
+                state.update(wrong_cwd=fault=='cwd',malformed=fault=='malformed')
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['command']),(3,'unverified'))
+                self.assertEqual(state['kernel_calls'],0)
 
-    def test_changed_shell_identity_blocks_codex(self):
-        fields = ('version', 'codex_home', 'home', 'executable', 'wrapper_fingerprint')
-        for field, resume in product(fields, (False, True)):
-            with self.subTest(field=field, resume=resume), Fixture() as f:
-                m, paths, inspection, env = self.shell_fixture(f)
-                old = getattr(inspection.identity, field)
-                replacement = old/'other' if isinstance(old, Path) else old+'-different'
-                inspection = replace(inspection, identity=replace(inspection.identity, **{field: replacement}))
-                request = LaunchRequest('window-one', 'Codex', f.home, f.home/'handoff')
-                if resume:
-                    request = replace(request, handoff=None, resume_session_id=SID)
-                self.execute_command(m.build_command(request, inspection, paths), env)
-                self.assertFalse((f.home/'args.json').exists())
-                self.assertEqual((f.home/'startup').read_text().splitlines(), ['1', '1'])
+    def test_basename_rejects_wrong_missing_or_changing_job_evidence(self):
+        for fault in ('image','missing-image','foreground','birth','dead','pid','tty','command','changed-image',
+                      'changed-foreground','changed-birth','lost-liveness','changed-pid','changed-tty','changed-command','deadline'):
+            with self.subTest(fault=fault),TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                request,inspection,state,transport,create=self.abbreviated_fixture(root,'new')
+                if fault=='image':state['image']=root/'foreign'
+                if fault=='missing-image':state['image']=None
+                if fault=='foreground':state['foreground']=False
+                if fault in {'birth','dead'}:transport.process_start=lambda self,pid:None
+                if fault=='pid':state['pid']=True
+                if fault=='tty':state['tty']=''
+                if fault=='command':state['extra']=['--continue']
+                if fault.startswith('changed-') or fault in {'lost-liveness','deadline'}:
+                    original=transport.process_image
+                    def image(self,pid):
+                        result=original(self,pid)
+                        # Every attempt becomes contradictory, never just the first poll.
+                        if fault=='changed-image':state['image']=root/'foreign'
+                        if fault=='changed-foreground':state['foreground']=False
+                        if fault=='changed-birth':transport.process_start=lambda self,pid:'reused'
+                        if fault=='lost-liveness':transport.process_start=lambda self,pid:None
+                        if fault=='changed-pid':state['pid']=124
+                        if fault=='changed-tty':state['tty']='/dev/ttys008'
+                        if fault=='changed-command':state['extra']=['--continue']
+                        if fault=='deadline':state['now']=31
+                        return result
+                    transport.process_image=image
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['status'],out['command']),(3,'created_unverified','unverified'))
+                self.assertEqual((out['window_id'],out['tab_id'],out['session_id']),('W','T','S'))
+                self.assertEqual(state['creates'],1)
 
-    def test_disappeared_cwd_keeps_shell_without_running_codex(self):
-        with Fixture() as f:
-            m, paths, inspection, env = self.shell_fixture(f)
-            request = LaunchRequest('window-one', 'Codex', f.home/'deleted', f.home/'handoff')
-            self.execute_command(m.build_command(request, inspection, paths), env)
-            self.assertFalse((f.home/'args.json').exists())
-            self.assertTrue((f.home/'startup').exists(), 'failed cd must leave an interactive shell')
-            self.assertEqual((f.home/'startup').read_text().splitlines(), ['1'])
+    def test_full_path_command_keeps_existing_proof_without_kernel_calls(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);request,inspection,_,state,transport,create=self.fixture(root)
+            def forbidden(*args):raise AssertionError('Full argv must not need kernel image proof')
+            transport.job_pid=transport.foreground_process=transport.process_image=forbidden
+            code,out=self.run_launch(root,request,inspection,state,transport,create)
+            self.assertEqual((code,out['command']),(0,'verified'))
 
-    def test_quoting_does_not_execute_user_values(self):
-        suffixes = ('space here', 'Кириллица', "single'quote", 'double"quote', 'new\nline',
-                    '`touch SENTINEL`', '$(touch SENTINEL)')
-        for suffix, resume in product(suffixes, (False, True)):
-            with self.subTest(suffix=suffix, resume=resume), Fixture() as f:
-                m, paths, inspection, env = self.shell_fixture(f)
-                cwd = f.home/('cwd '+suffix)
-                cwd.mkdir()
-                handoff = f.home/('handoff '+suffix)
-                handoff.write_text('PRIVATE_HANDOFF_CONTENT $(touch CONTENT_SENTINEL)')
-                request = LaunchRequest('window-one', 'Codex', cwd, handoff)
-                if resume:
-                    request = replace(request, handoff=None, resume_session_id=SID.upper())
-                env.pop('CODEX_RESTORE_NO_AUTO')
-                result = self.execute_command(m.build_command(request, inspection, paths), env)
-                self.assertEqual(result.returncode, 0, result.stderr)
-                args = json.loads((f.home/'args.json').read_text())
-                expected = (['resume', SID, '-C', str(cwd)] if resume else
-                    ['-C', str(cwd), 'Read the handoff file at '+str(handoff)+' and carry out the task described there.'])
-                self.assertEqual(args, expected)
-                self.assertEqual((f.home/'restore-auto').read_text(), '1')
-                self.assertFalse((cwd/'SENTINEL').exists())
-                self.assertFalse((f.home/'SENTINEL').exists())
-                self.assertFalse((cwd/'CONTENT_SENTINEL').exists())
+    def test_handoff_producer_bounds_complete_utf8_representation_without_truncation(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve()
+            for task in ('x'*65536,'界'*22000,'x'*65450):
+                with self.subTest(length=len(task)),patch.object(m.tempfile,'tempdir',str(root)):
+                    with self.assertRaises(ValueError):m.prepare_handoff(root,task)
+                    self.assertEqual(list(root.iterdir()),[])
+            task="Unicode 界 and quotes ' \""*500
+            artifact=m.prepare_handoff(root,task)
+            self.addCleanup(__import__('shutil').rmtree,artifact.path.parent)
+            self.assertEqual(m.read_handoff(artifact.path,root),artifact)
+            self.assertIn(task,artifact.path.read_text())
+            self.assertLessEqual(artifact.path.stat().st_size,65536)
+
+    def test_window_selection_provenance_reaches_sdk_create_without_retargeting(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+            inspection=replace(inspection,window_basis=('parent','PARENT'))
+            async def capture(*args,**kwargs):
+                self.assertEqual(kwargs,{'window_basis':('parent','PARENT')})
+                return await create(*args,**kwargs)
+            code,out=self.run_launch(root,request,inspection,state,transport,capture)
+            self.assertEqual((code,state['creates']),(0,1))
+
+    def test_handoff_literal_and_quoted_complete_bun_argv_preserve_exact_prompt_path(self):
+        for form in ('literal','quoted','wrong-handoff'):
+            with self.subTest(form=form),TemporaryDirectory(prefix="space ' \" quote ") as tmp:
+                root=Path(tmp).resolve();request,inspection,binding,state,transport,create=self.fixture(root)
+                with patch.object(m.tempfile,'tempdir',str(root)):
+                    artifact=m.prepare_handoff(root,'task')
+                request=replace(request,mode='handoff',handoff=artifact.path)
+                original=transport.variable
+                def variable(self,sid,name):
+                    if name!='session.commandLine':return original(self,sid,name)
+                    argv=[str(root/'bun'),*state['argv']]
+                    if form=='wrong-handoff':argv[-1]=argv[-1].replace(str(artifact.path),str(root/'other.md'))
+                    return ' '.join(argv) if form=='literal' else shlex.join(argv)
+                transport.variable=variable
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['command']),(3,'unverified') if form=='wrong-handoff' else (0,'verified'))
+                self.assertEqual(out['ack'],'unconfirmed')
+                self.assertEqual(state['creates'],1)
+
+    def test_ambiguous_earlier_pane_or_binding_does_not_mask_exact_open_dialog(self):
+        for source in ('pane','binding'):
+            with self.subTest(source=source),TemporaryDirectory() as tmp:
+                root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+                request=replace(request,mode='resume',resume=resolve_resume(binding.session_file,'fresh',binding.profile))
+                original=transport.observe
+                transport.observe=lambda self,sid:None if sid=='unknown' else original(self,sid)
+                transport.panes=lambda self:[dict(terminal_id='unknown',tab_id='U',window_id='W'),
+                                            dict(terminal_id='S',tab_id='T',window_id='W')]
+                if source=='binding':state['bindings']=[replace(binding,terminal_id='unknown'),binding]
+                else:
+                    reads=[]
+                    def bindings(self):
+                        reads.append(True)
+                        return [] if len(reads)==1 else [binding]
+                    transport.bindings=bindings
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['status'],state['creates']),(0,'already_open',0))
+
+    def test_negative_resume_needs_complete_unchanged_inventory_and_proven_shell(self):
+        for fault in ('none','shell','inventory','changed','timeout'):
+            with self.subTest(fault=fault),TemporaryDirectory() as tmp:
+                root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+                request=replace(request,mode='resume',resume=resolve_resume(binding.session_file,'fresh',binding.profile))
+                state['bindings']=[]
+                original=transport.observe
+                transport.observe=lambda self,sid:original(self,sid) if state['creates'] else None
+                transport.ordinary_shell=lambda self,pane,zsh:fault!='shell'
+                def complete(self):
+                    if fault in {'inventory','timeout'}:raise TimeoutError('bounded inventory')
+                    if fault=='changed':return []
+                    return self.panes()
+                transport.complete_panes=complete
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual(state['creates'],int(fault=='none'))
+                self.assertEqual((code,out['status']),(0,'launched') if fault=='none' else (2,'blocked'))
+                if fault!='none':self.assertEqual(out['findings'][-1]['code'],'launch_live_candidate_incomplete')
+
+    def test_duplicate_scan_has_restored_bounded_deadline(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+            request=replace(request,mode='resume',resume=resolve_resume(binding.session_file,'fresh',binding.profile))
+            def observed(self,sid):
+                self_test.assertEqual(self.deadline,30)
+                state['now']=31
+                return None
+            self_test=self
+            transport.observe=observed
+            code,out=self.run_launch(root,request,inspection,state,transport,create)
+            self.assertEqual((code,state['creates']),(2,0))

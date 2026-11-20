@@ -3,5 +3,7 @@ __pycache__/
 .superpowers/
 build/
 dist/
+!vendor/yaml/dist/
+!vendor/yaml/dist/**
 .DS_Store
 docs/superpowers/plans/

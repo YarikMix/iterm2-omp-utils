@@ -1,91 +1,82 @@
-"""Pure builders for installed, checkout-independent zsh/runtime resources.
-
-runtime/ maps directly to current/; vendor/ maps to current/vendor/.
-Future hook.py and codex_restore/ modules belong under runtime/ and may use
-sibling imports through their installed script directory. No checkout sys.path.
-"""
+"""Retained native shell/appearance payloads, described without applying writes."""
 import hashlib
+import json
 import os
 import re
 import shlex
 from pathlib import Path
 from .. import __version__
 from ..config import zshrc
-from ..models import ChangeSet, Context, Selection, FileEdit, SymlinkEdit, Finding
+from ..models import ChangeSet, Context, FileEdit, SymlinkEdit, Finding, Selection
 
 OWNER = 'shared:shell'
 RUNTIME_OWNER = 'shared:runtime'
-DEPENDENTS = frozenset({'status', 'notifications', 'restore', 'appearance'})
-# Only these named assets belong in immutable runtime releases.
+DEPENDENTS = frozenset({'shell', 'appearance', 'restore'})
 APPEARANCE_ASSETS = tuple(Path('assets/appearance') / (name + '.' + extension)
                           for name in ('ios', 'android', 'kotlett', 'ios-mail', 'ios-cloud',
                                        'android-mail', 'android-cloud', 'chrome-mail', 'chrome-cloud')
                           for extension in ('png', 'svg'))
+# Deliberately do not flatten omp_config.ts: its ../vendor import is contractual.
+BASE_PAYLOAD = {
+    'runtime/omp_config.ts': 'runtime/omp_config.ts',
+    'vendor/shell_integration/iterm2_shell_integration.zsh': 'vendor/shell_integration/iterm2_shell_integration.zsh',
+    'vendor/shell_integration/LICENSE': 'vendor/shell_integration/LICENSE',
+    'LICENSE': 'LICENSE', 'THIRD_PARTY_NOTICES.md': 'THIRD_PARTY_NOTICES.md',
+}
+APPEARANCE_PAYLOAD = {
+    'runtime/appearance.py': 'appearance.py',
+    'runtime/appearance.zsh': 'appearance.zsh',
+    'runtime/terminal_identity.py': 'terminal_identity.py',
+    'runtime/omp_identity.ts': 'runtime/omp_identity.ts',
+}
 
 
-def _dispatcher(selection):
-    return bool(selection.features_for('codex') & DEPENDENTS)
-
-
-def _consumers(selection):
-    return frozenset(a+':'+feature for a in selection.agents
-                     for feature in selection.features_for(a)
-                     if feature=='shell' or a=='codex' and feature in DEPENDENTS
-                     or a=='claude' and feature=='notifications')
+def _source(repo, relative):
+    if relative.is_absolute() or '..' in relative.parts:
+        raise ValueError('Unsafe runtime source')
+    source = repo/relative
+    if any((repo/part).is_symlink() for part in (relative, *relative.parents)):
+        raise ValueError('Unsafe runtime source symlink')
+    if not source.is_file():
+        raise ValueError('Missing runtime source dependency')
+    return source.read_bytes()
 
 
 def runtime_payload(context: Context, selection: Selection) -> ChangeSet:
-    """Copy validated source trees before switching the stable current symlink.
-
-    Only runtime Python/zsh, vendor Python/zsh/license, package helpers and
-    explicitly named appearance PNG/SVG are eligible, with root attribution. Mutable caches/configuration
-    never belong in the release tree.
-    """
     changes = ChangeSet([], [], [])
-    consumers = _consumers(selection)
+    consumers = selection.features & DEPENDENTS
     if not consumers:
         return changes
-    files = {}
-    for tree in ('runtime', 'vendor'):
-        root = context.paths.repo / tree
-        if root.is_symlink() or not root.is_dir():
-            raise ValueError('Missing runtime source tree')
-        for source in sorted(root.rglob('*')):
-            if source.is_symlink():
-                raise ValueError('Runtime source symlinks are not allowed')
-            if not source.is_file() or '__pycache__' in source.parts:
-                continue
-            if source.suffix not in {'.py', '.zsh'} and source.name not in {'LICENSE', 'NOTICE', 'codex-sessions'}:
-                continue
-            relative = source.relative_to(root)
-            target = relative if tree == 'runtime' else Path('vendor') / relative
-            files[target] = source.read_bytes()
-    if Path('codex.zsh') not in files or Path('vendor/shell_integration/iterm2_shell_integration.zsh') not in files:
-        raise ValueError('Incomplete runtime payload')
-    for relative in APPEARANCE_ASSETS:
-        source = context.paths.repo/'runtime'/relative
-        if (any(parent.is_symlink() for parent in
-                (source, *(context.paths.repo/'runtime'/part for part in relative.parents))) or not source.is_file()):
-            raise ValueError('Missing or unsafe appearance asset')
-        files[relative] = source.read_bytes()
-    for name in ('LICENSE', 'THIRD_PARTY_NOTICES.md'):
-        source = context.paths.repo/name
-        if source.is_symlink() or not source.is_file():
-            raise ValueError('Missing runtime license or attribution')
-        files[Path(name)] = source.read_bytes()
+    repo = context.paths.repo
+    files = {Path(target): _source(repo,Path(source)) for source,target in BASE_PAYLOAD.items()}
+    # The committed provenance manifest is an explicit file allowlist, never a
+    # recursive copy of runtime/vendor trees containing retired consumers.
+    manifest = json.loads(_source(repo,Path('sources.lock.json')))
+    yaml = [entry for entry in manifest['sources'] if entry['path'].startswith('vendor/yaml/')]
+    if not yaml or not any(entry['path']=='vendor/yaml/dist/index.js' for entry in yaml):
+        raise ValueError('Missing YAML payload manifest')
+    for entry in yaml:
+        relative = Path(entry['path'])
+        content = _source(repo,relative)
+        if hashlib.sha256(content).hexdigest() != entry['sha256']:
+            raise ValueError('Runtime parser provenance changed')
+        files[relative] = content
+    if consumers & {'appearance','restore'}:
+        files[Path('terminal_identity.py')] = _source(repo,Path('runtime/terminal_identity.py'))
+    if 'appearance' in consumers:
+        files.update({Path(target):_source(repo,Path(source)) for source,target in APPEARANCE_PAYLOAD.items()})
+        files.update({relative:_source(repo,Path('runtime')/relative) for relative in APPEARANCE_ASSETS})
     digest = hashlib.sha256()
     for name, content in sorted(files.items()):
         digest.update(str(name).encode()+b'\0'+content+b'\0')
-    release = context.paths.data / 'releases' / (__version__+'-'+digest.hexdigest()[:20])
-    # All reads/validation complete before any edits are emitted; engine applies
-    # file edits in order and atomically switches the explicit symlink last.
+    release = context.paths.data/'releases'/(__version__+'-'+digest.hexdigest()[:20])
     for name, content in sorted(files.items()):
-        path = release / name
+        path = release/name
         before = path.read_bytes() if path.exists() else None
         if before is not None and before != content:
             raise ValueError('Immutable release content changed')
-        changes.edits.append(FileEdit(path,before,content,0o700 if name == Path("codex_restore/codex-sessions") else 0o600,RUNTIME_OWNER))
-    current = context.paths.data / 'current'
+        changes.edits.append(FileEdit(path,before,content,0o600,RUNTIME_OWNER))
+    current = context.paths.data/'current'
     if current.exists() and not current.is_symlink():
         raise ValueError('Runtime current must be a symlink')
     changes.edits.append(SymlinkEdit(current,os.readlink(current) if current.is_symlink() else None,str(release),RUNTIME_OWNER))
@@ -95,54 +86,70 @@ def runtime_payload(context: Context, selection: Selection) -> ChangeSet:
 
 def build(context: Context, selection: Selection) -> ChangeSet:
     changes = ChangeSet([], [], [])
-    marks = 'shell' in selection.features
-    dispatch = _dispatcher(selection)
-    if not marks and not dispatch:
+    consumers = selection.features & {'shell','appearance'}
+    if not consumers:
         return changes
     path = context.paths.zshrc
     before = path.read_bytes() if path.exists() else None
     try:
-        from .. import migration
-        base = migration.shell_before(context,selection,before) if dispatch else (before or b'')
+        base = before or b''
         managed = zshrc.blocks(base)
         foreign = base
         for name in managed:
             foreign = zshrc.block(foreign,name,None)
         text = foreign.decode()
-        # Known old managed wrappers must be deliberately adopted, never nested.
-        if re.search(r'(?m)^\s*#.*(?:codex.*(?:wrapper|no.daemon)|(?:>>>|BEGIN).*codex)', text, re.I):
-            raise ValueError('Legacy managed Codex block requires migration')
-        if dispatch and re.search(r'(?m)^\s*(?:alias(?:\s+-\S+)*\s+codex\s*=|(?:function\s+)?codex\s*\(\s*\)|function\s+codex\b)', text):
-            raise ValueError('Existing Codex alias or function')
-        reuse = marks and bool(re.search(r'(?m)^\s*(?:source|\.)\s+[^\n]*iterm2_shell_integration',text))
+        reuse = 'shell' in consumers and bool(re.search(
+            r'(?m)^\s*(?:source|\.)\s+[^\n]*iterm2_shell_integration',text))
         lines = []
-        current = context.paths.data / 'current'
+        current = context.paths.data/'current'
         quote = lambda value: shlex.quote(str(value))
-        if marks and not reuse:
+        if 'shell' in consumers and not reuse:
             lines.extend(['if [[ ${TERM_PROGRAM-} == iTerm.app && -z ${ITERM_SHELL_INTEGRATION_INSTALLED-} ]]; then',
-                          '  source '+quote(current/'vendor/shell_integration/iterm2_shell_integration.zsh'), 'fi'])
+                          '  source '+quote(current/'vendor/shell_integration/iterm2_shell_integration.zsh'),'fi'])
         if reuse:
-            changes.findings.append(Finding('shell',None,'existing_integration','ready','Existing shell integration is reused.'))
-        if dispatch:
+            changes.findings.append(Finding('shell',None,'existing_integration','ready',
+                                            'Existing shell integration is reused without ownership.'))
+        if 'appearance' in consumers:
             lines.extend(['typeset -g ITERM2_UTILS_PYTHON='+quote(context.executables['python3']),
-                          'typeset -g ITERM2_UTILS_CODEX_NO_DAEMON='+('1' if 'codex:no-daemon' in context.capabilities else '0'),
-                          'source '+quote(current/'codex.zsh')])
-            if 'appearance' in selection.features_for('codex'):
-                lines.extend(['typeset -g ITERM2_UTILS_APPEARANCE_CONFIG='+quote(context.paths.config/'appearance.json'),
-                              'source '+quote(current/'appearance.zsh')])
-            if 'restore' in selection.features_for('codex'):
-                lines.extend(['export CODEX_RESTORE_IT2='+quote(context.executables['it2']),
-                              'export CODEX_RESTORE_ITERM_PROCESS='+quote(context.executables['iterm2']/'Contents/MacOS/iTerm2'),
-                              'export CODEX_RESTORE_CACHE_DIR='+quote(context.paths.cache/'restore'),
-                              'typeset -g _codex_restore_no_daemon=1',
-                              '[[ -n ${CODEX_HOME+x} ]] || export CODEX_HOME='+quote(context.paths.codex_home)])
-                restore = quote(current/'codex_restore/codex-resume.zsh')
-                lines.append('[[ ! -f '+restore+' ]] || source '+restore)
-        # A no-op existing integration needs no ownership claim.
+                          'typeset -g ITERM2_UTILS_APPEARANCE_CONFIG='+quote(context.paths.config/'appearance.json'),
+                          'typeset -g ITERM2_UTILS_IDENTITY_REGISTRY='+quote(context.paths.data/'identity'),
+                          'source '+quote(current/'appearance.zsh')])
         if lines or 'root' in managed:
-            after = zshrc.block(base,'root','\n'.join(lines) if lines else None)
-            changes.edits.append(FileEdit(path,before,after,0o600,OWNER))
-            changes.consumers[OWNER] = frozenset(p for p in _consumers(selection) if p.endswith(':shell') or dispatch and p.startswith('codex:'))
+            changes.edits.append(FileEdit(path,before,zshrc.block(base,'root','\n'.join(lines) if lines else None),0o600,OWNER))
+            changes.consumers[OWNER] = frozenset(consumers)
     except (ValueError, UnicodeError):
-        changes.findings.append(Finding('shell',None,'shell_conflict','conflict','Shell startup contains conflicting or ambiguous managed integration; explicit migration is required.'))
+        for feature in sorted(consumers):
+            changes.findings.append(Finding(feature,None,'shell_conflict','conflict',
+                'Shell startup contains malformed managed integration; explicit repair is required.'))
+    return changes
+
+
+def identity_extension(context: Context, selection: Selection) -> ChangeSet:
+    """One owned standalone extension per selected native profile."""
+    from .. import engine, state
+    changes = ChangeSet([],[],[])
+    consumers = selection.features & {'restore','appearance'}
+    if not consumers:
+        return changes
+    target = selection.omp_profile.agent_dir/'extensions/iterm2-utils-identity.ts'
+    if target.is_symlink() or target.parent.is_symlink():
+        raise ValueError('Unsafe identity extension path')
+    before = target.read_bytes() if target.exists() else None
+    receipt = state.load(context.paths.data/'receipt.json')
+    resources = [r for r in receipt.resources if r['target'] == str(target.resolve())
+                 and 'shared:identity' in r['owners']] if receipt else []
+    if before is not None and (not resources or not all(
+            engine._same(engine._read(r,None,context),r['installed']) for r in resources)):
+        raise ValueError('Identity extension name is owned by another writer')
+    install = {'registry':str(context.paths.data/'identity'),
+               'profile':{'name':selection.omp_profile.name,'agent_dir':str(selection.omp_profile.agent_dir)},
+               'python':str(context.executables['python3']),
+               'helper':str(context.paths.data/'current/terminal_identity.py')}
+    source = _source(context.paths.repo,Path('runtime/omp_identity.ts'))
+    marker = b"function installation(): Installation { throw new Error('Install the profile-scoped identity extension first'); }"
+    if source.count(marker) != 1:
+        raise ValueError('Identity extension installation contract changed')
+    content = source.replace(marker,b'function installation(): Installation { return '+json.dumps(install).encode()+b'; }')
+    changes.edits.append(FileEdit(target,before,content,0o600,'shared:identity'))
+    changes.consumers['shared:identity'] = frozenset(consumers)
     return changes

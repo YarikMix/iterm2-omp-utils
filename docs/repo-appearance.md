@@ -1,15 +1,15 @@
 # Оформление вкладки по репозиторию
 
-`appearance` — восьмая opt-in функция, только для Codex в macOS/zsh. Она назначает
+`appearance` — восьмая opt-in функция, для основной TUI-сессии omp в macOS/zsh. Она назначает
 цвет и одну составную иконку своей сессии iTerm2 при старте интерактивной shell,
-обычном `cd` и интерактивном запуске Codex, включая resume/fork и restore.
-Используется физическая папка вызывающей shell, а не аргумент `--cd` или текст
+обычном `cd` и интерактивном запуске omp, включая resume и branch.
+Используется физическая папка вызывающей shell, а не аргумент `--cwd` или текст
 разговора. Вход в корень или подкаталог назначает пару, переход между корнями
 меняет её. Выход из всех зарегистрированных корней отключает Tab Color и скрывает
 custom icon: use-color=false для base/light/dark, mode Icon=0 и пустой path,
 без назначения конкретного «дефолтного» RGB. Недоступные корни не совпадают.
-Служебные команды (`--help`, exec, review, login) оформление не меняют. Ошибка API
-не отменяет успешный `cd` или запуск Codex и не меняет его код выхода. Это новое
+Служебные команды (`--help`, `--version`, `--mode rpc`, `--print`) оформление не меняют. Ошибка API
+не отменяет успешный `cd` или запуск omp и не меняет его код выхода. Это новое
 поведение существующего `appearance`, без нового флага или схемы JSON.
 
 Штатный zsh `chpwd` hook регистрируется один раз и сохраняет чужие hooks и функцию
@@ -22,7 +22,7 @@ A → B → outside и запуск свежей вложенной interactive 
 Обычно это короткое ожидание API; недоступные API или файловая система могут
 задержать старт/каждый `cd` примерно на существующий бюджет 2.8 секунды.
 Успешный `cd` сохраняет код 0 даже при ошибке оформления. Асинхронный observer
-запуска/возврата Codex отменяется с ожиданием очистки перед следующим helper.
+запуска/возврата omp отменяется с ожиданием очистки перед следующим helper.
 
 Перед любой записью helper сверяет фактическое устройство терминала shell с `tty`
 явно указанной сессии iTerm2. UUID из окружения сам по себе запись не разрешает:
@@ -35,14 +35,25 @@ helper безопасно пропускает назначение, сброс 
 Нет fallback на активную вкладку; это защита от ошибочного наследования контекста,
 а не от вредоносного процесса с доступом к тому же пользовательскому API.
 
-`launch-codex` дополнительно убирает оба родительских ID только из служебного
-окружения preflight login shell в выбранном cwd. Окружение родителя, его цвет,
-иконка и snapshot сохраняются; настоящая новая вкладка получает собственные ID.
-После обновления shell/runtime нужна новая shell для загрузки hook с передачей
-терминала. Уже открытые shell сохраняют старый код и могут ссылаться на прежний
-runtime без новой защиты. Старый caller безопасно пропускает оформление только
-при вызове нового Python helper без tty. Установщик не перезапускает
-рабочие вкладки. Пользовательские команды и JSON не меняются.
+Generated startup передаёт приватный identity registry установленному runtime.
+`preexec` запускает observer без ожидания SDK/API, а `precmd` отменяет и reap-ит
+его перед отдельным неблокирующим observer возврата/обновления baseline.
+Нативный launch явно вызывает `_iterm2_utils_appearance_arm` перед `exec`: только
+этот согласованный путь может ждать захвата исходного оформления, до 2.8 секунды.
+Обычная prompt-команда не ждёт API; её worker ждёт actual publication в течение
+этой команды. Завершение/следующая команда отменяет его через lifetime/cancel fence;
+выход shell дополнительно отслеживается Darwin kqueue, без polling и нового демона.
+Имя executable, `jobName`, Bun и read-only API probe не являются разрешением записи.
+Только совпадение приватного registry с независимо наблюдаемыми SDK-адресами,
+`user.iterm2_utils_omp`, generation, точным kernel birth и foreground process-group
+основного процесса на своём TTY разрешает назначение. Источник identity —
+установленное расширение только `tui`/`main`;
+subagents, RPC, help и обычные команды без такой identity не перекрашивают вкладку.
+Snapshot сохраняется для возврата только после подтверждения этой identity.
+
+Нужна новая shell для загрузки обновлённых hooks; установщик не перезапускает и
+не закрывает пользовательские вкладки. Установленный release содержит соседний
+`terminal_identity.py`: checkout и Python-пакет не нужны для runtime.
 
 Создайте локальный JSON (не добавляйте личные пути в публичный checkout):
 
@@ -82,9 +93,9 @@ CLI-командах настройки. Discovery проверяет импор
 Пакет не выполняет pip и не загружает картинки при старте shell.
 
 ```sh
-python3 -m iterm2_utils plan --agent codex --features appearance --appearance-config /path/to/rules.json --json
-python3 -m iterm2_utils install --agent codex --features appearance --appearance-config /path/to/rules.json --dry-run --json
-python3 -m iterm2_utils install --agent codex --features appearance --appearance-config /path/to/rules.json --json
+python3 -m iterm2_utils plan --features appearance --appearance-config /path/to/rules.json --json
+python3 -m iterm2_utils install --features appearance --appearance-config /path/to/rules.json --dry-run --json
+python3 -m iterm2_utils install --features appearance --appearance-config /path/to/rules.json --json
 python3 -m iterm2_utils doctor --json
 ```
 
@@ -115,8 +126,8 @@ maintenance нужен новый checkout/release пакета:
 ```sh
 python3 -m iterm2_utils update --dry-run --json
 python3 -m iterm2_utils update --json
-python3 -m iterm2_utils uninstall --agent codex --features appearance --dry-run --json
-python3 -m iterm2_utils uninstall --agent codex --features appearance --json
+python3 -m iterm2_utils uninstall --features appearance --dry-run --json
+python3 -m iterm2_utils uninstall --features appearance --json
 ```
 
 Повторный install без `--appearance-config` использует установленные правила;
@@ -131,26 +142,36 @@ shell/runtime сохраняются для других функций; generic
 
 Helper меняет только сессионные Tab Color/use color и Custom Icon Path/mode,
 учитывая base/light/dark при назначении и сбросе и сохраняя профиль, фон, Default
-и заголовок. Короткоживущий observer отслеживает job/profile
-для APS на старте и возврате Codex, имеет жёсткую границу 2.8 секунды. Перед стартом
-Codex shell ждёт готовности подписок; без совпадения helper сначала снимает только
-текущие цвет/иконку, включая light/dark варианты и ручные изменения. Снимок хранится
-в переменной собственной native-сессии, привязан к этому запуску и удаляется при
-возврате. Он восстанавливается после APS; последующий `cd` применяет новый каталог
-и отменяет сохранённое оформление прежнего запуска. Ошибка
-или deadline освобождают запуск без изменения его аргументов и кода выхода;
-при недоступном API защитить оформление от стороннего APS нельзя. Нет демона,
-постоянного наблюдателя, polling, MCP или agent hooks. Это оставляет поздние
-APS-переходы вне окна непроверенным ограничением. Исторические native-наблюдения
-и отдельная новая fixture/live матрица приведены в [совместимости](compatibility.md).
-Новый cd/reset отдельно проверен в собственных native-вкладках: пять правил,
-подкаталог, выход наружу, быстрые переходы и возврат под APS; fixture-тесты эту
-приёмку не заменяют. Для загрузки обновлённого hook откройте новую вкладку либо
-самостоятельно выполните `exec zsh`; установщик работающие shell не перезапускает.
+и заголовок. Event-driven observer отслеживает actual identity и profileName для
+APS; cold SDK startup supervisor ограничен 2.8 секунды, каждая API-операция — 2.2.
+Окно APS в 1.5 секунды начинается после подтверждённой публикации main identity,
+а не перед выполнением команды; задержка wrapper/startup/publication не расходует его.
+PID/kernel birth/terminal задают владельца запуска отдельно от текущей generation:
+валидные session_switch/branch того же процесса допустимы, замена процесса — нет.
+Возврат требует положительного ухода прежнего foreground-владельца и собственного
+shell TTY; временный разрыв variable/registry при публикации не означает shell return.
+Ctrl+Z сохраняет живую dialog binding, но снимает foreground authority оформления.
+Операции snapshot и назначения защищены native transaction, launch token и TTY.
 
-Новые фирменные изображения отдельно проверены в native-вкладках: шесть
-сочетаний, неизменный Kotlett, семь выбранных правил, подкаталоги/outside reset
-и читаемость в панели обычного размера. Проверены точные цвета и PNG bytes;
-собственные тестовые вкладки закрыты. Смена темы и новый Codex/APS/restore-picker
-прогон для этой правки ассетов не повторялись. Личные корни, JSON и снимки
-не публикуются; подробные результаты — в матрице совместимости.
+В той же native snapshot-переменной хранится последняя положительно наблюдённая
+shell-baseline: allowlisted цвет/иконка, physical cwd, terminal/TTY device,
+shell PID/kernel birth и kernel executable path. После обычной команды refresh не блокирует prompt и
+принимает только тот же фактический shell executable в foreground; agent-era APS
+не становится original. Без доверенной baseline generic launch ничего не выдумывает:
+явно вооружённый native launch может захватить её до exec. Смена root/cd назначает
+новую пару/reset и обновляет baseline, не перенося старый original через новый запуск.
+Другой cwd не переиспользует старый original даже при незавершённом API reset.
+Pending claim прежнего запуска не позволяет записать его APS-значения как новую
+baseline: сначала нужен подтверждённый owned return write; проверка claim/token
+повторяется внутри native transaction. До этого сохраняется прежний trusted original.
+Это граница последнего подтверждённого наблюдения shell, не атомарная гарантия для
+ручной правки после него и непосредственно перед APS. Обычные ручные правки входят
+в последующий положительно проверенный shell refresh. Foreign/newer snapshots и
+чужие свойства не восстанавливаются поверх текущих.
+
+Нет демона, polling, MCP или доверия к имени процесса. Поздний APS вне короткого
+окна остаётся ограничением; недоступность identity/API безопасно пропускает запись,
+не блокируя shell/omp и не меняя argv/exit status. Исторические визуальные проверки
+предыдущего агента не доказывают omp-поведение. Новые offline suites и реальная
+матрица cd/reset, rapid cd, APS и light/dark остаются очередью Task10; здесь tests
+и native UI не запускались. Личные корни, JSON и снимки не публикуются.

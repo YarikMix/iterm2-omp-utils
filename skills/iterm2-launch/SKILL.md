@@ -1,132 +1,143 @@
 ---
 name: iterm2-launch
-description: Use when a user requests a separate Codex session or an exact existing Codex conversation in an iTerm2 tab on macOS with zsh. Not for internal subagents or Claude Code.
+description: Use when opening or explicitly closing one iTerm2 tab, starting a separate omp task, or opening an exact saved omp conversation on macOS with zsh. Not for internal subagents.
 ---
 
-# Launch or resume Codex
+# One shell or omp tab; exact tab close
 
-Create at most one tab. Verify launch separately from task receipt or restored
-history. An internal-subagent or Claude Code request does not authorize a Codex tab.
+An ordinary or unspecified tab means **shell**, not an agent choice. An explicit
+omp request selects new, handoff or exact resume. Create at most one tab per
+authorized request. Creation, command, identity, history and task receipt are
+separate evidence; none proves task completion.
 
-Codex and omp can host this skill (`bootstrap-skill --agent codex` or `--agent omp`).
-The launched/resumed agent is always Codex, never omp; an omp launch request does
-not authorize substituting Codex. Hosting the skill in omp changes no omp settings.
+An internal-subagent request stays internal. An explicitly unsupported Codex/Claude
+request is not permission to substitute an external omp tab: report unsupported
+consumer without creating anything. Only an explicit separate omp session selects
+agent mode; an ordinary tab selects shell without an agent-choice menu.
 
-**Codex sandbox:** When this skill runs inside Codex, pass
-`sandbox_permissions: "require_escalated"` on the tool call before the first
-iTerm2 socket/API operation. Apply it to the selected `it2` session/tab/window/
-profile inventory, scoped observations such as `session get-var` and profile
-reads, and the single `launch-codex` mutation. Do not probe from the default
-sandbox first. This is tool-call metadata, not a CLI flag. Keep the approval
-prefix narrow: use only the selected bundled `it2` executable or the exact
-saved Python executable for `iterm2_utils`; do not request broad filesystem
-access. If the host cannot provide escalation, report launch as blocked and do
-not retry or create another tab automatically. Other hosts use their native
-permission mechanism.
+## Close one explicitly authorized tab
 
-1. Use a verified checkout or unpacked release of
-   https://github.com/YarikMix/iterm2-utils; read README there. Select available
-   `python3` or the user's explicitly chosen Python and save its absolute
-   `sys.executable`. Preserve that path, including virtualenv symlinks; do not
-   resolve it to a base interpreter or keep a PATH shim instead. For `python3`:
+A request to close selects `close-tab`, not launch/setup. Use a verified checkout
+and existing Python 3.11+ with the official SDK; preserve absolute `sys.executable`
+without resolving virtualenv symlinks. Check `close-tab --help` with that Python.
+Missing SDK/API or denied permission blocks; do not install, change permissions,
+use GUI/another API, or type into any terminal.
 
-   ```sh
-   launch_python="$(python3 -c 'import os, sys; p = sys.executable; assert os.path.isabs(p); print(p)')" &&
-   "$launch_python" -c 'import sys; assert sys.version_info >= (3, 11); import iterm2; print(sys.executable)' &&
-   "$launch_python" -m iterm2_utils launch-codex --help
-   ```
+Select the authorized `(window_id, tab_id, session_id)` from a fresh complete
+read-only native `iterm2.rpc.async_list_sessions` snapshot, including split-tree,
+minimized and buried sessions. If the user supplied exact IDs, keep them exact.
+Ambiguous intent requires clarification, not focus/title/recency or a guessed
+target. The session ID is the **terminal** ID, not the omp conversation ID.
+Require one visible session and no minimized panels in the target tab. Unrelated
+splits/hidden sessions are accounted for, never closed. Warn that the selected
+tab and its running work will be closed, then invoke once for that authorization:
 
-   Require successful version/import/help checks before continuing; bound each
-   external operation to 10 seconds using the calling tool. Use this exact path
-   for checks and launch. Separate tool calls must pass the saved path explicitly
-   again; shell variables do not persist. If cwd/PATH changes, recheck import/help
-   with the saved Python in the invocation context, without selecting another.
-   Python **3.11+** and accessible iTerm2 API are required. Live-tested SDK: **2.23**.
-   Missing SDK/API or denied access blocks launch; report the selected Python and
-   missing prerequisite. No automatic installation or environment search. An
-   explicitly authorized installation is separate; recheck afterward.
-2. Select the window from successful, complete, valid inventories using the
-   selected bundle's verified `it2`: `session list --json`, `tab list --json`,
-   `window list --json`, in this priority order:
-   - Preserve the user's explicit target; verify its unique window ID. If missing
-     or ambiguous, ask for a target instead of substituting another window.
-   - Otherwise map the parent UUID from runtime metadata (e.g. UUID portion of
-     `ITERM_SESSION_ID`) to consistent unique session/tab/window IDs.
-   - If the runtime ID is absent or not found, and the complete window inventory
-     contains exactly one window with a nonempty ID, use it **without asking**.
-     Record that selection basis; do not invent a parent mapping.
-   - Multiple windows without a mapped parent, or contradictory parent mappings,
-     require an explicit target. Zero windows or failed/invalid inventories block
-     selection. Never infer uniqueness from a screenshot, focus, title or recency.
-3. Read `it2 profile list --json` and `profile show NAME --json`; record unique
-   name/GUID. CLI also checks materialized Cmd+C/Ctrl+C EN/RU, CopySelection and
-   effective Codex/login-shell compatibility. Preserve foreign profiles. For
-   prerequisites use `iterm2-setup` with explicitly selected features.
-4. Choose the requested mode:
-   - **New task:** prepare private unique [handoff/ack](references/handoff.md),
-     canonical cwd, absent ack and launch timestamp.
-   - **Existing conversation:** follow [resume](references/resume.md) to match
-     relevant history, exact UUID and confirmed transcript cwd. If already open,
-     report its tab; create a duplicate only on explicit request. No new prompt
-     or ack is part of resume.
-5. Recheck the selected window ID before invoking CLI. If selected only because
-   it was the sole window, the complete inventory must still contain exactly that
-   window. A second window requires clarification; a vanished target blocks this
-   attempt without automatic substitution. Rechecking is not an atomic guarantee
-   against concurrent changes; CLI also validates the exact target before create.
-   Warn that a new tab will appear. Invoke **once**, with values passed as
-   individual argv elements or correctly shell-quoted:
+```sh
+"$launch_python" -m iterm2_utils close-tab --window WINDOW_ID --tab TAB_ID --session TERMINAL_ID --json
+```
 
-   ```sh
-   "$launch_python" -m iterm2_utils launch-codex --window WINDOW_ID --profile PROFILE_NAME --cwd ABS_DIR --handoff ABS_FILE --json
-   "$launch_python" -m iterm2_utils launch-codex --window WINDOW_ID --profile PROFILE_NAME --cwd ABS_DIR --resume SESSION_UUID --json
-   ```
+The CLI rechecks the exact tuple before one official native tab-only close with
+`force=False`; no profile/settings/agent/Bun/history probes. No window/session/
+process close, retry, force, target substitution or cleanup fallback. SDK import,
+authorization and inventory are supervised (10s each); close and fresh absence
+proof share 30s, and the entire worker is bounded at 60s. Preserve/observe the same
+job if a host tool wait ends; never start a second invocation.
 
-   Choose exactly one line. The SDK supplies custom command **at tab creation**;
-   no terminal send/run/send_text or `it2 tab new --command` fallback. Preserve
-   shell function/settings/model/endpoint and protections; add no Codex flags
-   or `--no-alt-screen`. CLI sets `CODEX_RESTORE_NO_AUTO=1` before login shell.
-6. Inspect exit/JSON; observe only returned IDs read-only. Require one session in
-   the exact tab/window, matching profile name/GUID and `session.profileName`,
-   `session.jobName=codex`, `session.processTitle` and `session.commandLine`
-   through scoped `session get-var ... --session SESSION_ID` (JSON strings).
-   `processTitle` is argv0; `commandLine` is that title **plus** zero to two
-   supported wrapper `--no-daemon` flags before exact mode argv: `-C cwd prompt`
-   or `resume UUID -C cwd`. Accept either the exact space-joined representation
-   or safely shell-tokenized quoted text matching that complete argv; never
-   evaluate the text. Malformed quoted text or extra arguments remain unverified.
-   Bare `codex`, help/version, wrong cwd/UUID/handoff or missing evidence is
-   unverified. Do not expose raw command lines or screens.
-7. Report launch and the mode's separate evidence: fresh validated handoff ack,
-   or read-only recovered history/identifier in the exact resume target. Without
-   resume history: **«команда resume запущена, восстановление истории не подтверждено»**.
-   Use bounded observations: preflight/connect ≤10 seconds each; creation and
-   launch verification share 30 seconds; handoff ack has its own 120-second wait.
+Report returned IDs and status in either plain or JSON output:
+`closed`/0 requires native `OK` plus a fresh complete snapshot without **both**
+target tab ID and terminal ID, including minimized/buried sessions.
+`blocked`/2 means no request was sent or native `NOT_FOUND`/`USER_DECLINED` refused
+it; refusal is not a successful close. `unknown`/3 includes timeout, failed worker
+protocol, missing/non-OK results or retained/moved/buried target IDs after `OK`.
+Inspect read-only and report uncertainty; never retry automatically. The SDK
+close and snapshots are not atomic against concurrent iTerm2 changes. Copying or
+updating this source skill does not install it or authorize any close.
 
-| JSON status / exit | Meaning |
-|---|---|
-| `launched` / 0 | Command verified; ack/history remains separate. |
-| `created_unverified` / 3 | Retain known IDs; inspect that target only. |
-| `unknown` / 3 | Creation uncertain; retain uncertainty and any IDs. |
-| `blocked` / 2 | Prerequisite failed before creation. |
+## Prepare
 
-JSON `mode=launch_codex` includes `launch_mode=handoff|resume` and
-`resume_session_id` (dialog UUID or null). `session_id` is the iTerm2 terminal ID.
-Report actual statuses, IDs and artifact paths. Never automatically retry,
-resend a prompt, close a tab or kill processes after uncertainty. If a shell
-command is visible in Codex's input field, leave it unsent: bare Codex is not a
-successful launch. Use this procedure for an authorized replacement; retain the
-old tab and diagnostic artifacts. Receipt/history is not task completion,
-design approval or clipboard acceptance.
+Use a verified checkout/release of https://github.com/YarikMix/iterm2-utils and
+read its README. Choose existing Python 3.11+; save its absolute `sys.executable`
+without resolving virtualenv symlinks to a different interpreter. Check import
+of official `iterm2` and `launch-omp --help` with that same Python. Preserve it
+across tool calls; if invocation cwd/PATH changes, recheck there, not in another
+environment. Missing SDK/API blocks launch; do not automatically install it.
+Each preflight/inventory operation is bounded at 10 seconds, not the whole launch
+CLI invocation. Creation plus command verification share 30 seconds; handoff
+receipt has a separate 120-second bound after verified command launch.
+Use the host's actual permission mechanism; do not demand unsupported sandbox
+tool metadata. A denial remains denied: no alternate API/automation path or
+permission changes.
 
-The effective-config preflight still uses the selected cwd and login shell, but
-its private environment omits both inherited `ITERM_SESSION_ID` and
-`TERM_SESSION_ID`. Parent environment, appearance and saved snapshot stay intact
-before creation; the new tab gets its own iTerm2 binding and normal shell startup.
-Appearance separately requires the shell tty device to match the explicit
-session's tty before any profile/snapshot write. Missing/mismatched tty safely
-skips; read-only API access alone does not authorize mutation. After updating
-runtime, use a fresh shell to load the new hook. Existing shells may still call
-an older immutable runtime without this protection. An old caller invoking the
-new Python helper without tty safely skips; update does not retrofit running
-shells. Do not restart existing user sessions.
+The CLI uses complete typed inventories and independent SDK evidence. Target
+priority is explicit window, consistent unique parent terminal mapping, then the
+sole window in a complete inventory. Multiple/contradictory targets require a
+choice; no focus/title/recency inference. Record the selection basis. Recheck
+before creation; vanished/changed targets block rather than substitute.
+
+Select an existing ordinary login-shell profile for shell; select the dedicated
+`iterm2-utils:omp` profile for omp. Preserve exact name/GUID; no startup commands
+or guessed duplicate names. Prerequisite setup is a separate explicitly selected
+operation using iterm2-setup, not authorization inferred from a tab request.
+
+## Choose one mode
+
+| User intent | Mode and evidence |
+| --- | --- |
+| Ordinary tab | `--mode shell`; no agent command, omp/Bun/config/history probe or handoff |
+| Empty fresh omp | `--mode new`; no handoff or resume inputs |
+| New omp task | `--mode handoff --handoff ABS`; prepare private [handoff/ack](references/handoff.md) |
+| Exact saved dialog | `--mode resume --resume-file ABS --resume-id UUID`; follow [resume](references/resume.md) |
+
+Resolve storage with the existing `resolve_omp_profile(home, env, explicit)`:
+explicit `--omp-profile` wins over `OMP_PROFILE`, then `PI_PROFILE`; respect
+`PI_CONFIG_DIR` and default-only `PI_CODING_AGENT_DIR`. The iTerm profile is not
+the omp storage profile. Carry that provenance through history and evidence.
+
+Warn that a tab will appear. Invoke the saved absolute Python once; pass each
+value as one argv element (or correctly shell-quote it):
+
+```sh
+"$launch_python" -m iterm2_utils launch-omp --mode shell --window WINDOW_ID --profile SHELL_PROFILE --cwd ABS_DIR --json
+"$launch_python" -m iterm2_utils launch-omp --mode new --window WINDOW_ID --profile iterm2-utils:omp --cwd ABS_DIR --omp-profile work --json
+"$launch_python" -m iterm2_utils launch-omp --mode handoff --window WINDOW_ID --profile iterm2-utils:omp --cwd ABS_DIR --handoff ABS_FILE --omp-profile work --json
+"$launch_python" -m iterm2_utils launch-omp --mode resume --window WINDOW_ID --profile iterm2-utils:omp --cwd ABS_DIR --resume-file ABS_JSONL --resume-id UUID --omp-profile work --json
+```
+Run that single CLI invocation as one supervised asynchronous job when the host's
+foreground wait is shorter than its phases. Observe the same job to its structured
+result: sequential preflight/inventory time comes before the shared 30-second
+create/verify budget and, for handoff, up to another 120 seconds for receipt.
+A 10-second tool wait is not a kill deadline; neither 10 nor 30 seconds is a valid
+whole-invocation timeout for handoff. If the host cannot preserve/observe that job
+for these phases, report the execution limit before creation. Never start a second
+invocation because a tool wait ended.
+
+
+The SDK supplies the full command at creation, never typing into a terminal.
+New/handoff use a private final `--config` overlay with `autoResume:false`, leaving
+persistent settings/history unchanged. Literal supported wrapper options survive;
+opaque wrappers block. Preserve model, endpoint, credentials and approvals.
+Version strings are informational, required capabilities are not. Do not add
+continue/restore/session-dir/approval flags or weaken protections.
+
+## Report actual evidence
+
+| Status / exit | Action |
+| --- | --- |
+| `blocked` / 2 | No creation; report missing prerequisite |
+| `created_unverified` or `unknown` / 3 | Keep known IDs/artifacts and uncertainty; observe only that target |
+| `launched` / 0 | Exact single-session tab/window/profile/process/full argv verified |
+| `already_open` / 0 | Exact live dialog found; report current addresses, zero creates |
+
+JSON `session_id` is the terminal ID, not the omp dialog ID. Report `command`,
+`identity`, `history`, `ack` independently. A valid ack means task received, not
+completed. Without verified resume history say: «команда resume запущена,
+восстановление истории не подтверждено». Do not expose prompts, raw argv,
+settings, transcripts or screens. Creation/command proof share 30 seconds; ack
+has a separate 120-second bound. Never retry, resend, close/restart a user tab,
+kill a process or press Enter after uncertainty. Missing history never falls
+back to fresh. Duplicates require explicit human authorization, not convenience.
+
+Appearance is separate: exact shell TTY and main-TUI identity/foreground proof
+are required; inherited IDs or read-only access do not authorize recoloring.
+Updating runtime does not retrofit running shells; do not restart them. Fixtures
+and structural checks are not live/agent-behavior acceptance.

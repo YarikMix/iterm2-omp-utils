@@ -5,16 +5,22 @@ function _iterm2_utils_appearance {
   [[ -o interactive && ${TERM_PROGRAM-} == iTerm.app && -z ${TMUX-} ]] || return 0
   [[ -n ${ITERM2_UTILS_PYTHON-} && ${ITERM2_UTILS_APPEARANCE_CONFIG-} == /* ]] || return 0
   zmodload zsh/system 2>/dev/null || return 0
-  local phase=$1 cwd=$2 tty=$TTY fd clean_fd child result discard
+  local phase=$1 cwd=$2 asynchronous=${3-} tty=$TTY fd clean_fd child result discard
   [[ -n $tty ]] || return 0
-  local -a ready_arguments=()
+  local -a ready_arguments=(--shell-pid "$sysparams[pid]")
   if [[ $phase == launch ]]; then
-    ready_arguments=(--ready-fd 3)
+    ready_arguments+=(--command-scope)
+    if [[ $asynchronous != command ]]; then
+      ready_arguments+=(--ready-fd 3)
+    fi
     typeset -gi +x _iterm2_utils_appearance_sequence=$(( ${_iterm2_utils_appearance_sequence:-0} + 1 ))
     typeset -g +x _iterm2_utils_appearance_launch_id="$sysparams[pid]-$_iterm2_utils_appearance_sequence"
   fi
   if [[ $phase != shell && ${_iterm2_utils_appearance_launch_id-} == "$sysparams[pid]-"* ]]; then
     ready_arguments+=(--launch-id "$_iterm2_utils_appearance_launch_id")
+  fi
+  if [[ ${ITERM2_UTILS_IDENTITY_REGISTRY-} == /* ]]; then
+    ready_arguments+=(--registry "$ITERM2_UTILS_IDENTITY_REGISTRY")
   fi
   if [[ -n ${_iterm2_utils_appearance_fd-} ]]; then
     fd=$_iterm2_utils_appearance_fd
@@ -42,8 +48,8 @@ function _iterm2_utils_appearance {
     read -r child <&$fd || return 0
     [[ $child == <-> ]] || return 0
     # EOF on error/timeout also releases launch within the supervisor's deadline.
-    [[ $phase != launch ]] || read -r discard <&$fd || true
-    # The read end must not be inherited by Codex or nested external shells.
+    [[ $phase != launch || $asynchronous == command ]] || read -r discard <&$fd || true
+    # The read end must not be inherited by omp or nested external shells.
     sysopen -r -o cloexec -u clean_fd "/dev/fd/$fd" 2>/dev/null || return 0
     typeset -g +x _iterm2_utils_appearance_owner=$sysparams[pid]
     typeset -g +x _iterm2_utils_appearance_pid=$child
@@ -82,6 +88,33 @@ function _iterm2_utils_appearance_chpwd {
   return 0
 }
 
+function _iterm2_utils_appearance_preexec {
+  emulate -L zsh
+  [[ ${_iterm2_utils_appearance_hook_owner-} == $sysparams[pid] ]] || return 0
+  # Arm observation, not executable-name trust: only actual main identity can write.
+  _iterm2_utils_appearance launch "$(builtin pwd -P)" command
+  return 0
+}
+
+function _iterm2_utils_appearance_arm {
+  emulate -L zsh
+  [[ ${_iterm2_utils_appearance_hook_owner-} == $sysparams[pid] ]] || return 0
+  # Explicit native launch may wait for a proven baseline before exec.
+  _iterm2_utils_appearance launch "$(builtin pwd -P)"
+  return 0
+}
+
+function _iterm2_utils_appearance_precmd {
+  local result=$?
+  emulate -L zsh
+  if [[ ${_iterm2_utils_appearance_hook_owner-} == $sysparams[pid] &&
+        ${_iterm2_utils_appearance_launch_id-} == "$sysparams[pid]-"* ]]; then
+    _iterm2_utils_appearance return "$(builtin pwd -P)"
+    unset _iterm2_utils_appearance_launch_id
+  fi
+  return $result
+}
+
 () {
   emulate -L zsh
   typeset -g +x _iterm2_utils_appearance_root=${${(%):-%x}:A:h}
@@ -90,6 +123,8 @@ function _iterm2_utils_appearance_chpwd {
     typeset -g +x _iterm2_utils_appearance_hook_owner=$sysparams[pid]
     autoload -Uz add-zsh-hook
     add-zsh-hook chpwd _iterm2_utils_appearance_chpwd
+    add-zsh-hook preexec _iterm2_utils_appearance_preexec
+    add-zsh-hook precmd _iterm2_utils_appearance_precmd
     _iterm2_utils_appearance_chpwd
   fi
 }

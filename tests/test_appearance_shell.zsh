@@ -1,7 +1,7 @@
 #!/bin/zsh
 # Fake executables at the boundary; the dispatcher and zsh jobs are real.
 exec python3 - "$0" "$@" <<'PY'
-import errno, fcntl, json, os, pathlib, pty, select, shutil, subprocess, sys, tempfile, termios, time, unittest
+import errno, fcntl, json, os, pathlib, pty, select, shutil, subprocess, sys, tempfile, termios, threading, time, unittest
 REPO = pathlib.Path(sys.argv[1]).resolve().parents[1]
 HELPER = r'''import json, os, pathlib, select, signal, sys, time
 root = pathlib.Path(__file__).parent
@@ -35,7 +35,7 @@ time.sleep(.06)
 if phase == 'shell': (root/'appearance-state').write_text(args[args.index('--cwd')+1])
 log('end')
 '''
-CODEX = r'''#!/usr/bin/env python3
+OMP = r'''#!/usr/bin/env python3
 import json, os, pathlib, sys, time
 root=pathlib.Path(__file__).parent
 if (root/'await-launch').exists():
@@ -56,26 +56,44 @@ sys.exit(42)
 '''
 class ShellProcess(subprocess.Popen):
     def communicate(self, input=None, timeout=None):
-        if input is not None:
-            os.write(self.terminal_master, input.encode())
-        return super().communicate(timeout=timeout)
+        # A terminal consumer must drain echo/prompt bytes: Darwin can wait for
+        # pending tty output even after the shell closes its captured pipes.
+        stopped = threading.Event()
+        def drain_terminal():
+            while not stopped.is_set():
+                if select.select([self.terminal_master], [], [], .02)[0]:
+                    try:
+                        if not os.read(self.terminal_master, 4096): break
+                    except OSError: break
+        reader = threading.Thread(target=drain_terminal)
+        reader.start()
+        try:
+            if input is not None:
+                os.write(self.terminal_master, input.encode())
+            return super().communicate(timeout=timeout)
+        finally:
+            stopped.set()
+            reader.join()
 
 class AppearanceShell(unittest.TestCase):
     def setUp(self):
         self.tmp=tempfile.TemporaryDirectory(prefix='appearance shell ')
         self.addCleanup(self.tmp.cleanup)
         self.root=pathlib.Path(self.tmp.name).resolve()
-        for name in ('appearance.zsh','codex.zsh'):
+        for name in ('appearance.zsh',):
             source=REPO/'runtime'/name
             if source.exists(): shutil.copy(source,self.root/name)
+        # -c fixture calls the real hooks explicitly; interactive wiring is tested separately.
+        (self.root/'command-boundary.zsh').write_text('function omp { _iterm2_utils_appearance_arm; command omp "$@"; local result=$?; _iterm2_utils_appearance_precmd; return $result; }\n')
         (self.root/'appearance.py').write_text(HELPER)
-        (self.root/'codex').write_text(CODEX); (self.root/'codex').chmod(0o755)
+        (self.root/'omp').write_text(OMP); (self.root/'omp').chmod(0o755)
         self.project=self.root/"physical ' $()"; self.project.mkdir()
         self.link=self.root/'linked'; self.link.symlink_to(self.project,target_is_directory=True)
         self.subdir=self.project/'subdir'; self.subdir.mkdir()
         self.other=self.root/'B'; self.other.mkdir()
         self.outside=self.root/'outside'; self.outside.mkdir()
-        self.env=dict(os.environ,HOME=str(self.root),PATH=str(self.root)+':/usr/bin:/bin',TERM_PROGRAM='iTerm.app',TEST_ROOT=str(self.root),ITERM2_UTILS_PYTHON=sys.executable,ITERM2_UTILS_APPEARANCE_CONFIG=str(self.root/'installed rules.json'),ITERM2_UTILS_CODEX_NO_DAEMON='1',TMUX='',ITERM_SESSION_ID='w0t1p0:12345678-1234-1234-1234-123456789ABC',TERM_SESSION_ID='12345678-1234-1234-1234-123456789ABC')
+        self.env=dict(os.environ,HOME=str(self.root),PATH=str(self.root)+':/usr/bin:/bin',TERM_PROGRAM='iTerm.app',TEST_ROOT=str(self.root),ITERM2_UTILS_PYTHON=sys.executable,ITERM2_UTILS_APPEARANCE_CONFIG=str(self.root/'installed rules.json'),TMUX='',ITERM_SESSION_ID='w0t1p0:12345678-1234-1234-1234-123456789ABC',TERM_SESSION_ID='12345678-1234-1234-1234-123456789ABC')
+        self.env.pop('ITERM2_UTILS_IDENTITY_REGISTRY',None)
     def start_shell(self, argv, *, env=None, cwd=None):
         master, slave = pty.openpty()
         self.shell_tty=os.ttyname(slave)
@@ -93,7 +111,7 @@ class AppearanceShell(unittest.TestCase):
             os.close(slave)
 
     def run_shell(self,body,interactive=True,terminal='iTerm.app',source=True):
-        startup='source "$TEST_ROOT/appearance.zsh"; source "$TEST_ROOT/codex.zsh"; ' if source else ''
+        startup='source "$TEST_ROOT/appearance.zsh"; source "$TEST_ROOT/command-boundary.zsh"; ' if source else ''
         process=self.start_shell(['/bin/zsh','-df']+(['-i'] if interactive else [])+['-c',startup+body],env=dict(self.env,TERM_PROGRAM=terminal))
         try:
             out,err=process.communicate(timeout=7)
@@ -113,7 +131,7 @@ class AppearanceShell(unittest.TestCase):
                         TERM_SESSION_ID='12345678-1234-1234-1234-123456789ABC')
         snapshot=self.root/'snapshot'
         snapshot.write_text('parent snapshot')
-        script='[[ -z $TTY ]] || exit 90; source "$TEST_ROOT/appearance.zsh"; source "$TEST_ROOT/codex.zsh"; builtin cd "$TEST_ROOT/B"; codex hello; result=$?; '+self.wait_helper()+'exit $result'
+        script='[[ -z $TTY ]] || exit 90; source "$TEST_ROOT/appearance.zsh"; source "$TEST_ROOT/command-boundary.zsh"; builtin cd "$TEST_ROOT/B"; omp hello; result=$?; '+self.wait_helper()+'exit $result'
         p=subprocess.run(['/bin/zsh','-dfi','-c',script],env=self.env,cwd=self.link,
                          capture_output=True,text=True,start_new_session=True,timeout=7)
         self.assertEqual(p.returncode,42,p.stderr)
@@ -129,7 +147,7 @@ class AppearanceShell(unittest.TestCase):
         self.env.update(ITERM_SESSION_ID='w0t1p0:12345678-1234-1234-1234-123456789ABC',
                         TERM_SESSION_ID='12345678-1234-1234-1234-123456789ABC',
                         PYTHONPATH=str(self.root))
-        for name in ('appearance.py','events.py'):
+        for name in ('appearance.py','terminal_identity.py'):
             shutil.copy(REPO/'runtime'/name,self.root/name)
         (self.root/'installed rules.json').write_text(json.dumps({'projects':[
             {'root':str(self.project),'color':'#65A85A','icon':str(self.root/'icon.png')}]}))
@@ -157,7 +175,7 @@ class App:
 async def async_get_app(connection): return App()
 """.replace('PARENT_TTY',repr(parent_tty))
         (self.root/'iterm2.py').write_text(sdk)
-        p=self.run_shell('[[ -n $TTY ]] || exit 90; builtin cd "$TEST_ROOT/B"; codex hello; result=$?; '+self.wait_helper()+'exit $result')
+        p=self.run_shell('[[ -n $TTY ]] || exit 90; builtin cd "$TEST_ROOT/B"; omp hello; result=$?; '+self.wait_helper()+'exit $result')
         self.assertEqual(p.returncode,42,p.stderr)
         self.assertEqual(p.stdout,'')
         self.assertEqual(p.stderr,'native stderr\n')
@@ -175,7 +193,8 @@ async def async_get_app(connection): return App()
         starts=[r for r in self.rows() if r['event']=='start']
         expected=[self.project,self.outside,self.project,self.subdir,self.other,self.outside]
         self.assertEqual([r['phase'] for r in starts],['shell']*6)
-        self.assertEqual([r['args'] for r in starts],[['--config',str(self.root/'installed rules.json'),'--cwd',str(cwd),'--phase','shell','--tty',self.shell_tty] for cwd in expected])
+        self.assertEqual([r['args'][:-2] for r in starts],[['--config',str(self.root/'installed rules.json'),'--cwd',str(cwd),'--phase','shell','--tty',self.shell_tty] for cwd in expected])
+        self.assertTrue(all(r['args'][-2]=='--shell-pid' and r['args'][-1].isdigit() for r in starts))
         self.assertEqual(p.stdout,''); self.assertEqual(p.stderr,'')
     def test_chpwd_preserves_foreign_function_hooks_and_cd_status(self):
         (self.root/'fail').touch()
@@ -193,7 +212,7 @@ async def async_get_app(connection): return App()
     def test_noninteractive_or_other_terminal_or_tmux_do_not_apply(self):
         for interactive,terminal,tmux in ((False,'iTerm.app',''),(True,'other',''),(True,'iTerm.app','fixture-tmux')):
             self.env['TMUX']=tmux
-            p=self.run_shell('builtin cd "$TEST_ROOT/B"; codex hello; exit $?',interactive,terminal)
+            p=self.run_shell('builtin cd "$TEST_ROOT/B"; omp hello; exit $?',interactive,terminal)
             self.assertEqual(p.returncode,42,p.stderr)
         self.assertEqual(self.rows(),[])
     def test_empty_tmux_does_not_disable_chpwd(self):
@@ -203,41 +222,40 @@ async def async_get_app(connection): return App()
         self.assertEqual([r['args'][3] for r in self.rows() if r['event']=='start'],[str(self.project),str(self.other)])
     def test_interactive_variants_keep_argv_exit_stderr_and_physical_cwd(self):
         (self.root/'await-launch').touch(); (self.root/'hold-launch').touch()
-        for args in ('hello --cd /elsewhere','resume --last','fork --no-daemon'):
+        for args in ('hello --model fixture','--resume /fixture/session.jsonl','--session /fixture/session.jsonl'):
             with self.subTest(args=args):
                 (self.root/'events').unlink(missing_ok=True)
-                p=self.run_shell('codex '+args+'; result=$?; '+self.wait_helper()+'exit $result')
+                p=self.run_shell('omp '+args+'; result=$?; '+self.wait_helper()+'exit $result')
                 self.assertEqual(p.returncode,42,p.stderr)
                 self.assertEqual(p.stderr,'native stderr\n'); self.assertEqual(p.stdout,'')
                 starts=[r for r in self.rows() if r['event']=='start']
                 self.assertEqual([r['phase'] for r in starts][-2:],['launch','return'])
                 self.assertTrue(all(r['args'][3]==str(self.project) for r in starts))
                 expected=args.split()
-                if '--no-daemon' not in expected: expected.insert(0,'--no-daemon')
                 self.assertEqual(self.rows('calls')[-1]['args'],expected)
                 # A TERM cleanup must fully end before the next helper starts.
                 events=self.rows(); launch=next(i for i,r in enumerate(events) if r['event']=='start' and r['phase']=='launch')
                 returned=next(i for i,r in enumerate(events) if r['event']=='start' and r['phase']=='return')
                 self.assertIn('end',[r['event'] for r in events[launch+1:returned]])
                 # Return stays asynchronous; terminate it explicitly in this fixture.
-    def test_services_and_help_do_not_apply(self):
-        commands=['--help','exec task','review','login','agents','remote-control','app-server','resume --future x']
-        p=self.run_shell(self.wait_helper()+'; '.join('codex '+s for s in commands)+'; true')
+    def test_services_and_help_keep_exact_argv_without_executable_trust(self):
+        commands=['--help','--version','--mode json','--mode rpc','--print task']
+        p=self.run_shell(self.wait_helper()+'; '.join('omp '+s+'; '+self.wait_helper() for s in commands)+'true')
         self.assertEqual(p.returncode,0,p.stderr)
-        self.assertEqual([r['phase'] for r in self.rows() if r['event']=='start'],['shell'])
+        self.assertEqual([r['phase'] for r in self.rows() if r['event']=='start'],['shell']+['launch','return']*len(commands))
         self.assertEqual([r['args'] for r in self.rows('calls')],[s.split() for s in commands])
     def test_helper_failure_does_not_change_native_result(self):
         (self.root/'fail').touch(); (self.root/'await-launch').touch()
-        p=self.run_shell('codex hello; result=$?; '+self.wait_helper()+'exit $result')
+        p=self.run_shell('omp hello; result=$?; '+self.wait_helper()+'exit $result')
         self.assertEqual(p.returncode,42,p.stderr)
         self.assertEqual(p.stdout,''); self.assertEqual(p.stderr,'native stderr\n')
-    def test_native_codex_starts_only_after_snapshot_and_observer_are_ready(self):
+    def test_native_omp_starts_only_after_snapshot_and_observer_are_ready(self):
         (self.root/'delay-ready').touch()
-        p=self.run_shell(self.wait_helper()+'codex hello; result=$?; '+self.wait_helper()+'exit $result')
+        p=self.run_shell(self.wait_helper()+'omp hello; result=$?; '+self.wait_helper()+'exit $result')
         self.assertEqual(p.returncode,42,p.stderr)
         self.assertTrue(self.rows('calls')[-1]['appearance_ready'])
     def test_snapshot_launch_identity_changes_and_is_shared_with_its_return(self):
-        p=self.run_shell(self.wait_helper()+'codex first; '+self.wait_helper()+'codex second; '+self.wait_helper())
+        p=self.run_shell(self.wait_helper()+'omp first; '+self.wait_helper()+'omp second; '+self.wait_helper())
         self.assertEqual(p.returncode,0,p.stderr)
         phases=[r for r in self.rows() if r['event']=='start' and r['phase']!='shell']
         identifiers=[r['args'][r['args'].index('--launch-id')+1] if '--launch-id' in r['args'] else None for r in phases]
@@ -248,7 +266,7 @@ async def async_get_app(connection): return App()
         self.assertNotEqual(identifiers[0],identifiers[2])
     def test_finished_helper_is_reaped_without_signaling_another_job(self):
         (self.root/'await-launch').touch(); (self.root/'finish-launch').touch()
-        p=self.run_shell(self.wait_helper()+"function TRAPDEBUG { [[ $ZSH_DEBUG_CMD == 'builtin kill -TERM '* ]] && print -r -- $ZSH_DEBUG_CMD >> \"$TEST_ROOT/signals\"; return 0; }; sleep 1 & unrelated=$!; codex hello; result=$?; "+self.wait_helper()+'wait $unrelated; exit $result')
+        p=self.run_shell(self.wait_helper()+"function TRAPDEBUG { [[ $ZSH_DEBUG_CMD == 'builtin kill -TERM '* ]] && print -r -- $ZSH_DEBUG_CMD >> \"$TEST_ROOT/signals\"; return 0; }; sleep 1 & unrelated=$!; omp hello; result=$?; "+self.wait_helper()+'wait $unrelated; exit $result')
         self.assertEqual(p.returncode,42,p.stderr)
         self.assertFalse((self.root/'signals').exists(),(self.root/'signals').read_text() if (self.root/'signals').exists() else '')
         self.assertEqual([r['phase'] for r in self.rows() if r['event']=='term'],[])
@@ -356,41 +374,89 @@ print parent:$sysparams[pid]
                 _,status=os.waitpid(pid,0)
             self.assertEqual(os.waitstatus_to_exitcode(status),0,output)
             self.assertEqual(output.decode().replace('\r\n','\n'),'on:'+('on' if monitored else 'off')+':on\n')
-    def test_restore_picker_reaches_dispatcher_and_keeps_status(self):
-        shutil.copy(REPO/'runtime/codex_restore/codex-resume.zsh',self.root/'codex-resume.zsh')
-        (self.root/'await-launch').touch(); (self.root/'fail').touch()
-        sid='11111111-1111-4111-8111-111111111111'
-        sessions="""import json, pathlib, sys
+    def test_real_interactive_hooks_preserve_argv_and_native_exit(self):
+        # stdout/stderr are captured pipes, so use prompt hooks without the tty line editor.
+        p=self.start_shell(['/bin/zsh','-dfi','-o','nozle'],env=dict(self.env,PS1='',RPS1=''))
+        try:
+            script='source "$TEST_ROOT/appearance.zsh"\ncommand omp "literal argument"\nprint -r -- "native-result:$?"\nexit\n'
+            out,err=p.communicate(script,timeout=7)
+            self.assertIn('native-result:42',out)
+            self.assertEqual(self.rows('calls')[0]['args'],['literal argument'])
+            self.assertIn('native stderr',err)
+        finally:
+            if p.poll() is None: p.kill()
+            p.communicate(timeout=3)
+    def test_stalled_api_does_not_hold_an_ordinary_prompt_command(self):
+        from runtime.terminal_identity import process_start
+        for source,target in (('appearance.py','appearance_impl.py'),('terminal_identity.py','terminal_identity.py')):
+            shutil.copy(REPO/'runtime'/source,self.root/target)
+        # Hold the actual connect boundary until controller cancellation, not a timing race.
+        (self.root/'appearance.py').write_text('import appearance_impl as app\napp.__file__=__file__\napp._API_TIMEOUT=30\napp._HARD_SECONDS=30\napp._main()\n')
+        (self.root/'iterm2.py').write_text('''import asyncio,json,os,pathlib
+from terminal_identity import process_start
 root=pathlib.Path(__file__).parent
-with (root/'restore-calls').open('a') as out: out.write(json.dumps(dict(args=sys.argv[1:]))+'\\n')
-if sys.argv[1]=='register': print('restore-token')
-elif sys.argv[1]=='restore-list': print('row')
-elif sys.argv[1]=='restore-open':
-    fields=['22222222-2222-4222-8222-222222222222','11111111-1111-4111-8111-111111111111',str(root/"physical ' $()"),str(root/'restore-home'),str(root/'restore-cache'),'']
-    sys.stdout.buffer.write(bytes([0]).join(field.encode() for field in fields))
-"""
-        (self.root/'codex-sessions').write_text(sessions)
-        (self.root/'fzf').write_text('#!/bin/sh\ncat >/dev/null\nprintf "%s\\n" '+sid+'\n'); (self.root/'fzf').chmod(0o755)
-        self.env['ITERM_SESSION_ID']='w1t1p0:'+sid
-        self.env['TERM_SESSION_ID']=sid
-        p=self.run_shell(self.wait_helper()+'typeset -g _codex_restore_no_daemon=1; source "$TEST_ROOT/codex-resume.zsh"; source "$TEST_ROOT/codex.zsh"; source "$TEST_ROOT/codex-resume.zsh"; codex resume --restore; result=$?; '+self.wait_helper()+'exit $result')
-        self.assertEqual(p.returncode,42,p.stderr)
-        self.assertEqual(p.stderr,'native stderr\n'); self.assertEqual(p.stdout,'')
-        self.assertEqual(self.rows('calls')[-1]['args'],['--no-daemon','resume',sid])
-        self.assertEqual([r['args'][0] for r in self.rows('restore-calls')],['restore-list','restore-open','register','finish'])
-        self.assertEqual([r['phase'] for r in self.rows() if r['event']=='start'],['shell','shell','launch','return'])
+class Connection:
+    @staticmethod
+    async def async_create():
+        pid=os.getppid()
+        (root/('sdk-entered-'+str(pid)+'.json')).write_text(json.dumps(dict(pid=pid,birth=process_start(pid))))
+        await asyncio.Future()
+''')
+        (self.root/'installed rules.json').write_text(json.dumps({'projects':[
+            dict(root=str(self.project),color='#65A85A',icon=str(self.root/'icon.png'))]}))
+        (self.root/'icon.png').write_bytes(b'fixture')
+        env=dict(self.env,ITERM2_UTILS_APPEARANCE_CONFIG='',PYTHONPATH=str(self.root))
+        p=self.start_shell(['/bin/zsh','-dfi','-o','nozle'],env=dict(env,PS1='',RPS1=''))
+        try:
+            setup='source "$TEST_ROOT/appearance.zsh"\nITERM2_UTILS_APPEARANCE_CONFIG="$TEST_ROOT/installed rules.json"\n'
+            setup+='function ordinary { until [[ -e "$TEST_ROOT/sdk-entered-$_iterm2_utils_appearance_pid.json" ]]; do sleep .01; done; print ordinary-proceeded; read fixture_release; }\nordinary\n'
+            os.write(p.terminal_master,setup.encode())
+            self.assertTrue(select.select([p.stdout],[],[],4)[0],
+                            'ordinary command could not run while the actual SDK connect was held')
+            self.assertEqual(p.stdout.readline(),'ordinary-proceeded\n')
+            self.assertTrue(list(self.root.glob('sdk-entered-*.json')))
+            cleanup='release\nbuiltin kill -TERM "$_iterm2_utils_appearance_pid" 2>/dev/null; '
+            cleanup+=self.wait_helper()+'unset preexec_functions precmd_functions; exit\n'
+            out,err=p.communicate(cleanup,timeout=4)
+            self.assertEqual(p.returncode,0,err)
+        finally:
+            if p.poll() is None: p.kill()
+            p.communicate(timeout=3)
+            for marker in self.root.glob('sdk-entered-*.json'):
+                owned=json.loads(marker.read_text())
+                if owned['pid']>1 and owned['birth'] is not None and process_start(owned['pid'])==owned['birth']:
+                    try: os.kill(owned['pid'],15)
+                    except ProcessLookupError: pass
+
     def test_fd_setup_failure_does_not_signal_a_finished_helper(self):
-        p=self.run_shell("function sysopen { sleep .15; return 1; }; function TRAPDEBUG { [[ $ZSH_DEBUG_CMD == 'builtin kill -TERM '* ]] && print signal >> \"$TEST_ROOT/signals\"; return 0; }; source \"$TEST_ROOT/appearance.zsh\"",source=False)
+        p=self.run_shell(r'''
+function sysopen {
+  [[ $argv[-1] == /dev/fd/<-> ]] || return 1
+  local fixture_fd=${argv[-1]#/dev/fd/} fixture_discard fixture_result
+  # Fail setup only after the exact supervisor lifetime pipe confirms EOF.
+  builtin sysread -i "$fixture_fd" -t 3 fixture_discard 2>/dev/null
+  fixture_result=$?
+  (( fixture_result == 5 )) || return 1
+  print -r -- confirmed-eof > "$TEST_ROOT/injected-after-eof"
+  return 1
+}
+function TRAPDEBUG {
+  [[ $ZSH_DEBUG_CMD == 'builtin kill -TERM '* ]] && print signal >> "$TEST_ROOT/signals"
+  return 0
+}
+source "$TEST_ROOT/appearance.zsh"
+''',source=False)
         self.assertEqual(p.returncode,0,p.stderr)
+        self.assertEqual((self.root/'injected-after-eof').read_text(),'confirmed-eof\n')
         self.assertFalse((self.root/'signals').exists())
-    def test_lifetime_fd_is_not_inherited_by_native_codex(self):
-        p=self.run_shell(self.wait_helper()+'export TEST_LIFETIME_FD=$_iterm2_utils_appearance_fd; command codex probe')
+    def test_lifetime_fd_is_not_inherited_by_native_omp(self):
+        p=self.run_shell(self.wait_helper()+'export TEST_LIFETIME_FD=$_iterm2_utils_appearance_fd; command omp probe')
         self.assertEqual(p.returncode,42,p.stderr)
         self.assertFalse(self.rows('calls')[-1]['inherited_fd'])
     def test_finished_children_are_reaped(self):
         (self.root/'await-launch').touch(); (self.root/'hold-launch').touch()
         # Keep this same interactive shell alive after EOF, so exit cannot reap zombies.
-        script='source "$TEST_ROOT/appearance.zsh"; source "$TEST_ROOT/codex.zsh"; codex hello; '+self.wait_helper()+'print ready > "$TEST_ROOT/reap-ready"; read fixture_release'
+        script='source "$TEST_ROOT/appearance.zsh"; source "$TEST_ROOT/command-boundary.zsh"; omp hello; '+self.wait_helper()+'print ready > "$TEST_ROOT/reap-ready"; read fixture_release'
         p=self.start_shell(['/bin/zsh','-dfi','-c',script])
         try:
             deadline=time.monotonic()+4
@@ -414,9 +480,9 @@ elif sys.argv[1]=='restore-open':
     def test_rapid_cd_and_return_observer_leave_only_latest_writer(self):
         (self.root/'hold-launch').touch(); (self.root/'hold-return').touch()
         started='until [[ -e "$TEST_ROOT/started-$_iterm2_utils_appearance_pid" ]]; do sleep .01; done; '
-        script='source "$TEST_ROOT/appearance.zsh"; source "$TEST_ROOT/codex.zsh"; '
+        script='source "$TEST_ROOT/appearance.zsh"; source "$TEST_ROOT/command-boundary.zsh"; '
         script+='builtin cd "$TEST_ROOT/B"; builtin cd "$TEST_ROOT/outside"; '
-        script+='codex hello; '+started+'builtin cd "$TEST_ROOT/linked"; builtin cd "$TEST_ROOT/outside"; '
+        script+='omp hello; '+started+'builtin cd "$TEST_ROOT/linked"; builtin cd "$TEST_ROOT/outside"; '
         script+='print ready > "$TEST_ROOT/order-ready"; read fixture_release'
         p=self.start_shell(['/bin/zsh','-dfi','-c',script])
         try:
@@ -478,7 +544,7 @@ exit $result
     def test_return_observer_is_in_background(self):
         (self.root/'await-launch').touch(); (self.root/'hold-launch').touch(); (self.root/'hold-return').touch()
         # Mark the shell's return before draining a bounded fake return helper.
-        p=self.run_shell('codex hello; result=$?; print returned; sleep .08; builtin kill -TERM $_iterm2_utils_appearance_pid; '+self.wait_helper()+'exit $result')
+        p=self.run_shell('omp hello; result=$?; print returned; sleep .08; builtin kill -TERM $_iterm2_utils_appearance_pid; '+self.wait_helper()+'exit $result')
         self.assertEqual(p.returncode,42,p.stderr)
         self.assertEqual(p.stdout,'returned\n')
         self.assertIn('return',[r['phase'] for r in self.rows() if r['event']=='start'])

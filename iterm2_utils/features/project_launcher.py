@@ -8,7 +8,7 @@ from dataclasses import replace
 
 from .. import state
 from ..config import iterm
-from ..models import ChangeSet, FileEdit, Finding, ProfileBarEdit, StatusBarPositionEdit
+from ..models import ChangeSet, FileEdit, Finding, ProfileBarEdit, Selection, StatusBarPositionEdit
 
 FEATURE = 'project-launcher'
 OWNER = 'shared:project-launcher'
@@ -68,6 +68,7 @@ def _load(context):
     receipt = state.load(context.paths.data/'receipt.json')
     config_path = context.paths.config/FILENAME
     dynamic_path = context.paths.profiles/FILENAME
+    config_owned = False
     for path in (config_path, dynamic_path):
         if path.is_symlink():
             raise ValueError('Owned file must not be a symlink')
@@ -77,8 +78,10 @@ def _load(context):
             if (owned is None or owned['installed'] != {'exists':True,
                     'value':base64.b64encode(path.read_bytes()).decode()}):
                 raise ValueError('Owned configuration changed or externally owned')
+            if path==config_path:
+                config_owned = True
     source = context.project_launcher_config
-    if source is None and (receipt is None or FEATURE not in receipt.selection.features):
+    if source is None and not config_owned:
         raise ValueError('Explicit initial configuration required')
     config = _config((source if source is not None else config_path).read_bytes())
     return config, receipt
@@ -86,14 +89,14 @@ def _load(context):
 
 def prepare(context, selection, runner):
     """Only explicitly selected/recorded consumers may contact the native helper."""
-    if not selection.agents_for(FEATURE):
+    if FEATURE not in selection.features:
         return context
     snapshot = None
     try:
         _load(context)
-        if (context.versions.get('iterm2') == '3.7.6' and 'python:iterm2' in context.capabilities
-                and {'iterm2','zsh','python3'} <= context.executables.keys()):
-            snapshot = iterm.inspect(context, runner)
+        if ('python:iterm2' in context.capabilities and
+                {'iterm2','zsh','python3'} <= context.executables.keys()):
+            snapshot = iterm.validate_launcher_inventory(iterm.inspect(context, runner))
     except (ValueError, OSError, TypeError, KeyError):
         pass
     return replace(context, project_launcher_snapshot=snapshot)
@@ -129,8 +132,7 @@ def _panel(bar, projects, previous, baseline):
 
 def build(context, selection):
     changes = ChangeSet([], [], [])
-    agents = selection.agents_for(FEATURE)
-    if not agents:
+    if FEATURE not in selection.features:
         return changes
     def fail(code, message, status='conflict'):
         changes.edits.clear()
@@ -140,12 +142,10 @@ def build(context, selection):
         config, receipt = _load(context)
     except (ValueError, OSError, TypeError, KeyError):
         return fail('project_launcher_config','Use a valid explicit project configuration; resolve changed or externally owned launcher files first.')
-    if context.versions.get('iterm2') != '3.7.6':
-        return fail('project_launcher_version','The native project launcher format is verified only for iTerm2 3.7.6.','unavailable')
     if 'python:iterm2' not in context.capabilities:
         return fail('project_launcher_sdk','Select an existing Python 3.11+ with iterm2 using ITERM2_UTILS_PYTHON; enable and authorize the iTerm2 Python API.','missing_dependency')
     try:
-        snapshot = iterm.validate_inventory(context.project_launcher_snapshot)
+        snapshot = iterm.validate_launcher_inventory(context.project_launcher_snapshot)
         profiles = {p['name']:p for p in snapshot['profiles']}
         parent = profiles[selection.parent_profile]
         targets = [profiles[name] for name in config['profiles']]
@@ -190,7 +190,7 @@ def build(context, selection):
         changes.edits.append(StatusBarPositionEdit(snapshot['position'],iterm.POSITION_BOTTOM,OWNER))
         normalized = (json.dumps(config,sort_keys=True,indent=2)+'\n').encode()
         changes.edits.append(FileEdit(old_path,old_path.read_bytes() if old_path.exists() else None,normalized,0o600,OWNER))
-        changes.consumers[OWNER] = frozenset(a+':'+FEATURE for a in agents)
+        changes.consumers[OWNER] = frozenset({FEATURE})
         changes.findings.append(Finding(FEATURE,None,'project_launcher_native','ready',
             'Native inventory and typed panel edits prepared; visual CLI acceptance remains unverified.'))
     except (ValueError, OSError, KeyError, TypeError, StopIteration):

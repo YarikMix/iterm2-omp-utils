@@ -18,16 +18,20 @@ jobs:
       - name: Linux zsh prerequisite for Python shell fixtures
         if: runner.os == 'Linux'
         run: sudo apt-get update && sudo apt-get install -y zsh
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1'
       - name: Resolve versions
         run: python3 --version
       - name: Unit and isolated export tests
         run: python3 -m unittest discover -s tests -t . -v
+      - name: Native helper fixture contracts
+        run: bun test ./tests/test_omp_config.ts ./tests/test_omp_identity.ts
       - name: zsh fixture contracts
         if: runner.os == 'macOS'
         run: |
           /bin/zsh --version
-          /bin/zsh tests/test_codex_shell.zsh
-          /bin/zsh tests/restore/test_codex.zsh
+          /bin/zsh tests/test_appearance_shell.zsh
       - name: Validate sources, skill and public export
         run: |
           python3 tools/check_sources.py

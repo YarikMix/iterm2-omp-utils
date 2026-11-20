@@ -10,58 +10,10 @@ package's original MIT code. Source URLs, exact bytes' SHA-256 digests, tag and
 blob identities are recorded in `sources.lock.json`; run
 `python3 tools/check_sources.py` to verify the vendored bytes.
 
-`vendor/codex_status/` adapts `YarikMix/iterm2-status` (MIT), public commit
-`e749ff64a6b34252e9f41c5103f4b46831691443`. Its verbatim MIT license is retained in
-`vendor/codex_status/LICENSE`. The transition implementation and locking/state
-helpers derive from `scripts/status.py`; explicit-session command construction
-replaces the external plugin discovery layer. Owned runtime settings and transport
-live in `runtime/hook.py`; external plugin configuration/env is not required.
-Canonical SHA-256 tool identities are computed transiently from input by
-`runtime/events.py` and only the opaque identity persists, preserving upstream
-parallel approval pairing where PermissionRequest lacks IDs and PostToolUse adds
-an ID and omits its description. Raw commands, prompts, tool arguments and outputs
-are never persisted. The 12 Lifecycle vectors in `tests/test_status_upstream.py`
-are preserved unchanged; their import harness is adapted. Standalone installer,
-external notification configuration and upstream process harness are not bundled.
-
-These adapted modules are **not byte-identical** upstream copies. In
-`sources.lock.json`, `upstream_sha256` identifies original downloaded content and
-`sha256` identifies the final bundled bytes; `transformation` describes the patch.
-
-`runtime/notifier.py` and `runtime/focus.py` adapt notification-state, foreground
-lookup and exact-session focus patterns from the same MIT project. Their mapping
-was reconciled against a newer installed local snapshot with no public SHA:
-PermissionRequest banners had deliberately been removed because they precede
-auto-review. `local_snapshot_sha256` records those inspected source bytes, while
-`sha256` records this package's adapted module bytes; the public ref identifies
-the available base, not the newer local snapshot. Claude hooks are a new adapter
-based on the official Anthropic hooks and Python SDK schemas.
-
-`runtime/codex_restore/` and `tests/restore/` bundle only the codex-resume
-module from agent-utils, subtree commit
-`15f225cb4ac15abb7f95f87cbddc7406ba0ba7f9`, author y.mihalev.
-The standalone installer and its test are excluded; common feature builders
-replace installation. The legacy source subtree had no separate license declaration. The bundled port
-is distributed by its author under this repository's MIT license; this does not
-assert a license for the legacy repository. Source provenance is preserved.
-The source runtime contracts, lifecycle timeouts and behavioral vectors are
-preserved. Test imports/entry paths are relocated; iTerm process identification
-accepts the selected installed app path. An uncertain tab-create result now
-retains its reservation and asks for inspection, preventing automatic retries.
-Tab creation also accepts an explicit profile and command as separate arguments,
-validates them before creation, and preserves the returned tab identity when later
-session inspection fails. Legacy restore calls retain their original arguments.
-The local metadata bridge forwards only session_id, cwd, transcript_path and
-hook_event_name transiently; it never persists hook content. Per-file original
-and bundled SHA-256 digests are recorded in sources.lock.json.
-
-The package restore shell adapter now invokes its entrypoint with the selected,
-validated runtime Python; standalone source usage retains its original fallback.
-`runtime/codex.zsh` also adapts the author's pinned restore argument classifier so
-service commands after global options work without selecting restore. The source
-ref/original hash and bundled hashes remain separate in sources.lock.json. Local
-port entries explicitly link this repository's LICENSE and these notices; they
-do not assign a license to the legacy repository.
+The original installer, terminal/identity helpers and skill bundles are covered
+by this repository's [MIT license](LICENSE). Retired agent hook, notification and
+restorer implementations are not distributed. Historical migration fixtures
+contain inert receipted hook definitions and inverses, not executable snapshots.
 
 `runtime/assets/appearance/` contains nine named SVG/PNG pairs. The robot (`android`) and cutlet (`kotlett`) are original illustrations
 created for this repository and distributed under its MIT license (LICENSE).
@@ -97,8 +49,24 @@ PNG files were rendered from the accompanying SVG with librsvg `rsvg-convert`;
 the renderer is a developer tool and is not bundled or required for installation
 or shell startup. No internal-repository artwork is included.
 
-All nine named PNG/SVG pairs and these notices ship in immutable installed
-runtime releases and the public archive; installation and shell startup do not
-download images. The shared `runtime/codex.zsh` adaptation also adds optional
-appearance launch/return phases without changing its pinned source identity or
-the original restore classifier attribution above.
+All nine named PNG/SVG pairs ship in the public archive and in immutable runtime
+releases selected for appearance; installation and shell startup do not download
+images. `sources.lock.json` pins their distributed bytes to repository snapshot
+`cd1ffe132416f7d1beba5ca51690af0cbedf128c`; the table above identifies the
+original brand sources and transformations. `LicenseRef-Third-Party-Brand-Artwork`
+is an attribution label, **not** an additional license grant.
+
+`vendor/yaml/` contains the unmodified JavaScript `dist/` distributable,
+`package.json` and ISC license from Eemeli Aro's `yaml` 2.9.1 npm release
+([upstream](https://github.com/eemeli/yaml/tree/v2.9.1),
+[document/CST API](https://eemeli.org/yaml/)). The release identifies commit
+`1440ecd3d1bff41e4ac399f8f6839e810328bd16`. Its npm archive's SHA-512 integrity
+was checked before extraction; archive SHA-256, integrity, member names and each
+shipped member's SHA-256 are recorded in `sources.lock.json`. The original
+copyright and permission text is preserved verbatim in `vendor/yaml/LICENSE`.
+No parser source was modified and no dependency installation is performed.
+Only the document API is used by `runtime/omp_config.ts`: duplicate/ambiguous
+documents and unsupported tags are refused; alias expansion and input/output
+sizes are bounded. Selected values use source ranges where possible, with
+document edits for insertion/removal. Anchored or merged owned paths are
+rejected rather than changing foreign aliases or inherited content.

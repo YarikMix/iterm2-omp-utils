@@ -1,65 +1,28 @@
-# Notification events
+# Native omp notification policy
 
-Notifications are an explicit independent selection. They require Python 3.11+,
-terminal-notifier and iTerm2 Automation access for the exact session lookup.
-No live banners or macOS permission prompts have been verified by automated tests.
+`notifications` is independent of `status`. The package configures only
+`completion.notify: on` and `error.notify: off` in the selected omp profile.
+Explicit `notify_errors` changes the latter to `on`. These are native **string**
+enums, not booleans. No terminal-notifier, daemon, hook, duplicate lifecycle
+callback, custom deduplication cache or notification click dispatcher is installed.
+omp's native OSC 9 implementation controls delivery.
 
-Codex custom notices cover request_user_input/request_user_input_async PreToolUse
-and completion after a main Stop followed by the retained notification model's
-idle transition. A Stop while subagents run retains pending completion until
-that model reaches idle. This is separate from visible native cc-status, which
-can show done, working or waiting under iTerm2 policy. PermissionRequest
-never sends a custom banner: this hook precedes auto-review, so native TUI policy
-alone decides whether approval is actually presented. The targeted
-`tui.notifications = ["approval-requested"]` policy is verified for Codex 0.163.0;
-unknown versions report unavailable and the current transaction engine blocks
-installation. Previous bool/list values are retained by address-owned receipts.
+Address-owned changes preserve local presence/value inverses and foreign
+settings/comments. Matching foreign values are reused without ownership.
+Changed owned values remain conflicts during update/uninstall. An independent
+later feature install preserves the recorded notification policy.
 
-Visible Codex status now forwards to the app's native cc-status; the vendored
-Python transition remains only for these notification decisions and does not
-write status. Neither feature selects the other. Codex 0.163.0 registers exactly
-the 12 verified lifecycle events and lacks StopFailure, Notification and
-PostToolUseFailure. A synthetic native StopFailure tests an error renderer, not
-actual Codex API-failure delivery; automatic error display is unsupported for
-that version and the source is unverified for unknown versions. Claude's
-separately confirmed schema and notification adapter remain distinct.
+Receiver delivery is feature-specific and remains explicit pending UI, not
+inferred from `it2 --help`, versions or API connectivity. Unknown OSC 9 delivery
+does not prevent preparing the selected native settings or block status/shell;
+it never counts as banner acceptance. Required executable/parser failures still
+block their consumers. Versions are diagnostic, not exact-version rules.
+No old executable or `config get/list` probe is used. Bun is required only to
+parse/transform selected native YAML addresses, never to open an ordinary shell.
 
-Claude SessionStart resets state; UserPromptSubmit starts a new prompt, using
-prompt_id or a counter advanced only by UserPromptSubmit. Notification with
-permission_prompt, idle_prompt, elicitation_dialog or elicitation_url_dialog
-requests attention, never a permission decision. Only main Stop completes a
-prompt. Active background_tasks suppress completion until a later main Stop.
-Duplicate Stop, stop_hook_active, SubagentStop, StopFailure, Interrupt and
-SessionEnd do not produce completion. SessionEnd clears the active turn.
-Source schema: https://code.claude.com/docs/en/hooks.md. Background-task
-list semantics are confirmed by the official Python SDK StopHookInput and
-BackgroundTaskSummary in https://github.com/anthropics/claude-agent-sdk-python/blob/main/src/claude_agent_sdk/types.py:
-all listed tasks are in flight, including unknown status strings. Any nonempty
-malformed shape also suppresses completion conservatively, until a later main
-Stop reports no background tasks. No task descriptions or commands persist.
-
-A notice token is claimed under lock before delivery. Foreground originating
-sessions, unknown/closed UUIDs and denied Automation access silently skip banners.
-Click callbacks contain absolute quoted argv, select that UUID, then activate
-only after successful selection. No fallback to the active tab exists.
-The asynchronous terminal-notifier worker has a nine second subprocess timeout;
-hook-side probes/helpers are bounded independently by the 2.7s overall hook alarm.
-Caches retain state, bounded IDs, opaque upstream tool fingerprints, tokens and
-timestamps, never prompts, raw tool inputs or assistant output.
-
-The mapping follows the public pinned codex-status base e749ff64a6b34252e9f41c5103f4b46831691443 documented in
-THIRD_PARTY_NOTICES.md and the newer locally installed notifications.py implementation. Its
-local removal of PermissionRequest banners is intentional; a public SHA for that
-newer local snapshot is unavailable. Artwork/title extraction is not transferred.
-
-Attention deduplication is per request identity. Codex uses its opaque tool_key
-and removes only the matching claim after PostToolUse. Different concurrent
-questions each notify; retransmission of the same request is suppressed.
-Claude's declared Notification schema has no request ID. Its opaque identity is
-SHA-256(notification_type,title,message); raw fields never persist. Distinct
-messages notify separately. PostToolUse and PostToolUseFailure reset only
-attention claims, allowing a later same-text request to notify again without
-resetting completion for the prompt. Identical parallel Claude requests with no
-intervening resolution cannot be distinguished from retransmission and are
-suppressed. The fingerprint is for transient attention identity, not content
-storage. Schema evidence: official SDK NotificationHookInput at the URL above.
+`native_notifications` remains pending until real native completion/error
+behavior is verified in a fresh selected-profile main TUI. Local YAML and a
+successful terminal API/MCP probe do not establish effective project/provider/
+overlay settings, one visible banner, OS notification permission or foreground
+policy. Fixtures do not establish live acceptance. All execution and real
+banner/keyboard/receiver acceptance remain NOT RUN until Task10.

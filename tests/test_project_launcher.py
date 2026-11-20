@@ -75,7 +75,7 @@ class ProjectLauncherTests(LifecycleFixture):
 
     def test_feature_is_explicit_and_builder_preserves_foreign_layout(self):
         self.assertIn('project-launcher', FEATURES)
-        self.context.profiles['Default'].update({'Custom Command':'Yes','Command':'codex PRIVATE'})
+        self.context.profiles['Default'].update({'Custom Command':'Yes','Command':'omp PRIVATE'})
         result = lifecycle.install(self.context, self.selection('project-launcher'), self.runner)
         self.assertSuccess(result)
         rows = json.loads(self.dynamic.read_text())['Profiles']
@@ -170,7 +170,7 @@ class ProjectLauncherTests(LifecycleFixture):
         self.assertEqual(self.snapshot(),before); self.assertNotIn('PRIVATE',str(result))
 
     def test_missing_ambiguous_profile_and_prerequisites_block_without_files(self):
-        cases = ['missing','duplicate','version','sdk','inventory','sessions']
+        cases = ['missing','duplicate','sdk','inventory','sessions']
         original=copy.deepcopy(self.native)
         for case in cases:
             with self.subTest(case=case):
@@ -178,7 +178,6 @@ class ProjectLauncherTests(LifecycleFixture):
                 context=replace(self.context)
                 if case=='missing': self.native['profiles'][0]['name']='Project A'
                 if case=='duplicate': self.native['profiles'].append(dict(self.native['profiles'][0],guid='second'))
-                if case=='version': context.versions=dict(context.versions,iterm2='3.8.0')
                 if case=='sdk': context.capabilities -= {'python:iterm2'}
                 if case=='inventory': self.native['complete']=False
                 if case=='sessions': self.native['sessions']=[dict(id='s',profile_guid='parent-guid',bar=dict(self.bar,**{'Show Status Bar':True}),references=[],provenance=True)]
@@ -186,6 +185,38 @@ class ProjectLauncherTests(LifecycleFixture):
                 result=lifecycle.install(context,self.selection('project-launcher'),self.runner)
                 self.assertTrue(any(f.state in lifecycle.BLOCKING for f in result.findings),result)
                 self.assertEqual(self.snapshot(),before)
+
+    def test_new_iterm_version_with_same_schema_preserves_launcher(self):
+        self.assertSuccess(self.install('project-launcher'))
+        original = self.dynamic.read_bytes()
+        receipt = state.load(self.context.paths.data/'receipt.json')
+        # Task3 transfers neutral ownership/inverses without selecting the feature.
+        state.save(self.context.paths.data/'receipt.json', replace(receipt, selection=self.selection()))
+        original_stat = self.dynamic.stat()
+        inverses = {r['target']: r['before'] for r in receipt.resources
+                    if 'shared:project-launcher' in r['owners']}
+        self.context.versions['iterm2'] = '4.20.0'
+        self.context.project_launcher_config = None
+        self.calls.clear()
+        self.assertSuccess(lifecycle.install(self.context, self.selection('project-launcher'), self.runner))
+        self.assertEqual(self.dynamic.read_bytes(), original)
+        retained_stat = self.dynamic.stat()
+        self.assertEqual((retained_stat.st_ino, retained_stat.st_mtime_ns),
+                         (original_stat.st_ino, original_stat.st_mtime_ns))
+        self.assertFalse(any(call['operation'].startswith('write_') for call in self.calls))
+        current = state.load(self.context.paths.data/'receipt.json')
+        self.assertEqual({r['target']: r['before'] for r in current.resources
+                         if 'shared:project-launcher' in r['owners']}, inverses)
+        self.assertTrue(all(row['Custom Command'] == 'No' and row['Command'] == ''
+                            for row in json.loads(original)['Profiles']))
+
+    def test_unsupported_launcher_schema_does_not_block_shell(self):
+        self.native['profiles'][0]['bar']['Status Bar Layout']['components'] = 'unsupported'
+        result = self.install('project-launcher')
+        self.assertTrue(any(f.state in lifecycle.BLOCKING for f in result.findings))
+        self.assertFalse(self.dynamic.exists())
+        self.context.project_launcher_config = None
+        self.assertSuccess(self.install('shell'))
 
     def test_repeat_update_without_source_stable_guid_and_dryrun(self):
         before=self.snapshot()
@@ -202,11 +233,8 @@ class ProjectLauncherTests(LifecycleFixture):
         row=json.loads(self.dynamic.read_text())['Profiles'][0]
         self.assertEqual(row['Guid'],guid);self.assertEqual(row['Name'],'Project A');self.assertEqual(row['Working Directory'],str(self.folder_b))
 
-    def test_shared_consumers_partial_then_full_uninstall_restores_panel(self):
-        self.assertSuccess(self.install('project-launcher',agents=('codex','claude')))
-        result=lifecycle.uninstall(self.context,{'project-launcher'},self.runner,agents={'codex'})
-        self.assertSuccess(result);self.assertTrue(self.dynamic.exists())
-        self.assertEqual(result.receipt.selection.pairs,{'claude:project-launcher'})
+    def test_uninstall_restores_original_panel_and_position(self):
+        self.assertSuccess(self.install('project-launcher'))
         result=lifecycle.uninstall(self.context,{'project-launcher'},self.runner)
         self.assertSuccess(result);self.assertFalse(self.dynamic.exists())
         self.assertEqual(self.native['profiles'][0]['bar'],self.bar);self.assertEqual(self.native['position'],0)
@@ -353,7 +381,7 @@ class ProjectLauncherTests(LifecycleFixture):
             self.resume(command,dry_run=True)
         selection=self.selection('project-launcher')
         plan(prepare(self.context,selection,self.runner),selection)
-        lifecycle.doctor(self.context,replace(lifecycle._empty(),selection=selection),self.runner)
+        lifecycle.doctor(self.context,replace(lifecycle._empty(self.context),selection=selection),self.runner)
         self.assertEqual(self.snapshot(),before);self.assertEqual(self.native,native)
 
     def test_public_recovery_respects_transaction_lock(self):
@@ -441,8 +469,8 @@ class ProjectLauncherTests(LifecycleFixture):
 
     def test_cli_plan_install_update_and_doctor_hide_private_values(self):
         from iterm2_utils.cli import main
-        commands=[['plan','--agent','codex','--features','project-launcher','--project-launcher-config',str(self.config)],
-                  ['install','--agent','codex','--features','project-launcher','--project-launcher-config',str(self.config)],
+        commands=[['plan','--features','project-launcher','--project-launcher-config',str(self.config)],
+                  ['install','--features','project-launcher','--project-launcher-config',str(self.config)],
                   ['update'],['doctor'],['uninstall','--features','project-launcher']]
         for command in commands:
             output=io.StringIO()
@@ -480,6 +508,6 @@ class ProjectLauncherCliTests(unittest.TestCase):
         from iterm2_utils.cli import main
         output=io.StringIO()
         with patch('iterm2_utils.cli.discover') as discovery, redirect_stdout(output):
-            code=main(['plan','--agent','codex','--features','shell','--project-launcher-config','/unused.json','--json'])
+            code=main(['plan','--features','shell','--project-launcher-config','/unused.json','--json'])
         self.assertEqual(code,2);self.assertIn('project_launcher_config_selection',output.getvalue())
         discovery.assert_not_called()

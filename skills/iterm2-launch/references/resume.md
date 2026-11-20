@@ -1,50 +1,62 @@
-# Resume an exact conversation
+# Exact saved omp conversation
 
-Find the requested dialog by relevant history, reading only task-related
-transcripts. Confirm the exact UUID and original cwd from its validated header
-under effective `CODEX_HOME/sessions`; a filename, title or recent timestamp
-alone is insufficient. If multiple dialogs fit, resolve ambiguity before launch.
-Use the confirmed existing absolute cwd by default; another cwd requires the
-user's instruction. Never substitute the launching agent's current directory.
-The CLI independently validates a single matching interactive transcript.
+Recover relevant history locally without printing transcripts. Resolve the
+selected omp storage profile through the shared resolver and retain that
+provenance; native headers do not encode a storage profile. Confirm an absolute
+regular session JSONL, exact header ID and existing absolute cwd. An optional
+native title record can precede the session header. Filename/title/recency alone
+is not evidence. Ambiguity requires a choice; missing/substituted history blocks,
+never starts a fresh conversation. Do not substitute the sender cwd.
 
-Check known open dialogs read-only. If this dialog is already open, report its
-exact window/tab/session rather than creating a duplicate. An explicit request
-to open another copy authorizes one creation. Retain the evidence linking source
-UUID to the requested history and target tab.
+```sh
+"$launch_python" -m iterm2_utils launch-omp --mode resume --window WINDOW_ID --profile iterm2-utils:omp --cwd ABS_DIR --omp-profile work --resume-file ABS_JSONL --resume-id UUID --json
+```
 
-Invoke the skill's one `launch-codex --resume UUID` call. No handoff, new prompt,
-ack, `--last`, picker or fork. The process is `codex resume UUID -C ABS_DIR`, with
-only existing supported wrappers. Do not send `/status`, shell commands, Enter
-or exit commands to verify the restored state.
+No handoff, prompt, ack, latest/prefix/picker/fork or `--restore`. The native
+command is exact `omp --profile work --cwd ABS --resume ABS_JSONL`, including
+only preflight-verified preserved literal options. Exact complete executable
+argv, or the verified Bun executable plus that exact omp script, is required;
+a bare omp/Bun job or extra flags is insufficient. Never evaluate command text.
 
-After CLI `launched`, observe recovered history or dialog identifier **in the
-returned target tab** read-only. A matching original transcript proves what was
-selected, not what the target restored. Report “диалог восстановлен” only with
-that additional target evidence. If unavailable, report exactly:
-«команда resume запущена, восстановление истории не подтверждено» and known IDs.
-Missing/contradictory identity or history remains unconfirmed. Bound each
-additional read to at most 10 seconds; keep observations finite and report
-missing access. Do not retry creation or fall back to another transport.
+Before creating, the CLI independently confirms existing candidates with actual
+SDK addresses/user variables and exact kernel PID birth. Matching live dialog
+returns `already_open`/0 and current window/tab/terminal IDs, zero creates.
+Incomplete live identity blocks duplicates. Stale/reused PID records prove
+nothing. Only explicit human duplicate authorization permits `--allow-duplicate`.
 
-## Structural process examples
+After command proof, confirm actual main-TUI identity and history. Native
+continuations can change files/IDs within the same dialog: validate the chain
+back to the source, `continuationOf`/`parentSession` agreement, latest-turn anchors,
+profile/cwd and actual file. A fork or arbitrary different ID is not continuation.
+The registry updates to the actual file, not the requested filename forever.
+Without this evidence: «команда resume запущена, восстановление истории не
+подтверждено». Source history alone proves selection, not restoration.
+No typing, `/status`, Enter, exit, automatic retry or fresh fallback.
 
-These fictional examples document the argv representation; they are not
-behavioral tests or live launch evidence. `expected_argv` excludes argv0.
+## Structural JSON fixtures
+
+Fictional values below are literal JSON (booleans are not strings), not an agent
+behavior evaluation or live launch proof. Complete `expected_argv` includes
+argv0. The validator checks quoting/fixture shape only; runtime continuation
+acceptance is tested using real saved-file fixtures in the isolated test suite.
 
 ```json
-[
-  {
-    "processTitle": "codex",
-    "commandLine": "codex resume 77777777-7777-4777-8777-777777777777 -C /tmp/example-project",
-    "expected_argv": ["resume", "77777777-7777-4777-8777-777777777777", "-C", "/tmp/example-project"],
-    "matches": true
-  },
-  {
-    "processTitle": "codex",
-    "commandLine": "codex",
-    "expected_argv": ["resume", "77777777-7777-4777-8777-777777777777", "-C", "/tmp/example-project"],
-    "matches": false
-  }
-]
+{
+  "commands": [
+    {
+      "commandLine": "/opt/omp --profile work --cwd '/tmp/example project' --resume /tmp/session.jsonl",
+      "expected_argv": ["/opt/omp", "--profile", "work", "--cwd", "/tmp/example project", "--resume", "/tmp/session.jsonl"],
+      "matches": true
+    },
+    {
+      "commandLine": "/opt/omp --profile work --cwd '/tmp/example project' --resume /tmp/session.jsonl --continue",
+      "expected_argv": ["/opt/omp", "--profile", "work", "--cwd", "/tmp/example project", "--resume", "/tmp/session.jsonl"],
+      "matches": false
+    }
+  ],
+  "continuations": [
+    {"source_id":"source", "actual_id":"next", "continuationOf":"source", "parentSession":"source", "latest_turn_verified":true, "same_profile_cwd":true, "matches":true},
+    {"source_id":"source", "actual_id":"fork", "continuationOf":null, "parentSession":"source", "latest_turn_verified":true, "same_profile_cwd":true, "matches":false}
+  ]
+}
 ```

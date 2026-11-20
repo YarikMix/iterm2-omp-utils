@@ -60,6 +60,7 @@ class Tab:
     @property
     def all_sessions(self):
         if SCENARIO == 'partial': raise ConnectionError('PRIVATE_SDK_DETAIL')
+        if SCENARIO == 'duplicate_session': return [SimpleNamespace(session_id='S-one'), SimpleNamespace(session_id='S-two')]
         return [SimpleNamespace(session_id='S-created')]
 class Window:
     window_id = 'W-explicit'
@@ -155,6 +156,11 @@ class LaunchAPITests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.calls('close'), [None])
 
     async def test_partial_create_preserves_ids(self):
+        duplicate = await self.run_sdk('duplicate_session')
+        self.assertEqual(duplicate.status, 'unknown')
+        self.assertEqual(duplicate.tab_id, 'T-created')
+        self.assertIsNone(duplicate.session_id)
+        self.log.unlink(missing_ok=True)
         result = await self.run_sdk('partial')
         self.assertEqual(result.status, 'unknown')
         self.assertEqual((result.window_id, result.tab_id, result.session_id), ('W-explicit', 'T-created', None))
@@ -183,6 +189,37 @@ class LaunchAPITests(unittest.IsolatedAsyncioTestCase):
                 profile_guid='profile-one', command='CUSTOM_COMMAND'), frames.append)
         self.assertEqual(status, 'blocked')
         self.assertEqual(self.calls('create'), [])
+
+    async def test_automatic_window_basis_is_rechecked_before_the_single_create(self):
+        for basis,scenario,allowed in ((('parent','S-parent'),'stable',True),
+                (('parent','S-parent'),'moved',False),(('parent','S-parent'),'missing',False),
+                (('sole',''),'stable',True),(('sole',''),'second-window',False),
+                (('explicit',''),'second-window',True)):
+            with self.subTest(basis=basis,scenario=scenario):
+                creates=[];frames=[]
+                parent=SimpleNamespace(session_id='S-parent')
+                old=SimpleNamespace(window_id='W1',tabs=[SimpleNamespace(sessions=[parent])])
+                other=SimpleNamespace(window_id='W2',tabs=[SimpleNamespace(sessions=[])])
+                if scenario=='moved':
+                    old.tabs[0].sessions=[];other.tabs[0].sessions=[parent]
+                if scenario=='missing':old.tabs[0].sessions=[]
+                async def create(**kwargs):
+                    creates.append(kwargs)
+                    return SimpleNamespace(tab_id='T',all_sessions=[SimpleNamespace(session_id='S')])
+                old.async_create_tab=create
+                windows=[old] if scenario in {'stable','missing'} else [old,other]
+                app=SimpleNamespace(terminal_windows=windows,get_window_by_id=lambda wid:old if wid=='W1' else other)
+                async def connect():return SimpleNamespace(websocket=SimpleNamespace(close=asyncio.sleep))
+                async def get_app(connection):return app
+                async def profiles(connection):return [SimpleNamespace(name='Omp',guid='G')]
+                sdk=SimpleNamespace(Connection=SimpleNamespace(async_create=connect),async_get_app=get_app,
+                                    Profile=SimpleNamespace(async_get=profiles))
+                with patch.dict(sys.modules,{'iterm2':sdk}):
+                    status=await launch_api._operate(dict(window_id='W1',profile='Omp',profile_guid='G',
+                        command='complete-command',window_basis=basis),frames.append)
+                self.assertEqual(status,'created_unverified' if allowed else 'blocked')
+                self.assertEqual(len(creates),int(allowed))
+                if not allowed:self.assertFalse(any(frame.get('phase')=='create' for frame in frames))
 
     async def test_worker_rejects_malformed_oversized_or_repeated_progress(self):
         cases = ["print('not json')", "print('x'*5000)",
@@ -324,6 +361,213 @@ print('x'*5000, flush=True)
     def test_module_import_does_not_require_sdk(self):
         with patch.dict(sys.modules, {'iterm2': None}):
             importlib.reload(launch_api)
+
+
+CLOSE_SDK = r'''
+import asyncio, json, os, time
+from pathlib import Path
+from types import SimpleNamespace
+SCENARIO = SCENARIO_VALUE
+LOG = Path(os.environ['FAKE_SDK_LOG'])
+def record(kind, value=None):
+    with LOG.open('a') as stream: stream.write(json.dumps([kind, value])+'\n')
+print('PRIVATE_SDK_DIAGNOSTIC')
+if SCENARIO == 'import_error': raise ImportError('PRIVATE_SDK_DETAIL')
+if SCENARIO == 'sync_import': time.sleep(60)
+def proto(**kw): return SimpleNamespace(**kw, HasField=lambda name: name in kw)
+def leaf(sid):
+    return SimpleNamespace(session=proto(unique_identifier=sid), WhichOneof=lambda name:'session')
+def tab(tid, sid):
+    return proto(tab_id=tid, root=proto(links=[leaf(sid)]),
+                 minimized_sessions=[], active_session_id=sid)
+def snapshot(after):
+    target = tab('T', 'S')
+    other = tab('OTHER', 'OTHER-S')
+    nested = proto(links=[leaf('SPLIT')])
+    other.root.links.append(SimpleNamespace(node=nested, WhichOneof=lambda name:'node'))
+    other.minimized_sessions = [proto(unique_identifier='MINIMIZED')]
+    windows = [proto(window_id='W', tabs=[target, other])]
+    buried = [proto(unique_identifier='BURIED')]
+    if after:
+        windows[0].tabs = [other]
+        if SCENARIO == 'retained_tab': windows[0].tabs.append(tab('T', 'REUSED'))
+        if SCENARIO == 'moved_session': other.root.links.append(leaf('S'))
+        if SCENARIO == 'buried_session': buried.append(proto(unique_identifier='S'))
+        if SCENARIO == 'minimized_session': other.minimized_sessions.append(proto(unique_identifier='S'))
+        if SCENARIO == 'post_empty': windows=[]; buried=[]
+    else:
+        if SCENARIO == 'moved_window': windows[0].window_id='MOVED'
+        if SCENARIO == 'reused_tab': target.root.links=[leaf('REUSED')]; target.active_session_id='REUSED'
+        if SCENARIO == 'split_target': target.root.links.append(leaf('S2'))
+        if SCENARIO == 'hidden_target': target.minimized_sessions=[proto(unique_identifier='S2')]
+        if SCENARIO == 'buried_target':
+            target.root.links=[leaf('REUSED')]; target.active_session_id='REUSED'
+            buried.append(proto(unique_identifier='S'))
+        if SCENARIO == 'duplicate_tab': other.tab_id='T'
+        if SCENARIO == 'duplicate_session': other.root.links.append(leaf('S'))
+        if SCENARIO == 'duplicate_window': windows.append(proto(window_id='W',tabs=[tab('T2','S2')]))
+        if SCENARIO == 'mux_target': target.tmux_connection_id='MUX'; target.HasField=lambda name:name in {'root','tmux_connection_id'}
+        if SCENARIO == 'missing_root': target.HasField=lambda name:False
+        if SCENARIO == 'bad_active': other.active_session_id='MISSING'
+        if SCENARIO == 'bad_link': other.root.links[0].WhichOneof=lambda name:None
+        if SCENARIO == 'bad_hidden': buried[0].unique_identifier=''
+    if SCENARIO == ('post_incomplete' if after else 'pre_incomplete'): return proto()
+    return proto(list_sessions_response=proto(windows=windows,buried_sessions=buried))
+class Socket:
+    async def close(self):
+        record('disconnect')
+        if SCENARIO == 'teardown_timeout': await asyncio.sleep(60)
+class Connection:
+    websocket=Socket()
+    @staticmethod
+    async def async_create():
+        if SCENARIO == 'sync_auth': time.sleep(60)
+        if SCENARIO == 'connect_denied': raise PermissionError('PRIVATE_SDK_DETAIL')
+        return Connection()
+SENT=False
+async def inventory(connection):
+    record('inventory', SENT)
+    if SCENARIO == 'post_timeout' and SENT: await asyncio.sleep(60)
+    return snapshot(SENT)
+async def close(connection, sessions=None, tabs=None, windows=None, force=False):
+    global SENT
+    record('close_tab', dict(sessions=sessions,tabs=tabs,windows=windows,force=force))
+    SENT=True
+    if SCENARIO == 'disconnect': raise ConnectionError('PRIVATE_SDK_DETAIL')
+    if SCENARIO == 'close_timeout': await asyncio.sleep(60)
+    if SCENARIO == 'close_sync_timeout': time.sleep(60)
+    if SCENARIO == 'close_empty': return proto()
+    statuses = [] if SCENARIO == 'empty_statuses' else [1] if SCENARIO == 'not_found' else [2] if SCENARIO == 'declined' else [99] if SCENARIO == 'unknown_status' else [False] if SCENARIO == 'bool_status' else [0,0] if SCENARIO == 'extra_status' else [0]
+    return proto(close_response=proto(statuses=statuses))
+rpc=SimpleNamespace(async_list_sessions=inventory,async_close=close)
+if SCENARIO == 'missing_api': del rpc.async_close
+'''
+
+
+class CloseTabTests(unittest.IsolatedAsyncioTestCase):
+    def setUp(self):
+        self.temp=TemporaryDirectory()
+        self.addCleanup(self.temp.cleanup)
+        self.root=Path(self.temp.name)
+        self.log=self.root/'sdk.jsonl'
+
+    def calls(self, kind):
+        rows=[json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
+        return [value for key,value in rows if key==kind]
+
+    async def run_sdk(self, scenario='ok', timeout=2):
+        (self.root/'iterm2.py').write_text(CLOSE_SDK.replace('SCENARIO_VALUE',repr(scenario)))
+        with patch.dict(os.environ, {'HOME':str(self.root),'PYTHONPATH':str(self.root),
+                'FAKE_SDK_LOG':str(self.log),'PYTHONDONTWRITEBYTECODE':'1'}), \
+                patch.object(launch_api,'_CLOSE_WORKER_SECONDS',timeout):
+            return await launch_api.close_tab('W','T','S')
+
+    async def test_exact_close_requires_native_ok_and_complete_absence(self):
+        for scenario in ('ok','post_empty'):
+            with self.subTest(scenario=scenario):
+                self.log.unlink(missing_ok=True)
+                result=await self.run_sdk(scenario)
+                self.assertEqual(result.status,'closed')
+                self.assertEqual((result.window_id,result.tab_id,result.session_id),('W','T','S'))
+                self.assertEqual(self.calls('close_tab'),[
+                    dict(sessions=None,tabs=['T'],windows=None,force=False)])
+                self.assertEqual(self.calls('inventory'),[False,True])
+                self.assertEqual(self.calls('disconnect'),[None])
+                self.assertNotIn('PRIVATE',repr(result))
+
+    async def test_invalid_exact_target_or_incomplete_snapshot_never_closes(self):
+        for scenario in ('moved_window','reused_tab','split_target','hidden_target','buried_target',
+                'duplicate_tab','duplicate_session','duplicate_window','mux_target','missing_root',
+                'bad_active','bad_link','bad_hidden','pre_incomplete','connect_denied','import_error','missing_api'):
+            with self.subTest(scenario=scenario):
+                self.log.unlink(missing_ok=True)
+                result=await self.run_sdk(scenario)
+                self.assertEqual(result.status,'blocked')
+                self.assertEqual(self.calls('close_tab'),[])
+                self.assertNotIn('PRIVATE',repr(result))
+
+    async def test_native_explicit_refusals_are_blocked_without_retry(self):
+        for scenario in ('not_found','declined'):
+            with self.subTest(scenario=scenario):
+                self.log.unlink(missing_ok=True)
+                result=await self.run_sdk(scenario)
+                self.assertEqual(result.status,'blocked')
+                self.assertEqual(len(self.calls('close_tab')),1)
+                self.assertEqual(self.calls('inventory'),[False])
+
+    async def test_uncertain_reply_or_nonabsence_never_reports_closed(self):
+        for scenario in ('disconnect','close_empty','empty_statuses','unknown_status','extra_status','bool_status',
+                'retained_tab','moved_session','buried_session','minimized_session','post_incomplete',
+                'close_timeout','close_sync_timeout','post_timeout','teardown_timeout'):
+            with self.subTest(scenario=scenario):
+                self.log.unlink(missing_ok=True)
+                result=await self.run_sdk(scenario,timeout=.6)
+                self.assertEqual(result.status,'unknown')
+                self.assertEqual((result.window_id,result.tab_id,result.session_id),('W','T','S'))
+                self.assertEqual(len(self.calls('close_tab')),1)
+                self.assertNotIn('PRIVATE',repr(result))
+
+    async def test_entire_worker_is_bounded_even_before_possible_send(self):
+        for scenario in ('sync_import','sync_auth'):
+            with self.subTest(scenario=scenario):
+                self.log.unlink(missing_ok=True)
+                started=time.monotonic()
+                result=await self.run_sdk(scenario,timeout=.2)
+                self.assertEqual(result.status,'unknown')
+                self.assertLess(time.monotonic()-started,1)
+                self.assertEqual(self.calls('close_tab'),[])
+
+    async def test_invalid_ids_block_before_spawning(self):
+        with patch.object(launch_api.asyncio,'create_subprocess_exec',side_effect=AssertionError('spawn')):
+            for ids in (('','T','S'),('W','T\n','S'),('W','T',None),('W','x'*257,'S')):
+                with self.subTest(ids=ids):
+                    result=await launch_api.close_tab(*ids)
+                    self.assertEqual(result.status,'blocked')
+
+    async def test_failed_worker_protocol_is_unknown_even_if_it_claims_unsent(self):
+        real_spawn=asyncio.create_subprocess_exec
+        scripts=("print('not json')", "print('x'*5000)",
+                 "print('{\"result\":\"blocked\",\"sent\":false}')")
+        for script in scripts:
+            with self.subTest(script=script):
+                async def spawn(*args,**kwargs):
+                    return await real_spawn(sys.executable,'-c',script,**kwargs)
+                with patch.object(launch_api.asyncio,'create_subprocess_exec',side_effect=spawn), \
+                        patch.object(launch_api,'_CLOSE_WORKER_SECONDS',.2):
+                    result=await launch_api.close_tab('W','T','S')
+                self.assertEqual(result.status,'unknown')
+
+    async def test_valid_worker_result_requires_clean_exit_and_no_extra_output(self):
+        real_spawn=asyncio.create_subprocess_exec
+        for status in ('closed','blocked'):
+            prefix = "import json, sys, time\nsys.stdin.readline()\n"
+            prefix += "for phase in ('connect','inventory','close'):\n    print(json.dumps({'phase':phase}),flush=True)\n"
+            prefix += "print(json.dumps({'result':"+repr(status)+"}),flush=True)\n"
+            for suffix,expected in (('',status),('raise SystemExit(1)','unknown'),
+                                    ("print('extra',flush=True)",'unknown'),('time.sleep(60)','unknown')):
+                with self.subTest(status=status,suffix=suffix):
+                    async def spawn(*args,**kwargs):
+                        return await real_spawn(sys.executable,'-c',prefix+suffix,**kwargs)
+                    with patch.object(launch_api.asyncio,'create_subprocess_exec',side_effect=spawn), \
+                            patch.object(launch_api,'_CLOSE_WORKER_SECONDS',.2):
+                        result=await launch_api.close_tab('W','T','S')
+                    self.assertEqual(result.status,expected)
+
+    async def test_cancellation_after_send_retains_uncertainty_without_retry(self):
+        task=asyncio.create_task(self.run_sdk('close_timeout'))
+        try:
+            async with asyncio.timeout(2):
+                while not self.calls('close_tab'):
+                    await asyncio.sleep(.01)
+            task.cancel()
+            result=await task
+            self.assertEqual(result.status,'unknown')
+            self.assertEqual((result.window_id,result.tab_id,result.session_id),('W','T','S'))
+            self.assertEqual(len(self.calls('close_tab')),1)
+        finally:
+            if not task.done():
+                task.cancel()
+                await task
 
 
 if __name__ == '__main__':

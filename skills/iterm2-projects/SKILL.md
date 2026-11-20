@@ -1,68 +1,52 @@
 ---
 name: iterm2-projects
-description: Use when adding, removing, renaming, moving, or listing iTerm2 project-launcher button projects, including choosing Codex/Claude consumers and a parent profile.
+description: Use when adding, removing, renaming, moving or listing iTerm2 project-launcher button projects, or selecting their ordinary parent profile on macOS with zsh.
 ---
 
-# Project launcher projects
+# Shell project buttons
 
-Use the repository's CLI and its normalized project-launcher config. Keep names,
-paths, ids, profiles, and receipt details private; public examples use only
-Project A and Project B.
-
-This skill may be installed in omp with `bootstrap-skill --agent omp`. omp is the
-host executing it, not a new project-launcher consumer: the supported consumers
-remain Codex/Claude. Do not change omp's native terminal integration.
+Project buttons open **shell** tabs, never implicitly omp. Preserve project JSON,
+retained profile/button GUIDs, native action27 and login-shell/cwd semantics.
+Keep actual names/paths/receipts private; public examples use Project A/B.
 
 ## Read first
 
-Preflight an available Python 3.11+ interpreter, zsh, iTerm2 SDK/API 3.7.6,
-and an importable `iterm2`; preserve its absolute `sys.executable` in
-`ITERM2_UTILS_PYTHON`. Do not install packages, request permissions, or search
-real settings automatically. Call `resolve_paths()` and read state with
-`state.load(path)`. If a receipt exists, use
-`selection.agents_for("project-launcher")` and `selection.parent_profile` as
-ownership and consumers. If no receipt exists, allow first install only when
-there is no manual/foreign panel and the inventory is complete; otherwise stop
-without import/adoption. An absent source with an owned install starts from the
-fresh installed 0600 copy. Read the normalized config
-`{profiles, projects:[{id,name,path}]}` without changing it.
-Detailed transitions and a fake-runner checklist are in
-[projects reference](references/projects.md).
+Use a verified public checkout/release. Choose existing Python 3.11+ with official
+`iterm2`; preserve absolute `sys.executable` in `ITERM2_UTILS_PYTHON` without
+resolving virtualenv symlinks. Require zsh, permitted SDK/API and the required typed
+native inventory/component schema, not an exact version string. An unsupported
+schema blocks launcher only; ordinary shell remains available. Do not install
+packages, change permissions or bypass a denial automatically.
 
-## Choose the transition
+Read fresh `resolve_paths()` and `state.load(data/receipt.json)` locally. A current
+receipt supplies `selection.omp_profile`, `parent_profile` and exact ownership;
+no agent selector. Historical state requires explicit migration via iterm2-setup.
+An owned source that disappeared can start from the fresh installed 0600 copy.
+No receipt plus manual/foreign panel or incomplete inventory means stop, not
+import/adopt. Detailed schema/commands are in [projects](references/projects.md).
 
-- Listing is read-only: show project names and paths only; do not recover or
-  print the receipt.
-- For add, repeat is a no-op. A rename or path change keeps the existing `id`
-  and list position. Resolve an entry by exact id, then unique name, then
-  normalized absolute path; duplicate ids/names/paths require a question.
-  Missing-record removal is a no-op. A new path must be absolute and exist;
-  report a missing old path.
-- Removing one entry keeps the remaining entries. Removing the last entry
-  uninstalls `project-launcher` for the receipt's consumers; never publish an
-  empty config, delete a folder, or close a session. `--agent` limits uninstall
-  to that consumer and leaves the other consumer's panel intact.
-- On first install ask only for values not already supplied: consumers,
-  parent profile, and project data. Do not select unrelated features.
+## Transition
 
-Prepare a new candidate outside the checkout with mode `0600`; preserve unknown
-fields and existing entries. Never edit an installed file directly. Save bytes
-or fingerprints of the receipt and installed config used for preview. Immediately
-before apply, reread both and compare those fingerprints; if either changed,
-discard the stale command, preserve the concurrent edit, and rebuild. On
-success, delete the temporary candidate. Keep it only for an unknown first
-native write or an interrupted/failed recovery.
+- List read-only, without recovery or printing receipts.
+- Resolve by exact id, then unique name, then normalized absolute path. Ask for
+  duplicate/ambiguous matches. New paths must be existing absolute directories.
+- Repeated add/missing remove is a no-op. Rename/move preserves id and position.
+  Remove one preserves remaining entries; remove last uninstalls only
+  `project-launcher`, not folders or sessions.
+- First install asks only missing parent/project/profile choices. Omp storage
+  follows the shared resolver; do not turn storage selection into agent launch.
 
-## Apply
+Prepare a private 0600 candidate outside the checkout, preserving profiles,
+entries and order. Never directly edit installed files. Save receipt/config
+fingerprints for preview and compare immediately before apply. Concurrent edit
+means discard stale argv and preserve the edit, not force/retry it. Follow
+plan → install dry-run → install → doctor from the reference. Only plan/install
+accept the config flag; update reuses the owned installed copy.
 
-Use the exact CLI sequence from the reference: plan and install both receive
-`--project-launcher-config`; install has a dry-run before the real install; then
-run `doctor --json`. `update` has no config flag. Quote every path as one argv
-element and keep execution foreground. If the CLI reports a validation or
-ownership error, stop, preserve the candidate, and report the exact CLI error.
-For a timeout or unknown native write, recover the existing CLI journal before
-planning again; never repeat an unknown native write. Do not invent a journal or
-use direct
-SDK calls, legacy adoption, null/force overrides, GUI automation, or session
-termination. Native readback/API success does not prove visual button state or
-click acceptance; report that separately.
+Delete the candidate after verified success; retain it for failed/interrupted
+recovery or unknown native write. Use the existing CLI journal recovery before
+further mutation, never repeat an unknown native write or invent a journal.
+Exact GUID ownership, reference guards and CAS outrank matching display names.
+Do not retire referenced profiles, reset foreign buttons, close sessions, use
+direct SDK/GUI writes or force/adoption overrides. API readback is not visual or
+click acceptance; report unperformed live checks honestly.

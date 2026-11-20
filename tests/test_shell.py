@@ -1,73 +1,44 @@
 import unittest
-from pathlib import Path
-from tempfile import TemporaryDirectory
 from dataclasses import replace
-from iterm2_utils.models import Context, Paths, Selection, FileEdit
+from iterm2_utils.models import FileEdit
 from iterm2_utils.features.shell import build
+from tests.native_features_support import NativeFixture
 
-REPO = Path(__file__).resolve().parents[1]
 
-class ShellFixture:
+class ShellFixture(NativeFixture):
     def setUp(self):
-        tmp = TemporaryDirectory(); self.addCleanup(tmp.cleanup)
-        p = Path(tmp.name) / "Юникод space ' $(touch INJECTED)"
-        p.mkdir(); self.root=p
-        self.context=Context(Paths(p,p/'zshrc',p/'codex',p/'claude.json',p/'config',p/'cache',p/'data',p/'profiles',REPO),{'python3':Path('/usr/bin/python3'),'it2':p/'iTerm.app/Contents/Resources/utilities/it2','iterm2':p/'iTerm.app'},{'iterm2':'3.7.6','python3':'3.11.9'},frozenset({'codex:no-daemon','iterm2:cc-status-codex'}),{}, {})
-    def selection(self, features=('shell',)):
-        return Selection(frozenset({'codex'}),frozenset(features),frozenset(),'Default')
+        super().setUp()
+        self.root = self.home
 
-class ShellTests(ShellFixture, unittest.TestCase):
-    def test_alias_codex_conflict(self):
-        self.context.paths.zshrc.write_text("alias codex='other'\n")
-        changes=build(self.context,self.selection(('status',)))
-        self.assertEqual(changes.edits,[])
-        self.assertTrue(any(f.state=='conflict' for f in changes.findings))
-    def test_arbitrary_function_conflict(self):
-        self.context.paths.zshrc.write_text('function codex() { echo other; }\n')
-        self.assertEqual(build(self.context,self.selection(('status',))).edits,[])
-    def test_existing_integration_is_reused(self):
+    def selection(self, features=('shell',)):
+        return super().selection(*features)
+
+
+class ShellTests(ShellFixture):
+    def test_native_event_features_do_not_install_shell_dispatcher(self):
+        self.assertEqual(build(self.context,self.selection(('status','notifications','restore'))).edits,[])
+
+    def test_existing_integration_is_reused_without_ownership(self):
         self.context.paths.zshrc.write_text('source ~/.iterm2_shell_integration.zsh\n')
-        changes=build(self.context,self.selection())
+        changes = build(self.context,self.selection())
+        self.assertFalse(changes.edits)
         self.assertTrue(any(f.code=='existing_integration' for f in changes.findings))
-        self.assertFalse(any(isinstance(e,FileEdit) and e.path==self.context.paths.zshrc for e in changes.edits))
-    def test_dispatcher_does_not_enable_marks(self):
-        changes=build(self.context,self.selection(('status',)))
-        text=next(e.after.decode() for e in changes.edits if isinstance(e,FileEdit) and e.path==self.context.paths.zshrc)
-        self.assertNotIn('shell_integration',text)
-        self.assertIn('codex.zsh',text)
-    def test_appearance_is_dispatcher_consumer_without_enabling_shell_marks(self):
-        from iterm2_utils.features.shell import runtime_payload
-        selection=self.selection(('appearance',))
-        changes=build(self.context,selection)
-        text=next((e.after.decode() for e in changes.edits if e.path==self.context.paths.zshrc),'')
-        self.assertIn('appearance.zsh',text)
-        self.assertIn('codex.zsh',text)
-        self.assertNotIn('iterm2_shell_integration.zsh',text)
-        self.assertIn(str(self.context.paths.config/'appearance.json').replace("'", "'\"'\"'"),text)
-        self.assertEqual(changes.consumers['shared:shell'],frozenset({'codex:appearance'}))
-        payload=runtime_payload(self.context,selection)
-        self.assertIn('shared:runtime',payload.consumers)
-        self.assertTrue(any(e.path.name=='appearance.zsh' for e in payload.edits))
-    def test_appearance_uses_existing_conflict_detection(self):
-        for text in ("alias codex='other'\n",'function codex() { echo other; }\n'):
-            self.context.paths.zshrc.write_text(text)
-            changes=build(self.context,self.selection(('appearance',)))
-            self.assertEqual(changes.edits,[])
-            self.assertTrue(any(f.state=='conflict' for f in changes.findings))
-    def test_unicode_source_path_is_literal(self):
-        import subprocess
-        changes=build(self.context,self.selection(('status',)))
-        from iterm2_utils.features.shell import runtime_payload
-        from iterm2_utils.models import SymlinkEdit
-        for e in runtime_payload(self.context,self.selection(('status',))).edits:
-            e.path.parent.mkdir(parents=True,exist_ok=True)
-            if isinstance(e,SymlinkEdit): e.path.symlink_to(e.after)
-            else: e.path.write_bytes(e.after)
-        text=next(e.after for e in changes.edits if isinstance(e,FileEdit) and e.path==self.context.paths.zshrc)
-        startup=self.root/'startup'; startup.write_bytes(text)
-        result=subprocess.run(['/bin/zsh','-dfc','source "$1"', 'test',str(startup)],cwd=self.root,capture_output=True,text=True)
-        self.assertEqual(result.returncode,0,result.stderr)
-        self.assertFalse((self.root/'INJECTED').exists())
+
+    def test_appearance_sources_only_retained_helper(self):
+        changes = build(self.context,self.selection(('appearance',)))
+        startup = changes.edits[0].after
+        self.assertIn(b'appearance.zsh',startup)
+        self.assertNotIn(b'codex',startup)
+        self.assertNotIn(b'shell_integration',startup)
+        self.assertEqual(changes.consumers['shared:shell'],{'appearance'})
+
+    def test_shell_requires_no_agent_and_preserves_user_functions(self):
+        self.context.executables = {k:v for k,v in self.context.executables.items() if k in {'zsh','iterm2'}}
+        self.context.paths.zshrc.write_text('function omp() { command omp \"$@\"; }\n')
+        changes = build(self.context,self.selection())
+        self.assertIn(b'function omp()',changes.edits[0].after)
+        self.assertNotIn(b'--auto-approve',changes.edits[0].after)
+
     def test_shell_marks_only_inside_iterm(self):
         import subprocess
         changes=build(self.context,self.selection())
@@ -92,26 +63,36 @@ class ShellTests(ShellFixture, unittest.TestCase):
         self.assertEqual(zshrc.block(zshrc.block(both,'legacy',None),'root',None),original)
         for malformed in (b'# >>> iterm2-utils >>>\n', b'# <<< iterm2-utils <<<\n',b'# >>> iterm2-utils BAD >>>\n',both+ b'# <<< iterm2-utils:bad <<<\n'):
             with self.assertRaises(ValueError): zshrc.blocks(malformed)
-    def test_recompose_marks_removal_keeps_status_dispatcher(self):
+    def test_removing_shell_marks_keeps_appearance_consumer(self):
         from iterm2_utils import engine
         from iterm2_utils.models import Plan
-        from tests.support import FakeRunner
-        first=self.selection(('shell','status'))
-        from iterm2_utils.features.shell import runtime_payload
-        changes=build(self.context,first); payload=runtime_payload(self.context,first)
-        changes.edits.extend(payload.edits); changes.consumers.update(payload.consumers)
-        outcome=engine.apply(Plan(first,changes,'fixture'),self.context,FakeRunner())
-        self.assertTrue(outcome.receipt.resources, [f.code for f in outcome.findings])
-        remaining=self.selection(('status',))
-        changes=build(self.context,remaining)
-        outcome=engine.apply(Plan(remaining,changes,'fixture'),self.context,FakeRunner())
-        outcome=engine.revert(outcome.receipt,self.context,FakeRunner(),frozenset({'shell'}))
-        startup=self.context.paths.zshrc.read_text()
+        both = self.selection(('shell','appearance'))
+        initial = engine.apply(Plan(both,build(self.context,both),'initial'),self.context,self.runner)
+        self.assertSuccess(initial)
+        remaining = self.selection(('appearance',))
+        result = engine.apply(Plan(remaining,build(self.context,remaining),'remaining'),
+                              self.context,self.runner,remove_owners=frozenset({'shell'}))
+        self.assertSuccess(result)
+        startup = self.context.paths.zshrc.read_text()
         self.assertNotIn('shell_integration',startup)
-        self.assertIn('codex.zsh',startup)
-        self.assertTrue((self.context.paths.data/'current/codex.zsh').exists())
-        self.assertFalse(any(f.state=='conflict' for f in outcome.findings))
-    def test_restore_sources_after_dispatcher(self):
-        changes=build(self.context,self.selection(('restore',)))
-        text=next(e.after.decode() for e in changes.edits if isinstance(e,FileEdit) and e.path==self.context.paths.zshrc)
-        self.assertLess(text.index("/codex.zsh"),text.index('/codex_restore/codex-resume.zsh'))
+        self.assertIn('appearance.zsh',startup)
+        self.assertEqual(set(result.receipt.resources[0]['owners']),{'shared:shell','appearance'})
+
+    def test_unicode_source_path_is_literal(self):
+        import os
+        import subprocess
+        data = self.home/"Юникод space ' $(touch INJECTED)"
+        self.context.paths = replace(self.context.paths,data=data)
+        integration = data/'current/vendor/shell_integration/iterm2_shell_integration.zsh'
+        integration.parent.mkdir(parents=True)
+        integration.write_text('typeset -g FIXTURE_MARKS=loaded\n')
+        changes = build(self.context,self.selection())
+        startup = next(e.after for e in changes.edits if e.path==self.context.paths.zshrc)
+        path = self.home/'startup'
+        path.write_bytes(startup)
+        result = subprocess.run(['/bin/zsh','-dfc','source \"$1\"; print -r -- ${FIXTURE_MARKS-absent}',
+            'fixture',str(path)],capture_output=True,text=True,cwd=self.home,
+            env={**os.environ,'HOME':str(self.home),'TERM_PROGRAM':'iTerm.app',
+                 'ITERM_SHELL_INTEGRATION_INSTALLED':''},timeout=5)
+        self.assertEqual((result.returncode,result.stdout),(0,'loaded\n'),result.stderr)
+        self.assertFalse((self.home/'INJECTED').exists())

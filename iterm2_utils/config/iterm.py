@@ -2,7 +2,9 @@
 import json
 import re
 import subprocess
+import sys
 from pathlib import Path
+from ..commands import Runner
 
 BAR_KEYS = frozenset({'Show Status Bar', 'Status Bar Layout'})
 DOMAIN = 'com.googlecode.iterm2'
@@ -31,6 +33,18 @@ def validate_bar(value):
             raise ValueError()
     except (ValueError, TypeError):
         raise ValueError('Invalid native bar layout') from None
+    return value
+
+
+def validate_launcher_inventory(value):
+    """Recognize the native component schema, independent of iTerm's version."""
+    validate_inventory(value)
+    for row in (*value['profiles'], *value['sessions']):
+        components = row['bar']['Status Bar Layout'].get('components')
+        if type(components) is not list or any(
+                type(component) is not dict or type(component.get('class')) is not str
+                for component in components):
+            raise ValueError('Native launcher component schema unavailable')
     return value
 
 
@@ -99,8 +113,12 @@ def _references(values):
 
 def _request(context, runner, request):
     mutation = request['operation'].startswith('write_')
-    python = context.executables.get('python3')
-    version = context.versions.get('python3', '')
+    if request['operation'] == 'sessions_empty':
+        python = sys.executable
+        version = '.'.join(map(str, sys.version_info[:2]))
+    else:
+        python = context.executables.get('python3')
+        version = context.versions.get('python3', '')
     match = re.match(r'^(\d+)\.(\d+)', version)
     if python is None or not Path(python).is_absolute() or not match or tuple(map(int,match.groups())) < (3,11):
         raise ValueError('Selected Python 3.11+ unavailable')
@@ -130,6 +148,14 @@ class _Conflict(Exception):
 
 def inspect(context, runner):
     return validate_inventory(_request(context, runner, {'operation':'inspect'}))
+
+
+def sessions_empty(runner: Runner) -> bool:
+    """Prove session emptiness without depending on typed profile properties."""
+    value = _request(None, runner, {'operation':'sessions_empty'})
+    if type(value) is not bool:
+        raise ValueError('Native session coverage unavailable')
+    return value
 
 
 def read_bar(guid, context, runner):

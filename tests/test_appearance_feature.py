@@ -19,18 +19,48 @@ class AppearanceTests(LifecycleFixture):
         # Dynamic assignment also exercises old Context until the explicit field exists.
         self.context.appearance_config = self.source
 
+    def test_native_launch_arms_installed_observer_without_wrapping_omp_or_shell_mode(self):
+        import shlex
+        from types import SimpleNamespace
+        from iterm2_utils.launch import build_command
+        from iterm2_utils.launch_checks import LaunchIdentity
+        request = SimpleNamespace(mode='new', cwd=self.context.paths.home, omp_profile=self.profile)
+        identity = LaunchIdentity(Path('/fixture/omp'), (), (), 'fixture', interpreter=None)
+        inspection = SimpleNamespace(zsh=Path('/bin/zsh'), identity=identity)
+        command = build_command(request, inspection, ['/fixture/omp'])
+        self.assertIn('_iterm2_utils_appearance_arm', shlex.split(command)[2])
+        request.mode = 'shell'
+        self.assertNotIn('_iterm2_utils_appearance_arm', build_command(request, inspection, []))
+
+    def test_transferred_appearance_retains_original_inverse_without_source_files(self):
+        from dataclasses import replace
+        self.assertSuccess(self.install('appearance'))
+        receipt_path = self.context.paths.data/'receipt.json'
+        receipt = state.load(receipt_path)
+        config = self.context.paths.config/'appearance.json'
+        content = config.read_bytes()
+        original = {r['target']: r['before'] for r in receipt.resources if 'appearance' in r['owners']}
+        state.save(receipt_path, replace(receipt, selection=self.selection()))
+        self.context.appearance_config = None
+        self.source.unlink(); self.png.unlink()
+        result = self.install('appearance')
+        self.assertSuccess(result)
+        self.assertEqual(config.read_bytes(), content)
+        self.assertEqual({r['target']: r['before'] for r in result.receipt.resources
+                          if 'appearance' in r['owners']}, original)
+
     def installed_rule(self):
         return json.loads((self.context.paths.config/'appearance.json').read_text())['projects'][0]
 
     def test_explicit_install_owns_config_and_hash_icon_without_hooks(self):
         result=self.install('appearance');self.assertSuccess(result)
-        self.assertEqual(result.receipt.selection.pairs,{'codex:appearance'})
+        self.assertEqual(result.receipt.selection.features,{'appearance'})
         icon=self.context.paths.data/'appearance/icons'/(hashlib.sha256(self.png.read_bytes()).hexdigest()+'.png')
         self.assertEqual(self.installed_rule(),dict(self.rules['projects'][0],root=str(Path(self.rules['projects'][0]['root']).resolve()),color='#12AB34',icon=str(icon)))
         self.assertEqual(icon.read_bytes(),self.png.read_bytes())
         self.assertEqual([s.code for s in result.receipt.pending_ui],['appearance_api'])
-        self.assertFalse(self.context.paths.codex_home.exists())
-        self.assertFalse(self.context.paths.claude_settings.exists())
+        self.assertFalse((self.context.paths.home/'.codex').exists())
+        self.assertFalse((self.context.paths.home/'.claude').exists())
         self.assertIn('appearance.zsh',self.context.paths.zshrc.read_text())
         self.assertNotIn(str(self.source),repr(result.receipt))
 
@@ -39,7 +69,7 @@ class AppearanceTests(LifecycleFixture):
         rule=self.installed_rule()
         self.source.unlink();self.png.unlink();self.context.appearance_config=None
         self.assertSuccess(lifecycle.update(self.context,self.runner))
-        self.assertSuccess(self.install('shell',agents=('claude',)))
+        self.assertSuccess(self.install('shell'))
         self.assertSuccess(self.install('appearance'))
         self.assertEqual(self.installed_rule(),rule)
 
@@ -81,7 +111,7 @@ class AppearanceTests(LifecycleFixture):
         self.context.paths.zshrc.write_text(foreign)
         self.assertSuccess(self.install('appearance','restore','status'))
         self.context.appearance_config=None
-        self.assertSuccess(self.install('shell',agents=('claude',)))
+        self.assertSuccess(self.install('shell'))
         self.context.appearance_config=self.source
         self.rules['projects'][0]['color']='#FF0000';self.source.write_text(json.dumps(self.rules))
         self.assertSuccess(self.install('appearance'));self.assertEqual(self.installed_rule()['color'],'#FF0000')
@@ -89,8 +119,8 @@ class AppearanceTests(LifecycleFixture):
         self.assertSuccess(lifecycle.uninstall(self.context,{'appearance'},self.runner))
         text=self.context.paths.zshrc.read_text()
         self.assertIn(foreign,text)
-        self.assertNotIn('appearance.zsh',text);self.assertIn('codex.zsh',text);self.assertIn('iterm2_shell_integration.zsh',text)
-        self.assertTrue((self.context.paths.data/'current/hook.py').exists())
+        self.assertNotIn('appearance.zsh',text);self.assertNotIn('codex.zsh',text);self.assertIn('iterm2_shell_integration.zsh',text)
+        self.assertTrue((self.context.paths.data/'current/terminal_identity.py').exists())
         self.assertFalse(list((self.context.paths.data/'appearance/icons').glob('*.png')))
 
     def test_web_rules_preserve_existing_five_pairs_and_other_consumers(self):
@@ -115,7 +145,7 @@ class AppearanceTests(LifecycleFixture):
         installed_seven = json.loads(config.read_text())['projects']
         self.assertEqual(installed_seven[:5], installed_five)
         self.assertEqual(installed_seven, seven)
-        self.assertEqual(replaced.receipt.selection.pairs, {'codex:appearance', 'codex:restore', 'codex:status'})
+        self.assertEqual(replaced.receipt.selection.features, {'appearance', 'restore', 'status'})
         self.assertIn(foreign, self.context.paths.zshrc.read_text())
         expected_pngs = {name: (self.context.paths.repo/f'runtime/assets/appearance/{name}.png').read_bytes()
                          for name in ('chrome-mail', 'chrome-cloud')}
@@ -124,17 +154,19 @@ class AppearanceTests(LifecycleFixture):
         updated = lifecycle.update(self.context, self.runner)
         self.assertSuccess(updated)
         self.assertEqual(json.loads(config.read_text())['projects'], installed_seven)
-        self.assertEqual(updated.receipt.selection.pairs, replaced.receipt.selection.pairs)
+        self.assertEqual(updated.receipt.selection.features, replaced.receipt.selection.features)
         self.assertIn(foreign, self.context.paths.zshrc.read_text())
         for name, content in expected_pngs.items():
             self.assertEqual((self.context.paths.data/f'current/assets/appearance/{name}.png').read_bytes(), content)
-        settings = json.loads((self.context.paths.config/'runtime.json').read_text())
-        self.assertTrue(settings['status'])
-        self.assertTrue((self.context.paths.data/'current/codex_restore/codex-sessions').is_file())
+        from iterm2_utils.config import omp
+        self.assertTrue(omp.read_setting(self.profile,'terminal.programStatus',self.runner)['value'])
+        self.assertTrue((self.profile.agent_dir/'extensions/iterm2-utils-identity.ts').is_file())
 
-    def test_claude_only_is_unsupported_and_untouched(self):
-        before=self.snapshot();result=self.install('appearance',agents=('claude',))
-        self.assertTrue(any(f.code=='codex_only' for f in result.findings));self.assertEqual(self.snapshot(),before)
+    def test_only_selected_omp_profile_receives_identity_extension(self):
+        self.assertSuccess(self.install('appearance'))
+        self.assertTrue((self.profile.agent_dir/'extensions/iterm2-utils-identity.ts').is_file())
+        self.assertFalse((self.context.paths.home/'.codex').exists())
+        self.assertFalse((self.context.paths.home/'.claude').exists())
 
     def test_write_failure_rolls_back_checkpoint(self):
         from iterm2_utils import engine
@@ -179,10 +211,11 @@ class AppearanceTests(LifecycleFixture):
         self.assertTrue(any(f.state=='conflict' for f in result.findings));self.assertEqual(self.snapshot(),before)
         self.assertIn('appearance',result.receipt.selection.features)
 
-    def test_alias_blocks_appearance_without_partial_checkpoint(self):
-        self.context.paths.zshrc.write_text('alias codex=other\n');before=self.snapshot()
-        result=self.install('appearance')
-        self.assertTrue(any(f.code=='shell_conflict' for f in result.findings));self.assertEqual(self.snapshot(),before)
+    def test_alias_is_not_executable_identity_or_overwritten_by_appearance(self):
+        foreign = 'alias omp=other\n'
+        self.context.paths.zshrc.write_text(foreign)
+        self.assertSuccess(self.install('appearance'))
+        self.assertIn(foreign,self.context.paths.zshrc.read_text())
 
     def test_pending_api_probe_is_distinct_and_failure_is_private(self):
         import subprocess
@@ -200,10 +233,10 @@ class AppearanceTests(LifecycleFixture):
         self.assertSuccess(self.install('appearance','shell'))
         self.context.appearance_config=None
         result=lifecycle.uninstall(self.context,{'shell'},self.runner);self.assertSuccess(result)
-        self.assertEqual(result.receipt.selection.pairs,{'codex:appearance'})
+        self.assertEqual(result.receipt.selection.features,{'appearance'})
         self.assertIn('appearance.zsh',self.context.paths.zshrc.read_text())
         self.assertNotIn('iterm2_shell_integration.zsh',self.context.paths.zshrc.read_text())
-        self.assertTrue(any('codex:appearance' in r['owners'] and 'shared:runtime' in r['owners'] for r in result.receipt.resources))
+        self.assertTrue(any('appearance' in r['owners'] and 'shared:runtime' in r['owners'] for r in result.receipt.resources))
 
     def test_reinstall_after_uninstall_accepts_empty_json_residue(self):
         self.assertSuccess(self.install('appearance'))
@@ -217,7 +250,7 @@ class AppearanceTests(LifecycleFixture):
         self.context.appearance_config = self.source
         installed = self.install('appearance')
         self.assertSuccess(installed)
-        self.assertEqual(installed.receipt.selection.pairs, {'codex:appearance'})
+        self.assertEqual(installed.receipt.selection.features, {'appearance'})
         self.assertEqual(self.installed_rule()['icon'], str(icon))
         self.assertTrue(icon.exists())
         self.assertIn('appearance.zsh', self.context.paths.zshrc.read_text())

@@ -10,14 +10,13 @@ class FakeRunner:
     def __init__(self):
         self.calls = []
         self.environments = []
-        self.responses = {'python3':'Python 3.11.9',
-                          'it2':'session-status set-status --background-tasks --background-tasks-delta --turn-open --if-turn-open --if-background-tasks --json'}
+        self.responses = {'python3':'Python 3.11.9', 'zsh':'zsh 5.9'}
 
     def run(self, argv, *, timeout, stdin=None, env=None):
         self.calls.append((argv, timeout, stdin))
         self.environments.append(env)
         name = Path(argv[0]).name
-        return subprocess.CompletedProcess(argv, 0, self.responses.get(name, '1.0 --no-daemon session-status python-api'), '')
+        return subprocess.CompletedProcess(argv, 0, self.responses.get(name, ''), '')
 
 
 class Fixture:
@@ -31,7 +30,7 @@ class Fixture:
         self.home = Path(self.tmp.name)
         self.bin = self.home / 'bin'
         self.bin.mkdir()
-        for name in ('codex', 'claude', 'zsh', 'python3', 'terminal-notifier', 'peekaboo', 'osascript'):
+        for name in ('zsh', 'python3'):
             file = self.bin / name
             file.write_text('#!/bin/sh\nexit 0\n')
             file.chmod(0o755)
@@ -44,9 +43,6 @@ class Fixture:
         binary.chmod(0o755)
         utilities = self.app / 'Contents/Resources/utilities'
         utilities.mkdir()
-        native = utilities / 'cc-status'
-        native.write_text('#!/bin/sh\nexit 0\n')
-        native.chmod(0o755)
         it2 = utilities / 'it2'
         it2.write_text('#!/bin/sh\n')
         it2.chmod(0o755)

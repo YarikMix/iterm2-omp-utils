@@ -2,6 +2,7 @@
 """Small stdlib structural validator. This does not assess agent behavior."""
 import json
 import re
+import shlex
 import sys
 from pathlib import Path
 
@@ -23,8 +24,8 @@ def check(root):
         fields[key] = value.strip()
     if fields.get('name') != root.name or not re.fullmatch(r'[a-z0-9-]{1,64}', fields.get('name', '')):
         errors.append('Invalid skill name')
-    if not fields.get('description') or len(fields['description']) > 1024:
-        errors.append('A concise discovery description is required')
+    if not fields.get('description', '').startswith('Use when ') or len(fields.get('description','')) > 1024:
+        errors.append('A concise Use when discovery description is required')
     referenced = set()
     for file in root.rglob('*'):
         if file.is_symlink():
@@ -49,20 +50,38 @@ def check(root):
         # Check documentation examples only; this does not execute or prove a launch.
         try:
             content = (root/'references/resume.md').read_text()
-            examples = json.loads(re.search(r'```json\n(.*?)\n```', content, re.S)[1])
-            if not isinstance(examples, list) or len(examples) != 2:
+            fixture = json.loads(re.search(r'```json\n(.*?)\n```', content, re.S)[1])
+            examples = fixture['commands']
+            if not isinstance(examples,list) or len(examples) < 2:
                 raise ValueError()
             for example in examples:
-                title, argv = example['processTitle'], example['expected_argv']
-                if not isinstance(title, str) or not title or not isinstance(argv, list) or not argv:
+                argv = example['expected_argv']
+                if (not isinstance(argv,list) or not argv or
+                        any(not isinstance(value,str) or not value for value in argv) or
+                        '--resume' not in argv or '--cwd' not in argv or '--profile' not in argv):
                     raise ValueError()
-                commands = [' '.join([title, *(['--no-daemon']*n), *argv]) for n in range(3)]
-                if type(example['matches']) is not bool or example['matches'] != (example['commandLine'] in commands):
+                if (type(example['matches']) is not bool or
+                        example['matches'] != (shlex.split(example['commandLine']) == argv)):
                     raise ValueError()
-            if {example['matches'] for example in examples} != {True, False}:
+            if {example['matches'] for example in examples} != {True,False}:
                 raise ValueError()
-        except (OSError, ValueError, TypeError, KeyError):
-            errors.append('Invalid launch command examples')
+            continuations = fixture['continuations']
+            if not isinstance(continuations,list) or len(continuations) < 2:
+                raise ValueError()
+            for example in continuations:
+                if any(type(example[key]) is not bool for key in
+                       ('latest_turn_verified','same_profile_cwd','matches')):
+                    raise ValueError()
+                if any(not isinstance(example[key],str) or not example[key]
+                       for key in ('source_id','actual_id','parentSession')):
+                    raise ValueError()
+                if example['continuationOf'] is not None and not isinstance(example['continuationOf'],str):
+                    raise ValueError()
+            # These are declared synthetic observations, not a second history resolver.
+            if {example['matches'] for example in continuations} != {True,False}:
+                raise ValueError()
+        except (OSError, ValueError, TypeError, KeyError, IndexError):
+            errors.append('Invalid omp argv/continuation JSON fixtures')
     return errors
 
 
