@@ -89,6 +89,13 @@ do **not** describe or verify the current omp-only product. Original dated
 specifications and validation reports remain historical; no previous result is
 promoted to omp acceptance.
 
+The intermediate multi-host bootstrap from [PR #15](https://github.com/YarikMix/iterm2-utils/pull/15)
+installed the old skill bundles in an omp profile without changing their
+Codex/Claude consumers. The current bootstrap supersedes that interface:
+select the bundle and omp profile, not an `--agent` host. Profile resolution
+and receipt-guarded updates remain; installing or launching the retired
+consumers is not supported.
+
 
 ## Codex API launch and exact resume — 2026-11-01
 
