@@ -1011,7 +1011,7 @@
     },
     {
       "path": "runtime/assets/appearance/android-cloud.png",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/android-cloud.png",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/android-cloud.png",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "238b7e73f25a01d38e4715d85a288812131267ec983f35b4f4268fd8cd177bb7",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1020,7 +1020,7 @@
     },
     {
       "path": "runtime/assets/appearance/android-cloud.svg",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/android-cloud.svg",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/android-cloud.svg",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "f5bec459cf526a2acc86c1a97e190b8214a8f0d503bb524621c5d8fd83f24a7a",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1029,7 +1029,7 @@
     },
     {
       "path": "runtime/assets/appearance/android-mail.png",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/android-mail.png",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/android-mail.png",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "a0dc6a6683505dcf4f3f7417e6a54b7b8e8d9f04c3d8cdc08ebedf4b8a040062",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1038,7 +1038,7 @@
     },
     {
       "path": "runtime/assets/appearance/android-mail.svg",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/android-mail.svg",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/android-mail.svg",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "4fac60b5586c5080176d6936d76f968bcb4dccb94827b4dced68142f2a60bd47",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1047,7 +1047,7 @@
     },
     {
       "path": "runtime/assets/appearance/android.png",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/android.png",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/android.png",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "d04df164b7bca6ed72b856c44c1246e0770b85e465a2cf4e8024b3aabd4d2d97",
       "license": "MIT",
@@ -1056,7 +1056,7 @@
     },
     {
       "path": "runtime/assets/appearance/android.svg",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/android.svg",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/android.svg",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "0cbe30b4e5eeda4e38603e3db94e04bdd20d2053afa1e8ed01bc329614bd1e48",
       "license": "MIT",
@@ -1065,7 +1065,7 @@
     },
     {
       "path": "runtime/assets/appearance/chrome-cloud.png",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/chrome-cloud.png",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/chrome-cloud.png",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "efd8fa9c3bb007160ee829575fa3a5b6f8efa8455fe6f7699802661990e046ea",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1074,7 +1074,7 @@
     },
     {
       "path": "runtime/assets/appearance/chrome-cloud.svg",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/chrome-cloud.svg",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/chrome-cloud.svg",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "8572dfe6236ecc04be85fba3f3bf9b9820662aaba4428c8ed30ad20ccd4ad574",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1083,7 +1083,7 @@
     },
     {
       "path": "runtime/assets/appearance/chrome-mail.png",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/chrome-mail.png",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/chrome-mail.png",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "f85b49289b118c63905bd13b18ecae1e992019a72a2ba48851b58339618706ef",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1092,7 +1092,7 @@
     },
     {
       "path": "runtime/assets/appearance/chrome-mail.svg",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/chrome-mail.svg",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/chrome-mail.svg",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "3344155fd4d7374684f7bc2312a4932e76e0035c344bfa39e10ef40c448a07a2",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1101,7 +1101,7 @@
     },
     {
       "path": "runtime/assets/appearance/ios-cloud.png",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/ios-cloud.png",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/ios-cloud.png",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "bfd63c35da8d869f709f1f387a2745b925b3aca99819050053660f35fad59ab7",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1110,7 +1110,7 @@
     },
     {
       "path": "runtime/assets/appearance/ios-cloud.svg",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/ios-cloud.svg",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/ios-cloud.svg",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "ecb93157f1bfbf65932805b78f49ec5f75e03428b6f9b477a680e3c84e2fa1e8",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1119,7 +1119,7 @@
     },
     {
       "path": "runtime/assets/appearance/ios-mail.png",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/ios-mail.png",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/ios-mail.png",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "b39270067d484b485c497682863ffe13b11e7d0be705461066bde1f4ae2e9ee4",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1128,7 +1128,7 @@
     },
     {
       "path": "runtime/assets/appearance/ios-mail.svg",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/ios-mail.svg",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/ios-mail.svg",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "50f1a724acb4994f78f305e4d4f587ff00bb93006fca7dca337713e429ef626e",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1137,7 +1137,7 @@
     },
     {
       "path": "runtime/assets/appearance/ios.png",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/ios.png",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/ios.png",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "92fbea76044f6d5c316baa36470c0fd9bf8e74fcafbb33132e9d9714b4910682",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1146,7 +1146,7 @@
     },
     {
       "path": "runtime/assets/appearance/ios.svg",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/ios.svg",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/ios.svg",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "ff216628ca937300e4287c572aa437e05d7f690433334494aa3aa5fe6ca0df95",
       "license": "LicenseRef-Third-Party-Brand-Artwork",
@@ -1155,7 +1155,7 @@
     },
     {
       "path": "runtime/assets/appearance/kotlett.png",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/kotlett.png",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/kotlett.png",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "4de647270b9b679c2c957f1e7b39a016155228446e9012079fc8671d581c777c",
       "license": "MIT",
@@ -1164,7 +1164,7 @@
     },
     {
       "path": "runtime/assets/appearance/kotlett.svg",
-      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/kotlett.svg",
+      "url": "https://raw.githubusercontent.com/YarikMix/iterm2-omp-utils/cd1ffe132416f7d1beba5ca51690af0cbedf128c/runtime/assets/appearance/kotlett.svg",
       "ref": "cd1ffe132416f7d1beba5ca51690af0cbedf128c",
       "sha256": "78a108c26696bf21ba56860ed497fb56c775036a7a2b0b3eeec40b544f8de0aa",
       "license": "MIT",

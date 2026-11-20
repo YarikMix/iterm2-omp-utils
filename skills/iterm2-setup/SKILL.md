@@ -5,7 +5,7 @@ description: Use when setting up, diagnosing, migrating, updating or removing se
 
 # Selective omp setup
 
-Use https://github.com/YarikMix/iterm2-utils from a verified checkout/release;
+Use https://github.com/YarikMix/iterm2-omp-utils from a verified checkout/release;
 read README there. This skill can be read directly before discovery refresh.
 Copying a skill authorizes **no settings changes** and selects no features.
 

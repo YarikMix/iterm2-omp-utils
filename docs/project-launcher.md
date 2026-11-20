@@ -5,7 +5,7 @@ Status Bar iTerm2. Кнопка открывает **новую активную
 обычная login shell в папке проекта. Повторный клик создаёт ещё одну вкладку.
 Команды в текущую сессию не вводятся; агент автоматически не запускается.
 Операции со списком проектов описаны в отдельном публичном навыке
-[iterm2-projects](https://github.com/YarikMix/iterm2-utils/tree/main/skills/iterm2-projects).
+[iterm2-projects](https://github.com/YarikMix/iterm2-omp-utils/tree/main/skills/iterm2-projects).
 [Статический вымышленный пример](examples/project-launcher.html).
 
 Нужны macOS, zsh, iTerm2 с поддерживаемой native схемой Status Bar и выбранный существующий Python **3.11+** с
