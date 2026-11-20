@@ -96,20 +96,17 @@ The default-entrypoint test exercises actual private own-PTY OSC publication,
 device mismatch refusal and failed-publication cleanup. No personal terminal is
 used. No permanent identity/process source change was needed for that proof.
 
-## Authorized personal cutover — partial, not accepted
+## Authorized personal migration
 
 The user separately authorized scoped read-only preview and then the displayed
 migration/three-skill update. Auth files, personal dialog content and screens were
 not read. Diagnostic versions observed: omp18.20.3, Bun1.4.4, iTerm2 3.7.7,
 selected Python3.13.7 with official SDK2.23; no exact agent-version gate.
 
-The migration preview had no ownership conflicts. One apply converted the four
-receipt scopes and performed exact owned cleanup while preserving appearance
-rules, disabled external handlers and old runtime data. It returned exit2:
-native status/notifications/appearance installation was blocked by the retained
-legacy stable runtime symlink. The resulting feature receipt has no installed
-native features; those settings were not written. Unknown old callers must not
-be broken by manually repointing or deleting the retained runtime.
+The initial apply converted the four receipt scopes and performed exact owned
+cleanup, but left the old `current` and runtime in place; native feature
+checkpoints were blocked. The later correction `c9cd416508` split the session
+inventory from status-bar validation. Its focused review had no findings.
 
 All three omp-only skill updates completed. Mixed historical launch ownership
 initially left an empty directory that the bootstrap correctly refused as
@@ -118,15 +115,20 @@ atomic nonrecursive `rmdir`, then the normal bootstrap succeeded. All nine
 installed bundle files match the reviewed source byte-for-byte; extra/foreign
 files were not overwritten or adopted.
 
-The live blockers require an explicitly authorized additional corrective stage,
-not another implicit final-review fix wave. No test tabs, model turns or clipboard
-operations have been authorized/performed. Existing sessions were not restarted
-or closed. Private full evidence remains in the ignored plan workspace.
+After the user closed the last iTerm2 window, the SDK confirmed zero sessions.
+A fresh preview identified 378 owned files and the historical `current` symlink.
+The separately approved apply completed all three feature checkpoints, with no
+conflicts. Readback confirmed the old files were gone, `current` pointed to the
+new runtime, and no `current-omp` or pending transaction journal existed.
+The default omp profile stores `terminal.programStatus=true`,
+`completion.notify='on'` and `error.notify='off'`. Six disabled external records
+were retained. Exit 3 means native verification remains pending, not that the
+settings were rejected. No test tabs, model turns or clipboard operations were
+performed. Private execution evidence remains in the ignored plan workspace.
 
 ## Remaining acceptance and release gates
 
-The full Task10/native cutover is **not accepted**. After an approved correction,
-show the actual selected preview again before applying any changed target.
+Persisted migration is verified; overall Task10/native UI acceptance is not.
 Create only explicitly authorized bounded own test tabs and preserve all IDs.
 Clipboard checks require separate temporary preserve/replace/restore permission.
 

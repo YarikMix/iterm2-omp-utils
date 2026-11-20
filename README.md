@@ -210,9 +210,10 @@ Runtime лежит в versioned data/releases со стабильным current;
 
 Task10 выполнил изолированные Python/Bun/zsh, CLI, extraction и actor-проверки;
 фактические результаты и ограничения — в [acceptance matrix](docs/superpowers/validation/2026-11-16-omp-only/acceptance.md).
-Это не единый повторный green full-suite и не доказательство GUI. Разрешённая
-живая миграция пока частична: старый runtime сохранён, native feature cutover
-заблокирован; три omp-only bundle установлены. Общая приёмка ещё не завершена.
+Это не единый повторный green full-suite и не доказательство GUI. При разрешённой
+миграции старый runtime удалён, `current` указывает на omp, три omp-only bundle
+установлены. Настройки сохранены; живой запуск, оформление и доставка событий
+iTerm2 ещё не проверены.
 
 ```sh
 python3 -m unittest discover -s tests -t . -v
