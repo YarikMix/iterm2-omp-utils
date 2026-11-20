@@ -28,3 +28,21 @@ class TerminalTests(unittest.TestCase):
         terminal.sdk_observe=lambda sid: dict(terminal_id=sid,tab_id='moved',window_id='new',identity=json.dumps(dict(terminal_id=sid,tab_id='old',window_id='old',session_id='dialog')))
         observed=terminal.observe('S')
         self.assertEqual((observed['tab_id'],observed['window_id']),('moved','new'))
+
+    def test_job_pid_decodes_integer_without_changing_string_variables(self):
+        calls=[]
+        def run(argv,**kwargs):
+            calls.append((argv,kwargs))
+            value=123 if argv[3]=='session.jobPid' else '/dev/ttys007'
+            return SimpleNamespace(returncode=0,stdout=json.dumps(value))
+        terminal=Terminal(Path('/selected/it2'),SimpleNamespace(run=run))
+        self.assertEqual(terminal.job_pid('S'),123)
+        self.assertEqual(terminal.variable('S','tty'),'/dev/ttys007')
+        self.assertEqual(calls[0],(['/selected/it2','session','get-var','session.jobPid','--session','S'],{'timeout':10}))
+        with self.assertRaises(ValueError):terminal.variable('S','session.jobPid')
+
+    def test_job_pid_rejects_missing_bool_nonpositive_and_string_values(self):
+        for value in (None,True,False,0,-1,'123',1.5,{},[]):
+            with self.subTest(value=value):
+                runner=SimpleNamespace(run=lambda *a,**kw:SimpleNamespace(returncode=0,stdout=json.dumps(value)))
+                with self.assertRaises(ValueError):Terminal(Path('/it2'),runner).job_pid('S')

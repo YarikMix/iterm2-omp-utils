@@ -42,6 +42,14 @@ before exec. CLI PATH cannot substitute another Bun. Native binary headers are
 inspected as bounded bytes, not decoded as UTF-8. Exact literal-space-joined or
 safely tokenized shell-quoted complete argv observations are accepted; extra
 arguments, wrong paths and malformed quoted alternatives are refused, never evaluated.
+When iTerm2 abbreviates only argv[0] to its basename, every remaining argument
+must still match an approved argv exactly (including the absolute script for
+an interpreter prefix). This alternative also requires the created session's
+positive integer `session.jobPid`, exact `tty`, live kernel process birth,
+foreground ownership of that TTY and canonical executable image to agree.
+Repeated command/PID/TTY observations bracket repeated kernel samples; changed,
+missing or departed jobs remain unverified. No PATH lookup, name-only proof or
+process-group search substitutes for that evidence. Full-path proof is unchanged.
 Public selected source was inspected at the installed `@oh-my-pi/pi-coding-agent/dist/cli.js`: Bun
 shebang, literal profile passthrough generator and repeated config parser. Version
 is informational, not pinned. Required CLI flags are checked per operation.

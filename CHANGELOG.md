@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Launch command proof now accepts iTerm2's basename-only argv[0] only with an
+otherwise exact approved argv and independent live foreground-job evidence for
+the created session's integer PID and exact TTY. Repeated command/binding, birth,
+foreground and canonical image checks reject changed or missing jobs; interpreter
+script paths remain exact. Full-path proof and separate identity/history/ack
+contracts are unchanged. Offline regression results do not establish live acceptance.
+
 Historical runtime retirement now uses a bounded, read-only SDK session snapshot
 through the invoking Python, independent of status-bar/profile schema and agent
 discovery. Missing envelopes/roots or live, minimized and buried sessions defer

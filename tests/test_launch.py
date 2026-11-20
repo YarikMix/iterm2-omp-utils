@@ -14,6 +14,7 @@ from iterm2_utils.launch_checks import LaunchRequest, LaunchInspection, LaunchId
 from iterm2_utils.launch_api import LaunchCreation
 from iterm2_utils.models import OmpProfile
 from iterm2_utils.omp_sessions import SessionBinding, binding_record, resolve_resume
+from iterm2_utils.terminal import Terminal
 
 
 class LaunchTests(unittest.TestCase):
@@ -327,6 +328,107 @@ class LaunchTests(unittest.TestCase):
                 self.assertEqual(out['command'],'verified' if form in {
                     'literal','quoted','interpreter-literal','interpreter-quoted'} else 'unverified')
                 self.assertEqual(state['creates'],1)
+
+    def abbreviated_fixture(self, root, mode, prefix=()):
+        request,inspection,binding,state,transport,create=self.fixture(root)
+        request=replace(request,mode=mode,omp_profile=None if mode=='shell' else request.omp_profile)
+        state.update(job='zsh' if mode=='shell' else Path(prefix[0]).name if prefix else 'omp',
+                     pid=123,tty='/dev/ttys007',image=Path('/bin/zsh') if mode=='shell' else Path(prefix[0]) if prefix else root/'omp',
+                     kernel_calls=0)
+        original=transport.variable
+        def variable(self,sid,name):
+            if name=='tty':return state['tty']
+            if name=='session.profileName':return 'Omp'
+            if name=='session.jobName':return state['job']
+            if name!='session.commandLine':return original(self,sid,name)
+            argv=[str(inspection.zsh),'-il'] if mode=='shell' else [*prefix,*state['argv']]
+            argv[0]=Path(argv[0]).name
+            argv+=state.get('extra',[])
+            if state.get('wrong_script'):argv[1]=str(root/'other-omp')
+            if state.get('wrong_cwd'):argv[argv.index('--cwd')+1]='/wrong'
+            line=' '.join(argv) if state.get('literal') else shlex.join(argv)
+            return line+" '" if state.get('malformed') else line
+        transport.variable=variable
+        def job_pid(self,sid):
+            runner=SimpleNamespace(run=lambda *a,**kw:SimpleNamespace(returncode=0,stdout=json.dumps(state['pid'])))
+            return Terminal(Path('/it2'),runner).job_pid(sid)
+        # Exercise the real numeric transport decoder beneath the launch consumer.
+        transport.job_pid=job_pid
+        def foreground(self,pid,birth,tty):
+            state['kernel_calls']+=1
+            return state.get('foreground',True) and (pid,birth,tty)==(123,'birth','/dev/ttys007')
+        transport.foreground_process=foreground
+        transport.process_image=lambda self,pid:str(state['image']) if state['image'] else None
+        async def created(*args,**kwargs):
+            if mode=='shell':
+                state['creates']+=1
+                return LaunchCreation('created_unverified','W','T','S',30,())
+            return await create(*args,**kwargs)
+        return request,inspection,state,transport,created
+
+    def test_basename_shell_native_and_interpreter_require_kernel_job_proof(self):
+        for mode,prefix,literal in (('shell',(),False),('new',(),False),('new',('bun',),False),('new',('bun',),True)):
+            with self.subTest(mode=mode,prefix=prefix,literal=literal),TemporaryDirectory(prefix="space ' quote ") as tmp:
+                root=Path(tmp)
+                prefix=(str(root/'bun'),) if prefix else ()
+                request,inspection,state,transport,create=self.abbreviated_fixture(root,mode,prefix)
+                state['literal']=literal
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['status'],out['command']),(0,'launched','verified'))
+                self.assertEqual(state['creates'],1)
+                self.assertGreaterEqual(state['kernel_calls'],2)
+
+    def test_basename_wrong_tail_never_uses_kernel_evidence(self):
+        for fault in ('extra','script','cwd','malformed'):
+            with self.subTest(fault=fault),TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                request,inspection,state,transport,create=self.abbreviated_fixture(root,'new',(str(root/'bun'),))
+                state.update(extra=['--continue'] if fault=='extra' else [],wrong_script=fault=='script')
+                state.update(wrong_cwd=fault=='cwd',malformed=fault=='malformed')
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['command']),(3,'unverified'))
+                self.assertEqual(state['kernel_calls'],0)
+
+    def test_basename_rejects_wrong_missing_or_changing_job_evidence(self):
+        for fault in ('image','missing-image','foreground','birth','dead','pid','tty','command','changed-image',
+                      'changed-foreground','changed-birth','lost-liveness','changed-pid','changed-tty','changed-command','deadline'):
+            with self.subTest(fault=fault),TemporaryDirectory() as tmp:
+                root=Path(tmp)
+                request,inspection,state,transport,create=self.abbreviated_fixture(root,'new')
+                if fault=='image':state['image']=root/'foreign'
+                if fault=='missing-image':state['image']=None
+                if fault=='foreground':state['foreground']=False
+                if fault in {'birth','dead'}:transport.process_start=lambda self,pid:None
+                if fault=='pid':state['pid']=True
+                if fault=='tty':state['tty']=''
+                if fault=='command':state['extra']=['--continue']
+                if fault.startswith('changed-') or fault in {'lost-liveness','deadline'}:
+                    original=transport.process_image
+                    def image(self,pid):
+                        result=original(self,pid)
+                        # Every attempt becomes contradictory, never just the first poll.
+                        if fault=='changed-image':state['image']=root/'foreign'
+                        if fault=='changed-foreground':state['foreground']=False
+                        if fault=='changed-birth':transport.process_start=lambda self,pid:'reused'
+                        if fault=='lost-liveness':transport.process_start=lambda self,pid:None
+                        if fault=='changed-pid':state['pid']=124
+                        if fault=='changed-tty':state['tty']='/dev/ttys008'
+                        if fault=='changed-command':state['extra']=['--continue']
+                        if fault=='deadline':state['now']=31
+                        return result
+                    transport.process_image=image
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['status'],out['command']),(3,'created_unverified','unverified'))
+                self.assertEqual((out['window_id'],out['tab_id'],out['session_id']),('W','T','S'))
+                self.assertEqual(state['creates'],1)
+
+    def test_full_path_command_keeps_existing_proof_without_kernel_calls(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);request,inspection,_,state,transport,create=self.fixture(root)
+            def forbidden(*args):raise AssertionError('Full argv must not need kernel image proof')
+            transport.job_pid=transport.foreground_process=transport.process_image=forbidden
+            code,out=self.run_launch(root,request,inspection,state,transport,create)
+            self.assertEqual((code,out['command']),(0,'verified'))
 
     def test_handoff_producer_bounds_complete_utf8_representation_without_truncation(self):
         with TemporaryDirectory() as tmp:

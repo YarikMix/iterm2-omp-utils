@@ -7,7 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import time
-from runtime.terminal_identity import process_start
+from runtime.terminal_identity import process_start, foreground_process, process_image
 from .omp_sessions import read_bindings
 
 
@@ -46,6 +46,12 @@ class Terminal:
         value = self._run([self.executable, 'session', 'get-var', name, '--session', terminal])
         if not isinstance(value, str):
             raise ValueError('Invalid variable')
+        return value
+
+    def job_pid(self, terminal):
+        value = self._run([self.executable, 'session', 'get-var', 'session.jobPid', '--session', terminal])
+        if type(value) is not int or value <= 0:
+            raise ValueError('Invalid job PID')
         return value
 
     def panes(self):
@@ -100,6 +106,8 @@ class Terminal:
         return read_bindings(self.registry) if self.registry else []
 
     process_start = staticmethod(process_start)
+    foreground_process = staticmethod(foreground_process)
+    process_image = staticmethod(process_image)
 
     def sdk_observe(self, terminal):
         return self._run([sys.executable,'-m','iterm2_utils.terminal',terminal])

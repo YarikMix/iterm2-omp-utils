@@ -123,8 +123,19 @@ new runtime, and no `current-omp` or pending transaction journal existed.
 The default omp profile stores `terminal.programStatus=true`,
 `completion.notify='on'` and `error.notify='off'`. Six disabled external records
 were retained. Exit 3 means native verification remains pending, not that the
-settings were rejected. No test tabs, model turns or clipboard operations were
-performed. Private execution evidence remains in the ignored plan workspace.
+settings were rejected. The migration itself created no tabs and performed no
+model turns or clipboard operations. Private evidence stays in the ignored plan
+workspace.
+
+## Live launch correction
+
+iTerm2 reports abbreviated `argv[0]` for the tested `zsh` and `omp` jobs.
+The verifier now accepts that form only with exact remaining argv and positive
+kernel executable/foreground evidence bound to the job PID and session TTY.
+After the scoped review, one fresh `Default` shell tab and one fresh
+`iterm2-utils:omp` tab each returned `launched` (exit 0) with verified command;
+the empty omp tab also returned verified live identity. Both tests used an
+explicit window. No prompts, history restore, or clipboard operations.
 
 ## Remaining acceptance and release gates
 
@@ -132,9 +143,9 @@ Persisted migration is verified; overall Task10/native UI acceptance is not.
 Create only explicitly authorized bounded own test tabs and preserve all IDs.
 Clipboard checks require separate temporary preserve/replace/restore permission.
 
-Pending real surfaces: ordinary shell; empty fresh omp; selected-profile handoff
-with actual new ID and fresh ack under autoResume; exact resume/continuation and
-no duplicate-open; native idle/working/blocked/done/error; exactly one notification
+Pending real surfaces: selected-profile handoff with actual new ID and fresh
+ack under autoResume; exact resume/continuation and no duplicate-open;
+native idle/working/blocked/done/error; exactly one notification
 with receiver/macOS behavior; EN/RU Cmd+C/paste/Alt+Enter and unchanged Ctrl+Q;
 cd/reset/APS/light-dark/appearance and project shell buttons.
 

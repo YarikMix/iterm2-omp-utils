@@ -160,6 +160,31 @@ def _command_matches(line,allowed):
     except ValueError:return False
 
 
+def _abbreviated_command_matches(terminal, sid, line, allowed):
+    candidates=[argv for argv in allowed
+                if _command_matches(line,[[Path(argv[0]).name,*argv[1:]]])]
+    if not candidates:return False
+    pid,tty=terminal.job_pid(sid),terminal.variable(sid,'tty')
+    birth=terminal.process_start(pid)
+    if not birth or not tty:return False
+    proven_image=None
+    # Bracket command/binding rechecks with live kernel samples of this exact job.
+    for _ in range(2):
+        if not terminal.foreground_process(pid,birth,tty):return False
+        image=terminal.process_image(pid)
+        if not image:return False
+        image=Path(image).resolve()
+        if not any(image==Path(argv[0]).resolve() for argv in candidates):return False
+        if proven_image is not None and image!=proven_image:return False
+        proven_image=image
+        if terminal.process_start(pid)!=birth:return False
+        if (terminal.variable(sid,'session.commandLine')!=line or
+                terminal.job_pid(sid)!=pid or terminal.variable(sid,'tty')!=tty):
+            return False
+        if terminal.process_start(pid)!=birth:return False
+    return True
+
+
 def launch(request: LaunchRequest, paths, runner):
     inspection,findings=inspect_launch(paths,request,runner)
     output=dict(mode='shell' if request.mode=='shell' else 'launch_omp',launch_mode=request.mode,status='blocked',
@@ -213,11 +238,14 @@ def launch(request: LaunchRequest, paths, runner):
             line=terminal.variable(creation.session_id,'session.commandLine')
             job=terminal.variable(creation.session_id,'session.jobName')
             if request.mode=='shell':
-                command_ok=_command_matches(line,[[str(inspection.zsh),'-il'],[str(inspection.zsh),'-l']]) and job in {'zsh','-zsh'}
+                allowed=[[str(inspection.zsh),'-il'],[str(inspection.zsh),'-l']]
+                job_ok=job in {'zsh','-zsh'}
             else:
                 identity=inspection.identity
                 allowed=[[*prefix,*argv[1:]] for prefix in identity.prefixes]
-                command_ok=_command_matches(line,allowed) and job in {Path(prefix[0]).name for prefix in identity.prefixes}
+                job_ok=job in {Path(prefix[0]).name for prefix in identity.prefixes}
+            command_ok=job_ok and (_command_matches(line,allowed) or
+                exact and _abbreviated_command_matches(terminal,creation.session_id,line,allowed))
             if exact and command_ok and time.monotonic()<creation.deadline:
                 output.update(status='launched',command='verified')
                 if request.mode=='shell':return 0,output
