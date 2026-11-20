@@ -169,7 +169,7 @@ native idle/working/blocked/done/error; exactly one notification
 with receiver/macOS behavior; EN/RU Cmd+C/paste/Alt+Enter and unchanged Ctrl+Q;
 cd/reset/APS/light-dark/appearance and project shell buttons.
 
-A private beta archive was rebuilt from launch-correction commit `3c5ffd7b21`.
+A private beta archive was rebuilt from resume-correction commit `19ed636a82`.
 The SHA-256 matched its checksum file, and both CLI and `launch-omp` help ran
-from a fresh extraction. This archive predates the resume correction and is
-not current release evidence. No merge, push, or publication has occurred.
+from a fresh extraction. This verifies packaging, not native readiness. No
+merge, push, or publication has occurred.
