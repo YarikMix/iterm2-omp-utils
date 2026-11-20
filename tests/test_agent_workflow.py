@@ -78,12 +78,15 @@ class AgentWorkflowTests(WorkflowFixture):
             self.assertEqual(selected['resume_key'],'F8')
 
     def test_missing_selected_capability_does_not_block_independent_native_feature(self):
-        self.context.capabilities -= {'iterm2:osc7501'}
-        result = self.setup_cli(['install','--features','status,notifications'])
+        self.context.capabilities -= {'omp:resume'}
+        result = self.setup_cli(['install','--features','restore,notifications'])
         self.assertEqual(result['report']['selection']['features'],['notifications'])
         self.assertEqual(result['exit_code'],2)
         self.assertEqual(result['report']['pending'],['notifications'])
-        self.assertTrue(any(f['feature']=='status' and f['state']=='unavailable' for f in result['report']['findings']))
+        self.assertEqual([f['feature'] for f in result['report']['findings']
+                          if f['state']=='unavailable'],['restore'])
+        from iterm2_utils.config import omp
+        self.assertEqual(omp.read_setting(self.profile,'completion.notify',self.runner)['value'],'on')
 
     def test_shell_only_preserves_foreign_mcp_and_uninstall_uses_owned_values(self):
         path = self.profile.agent_dir/'mcp.json'

@@ -23,8 +23,9 @@ class AppearanceTests(LifecycleFixture):
         import shlex
         from types import SimpleNamespace
         from iterm2_utils.launch import build_command
+        from iterm2_utils.launch_checks import LaunchIdentity
         request = SimpleNamespace(mode='new', cwd=self.context.paths.home, omp_profile=self.profile)
-        identity = SimpleNamespace(executable=Path('/fixture/omp'), wrapper='')
+        identity = LaunchIdentity(Path('/fixture/omp'), (), (), 'fixture', interpreter=None)
         inspection = SimpleNamespace(zsh=Path('/bin/zsh'), identity=identity)
         command = build_command(request, inspection, ['/fixture/omp'])
         self.assertIn('_iterm2_utils_appearance_arm', shlex.split(command)[2])

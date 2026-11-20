@@ -26,7 +26,7 @@ jobs:
       - name: Unit and isolated export tests
         run: python3 -m unittest discover -s tests -t . -v
       - name: Native helper fixture contracts
-        run: bun test tests/test_omp_config.ts tests/test_omp_identity.ts
+        run: bun test ./tests/test_omp_config.ts ./tests/test_omp_identity.ts
       - name: zsh fixture contracts
         if: runner.os == 'macOS'
         run: |

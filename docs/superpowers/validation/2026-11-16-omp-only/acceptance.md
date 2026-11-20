@@ -169,6 +169,16 @@ tab, then closed it with its exact window, tab and terminal session IDs. The
 CLI returned `closed` (exit 0); a separate native inventory matched the
 pre-launch snapshot after closure. No existing tab or setting was changed.
 
+## Pre-publication checks
+
+The isolated Python discovery run reached 580 tests (one platform skip, two
+failures and one error). Two stale fixtures caused the failures, one repeated
+by the extracted-release suite. The fixture-only corrections passed all nine
+affected checks, including the extracted-release test. The unrelated checks
+were not rerun. Bun passed 17 tests when invoked with exact file paths; the CI
+command now uses those paths. The zsh suite passed 25 cases and the source
+validator verified 96 pinned sources.
+
 ## Remaining acceptance and release gates
 
 Persisted migration is verified; overall Task10/native UI acceptance is not.
@@ -185,4 +195,4 @@ A private beta archive was rebuilt from the `close-tab` commit `d3bfb127b5`.
 The SHA-256 matched its checksum file; `close-tab --help` and isolated
 `iterm2-launch` skill bootstrap succeeded from a fresh extraction. The installed
 copy in the isolated profile matched the bundled source. This verifies
-packaging, not full native readiness. No merge, push, or publication.
+packaging, not full native readiness. No release has been published.
