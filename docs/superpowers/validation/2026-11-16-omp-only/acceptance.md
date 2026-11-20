@@ -149,6 +149,7 @@ native idle/working/blocked/done/error; exactly one notification
 with receiver/macOS behavior; EN/RU Cmd+C/paste/Alt+Enter and unchanged Ctrl+Q;
 cd/reset/APS/light-dark/appearance and project shell buttons.
 
-The earlier archive predates the source correction. Rebuild and verify extraction
-from final accepted source before treating an artifact as the current release.
-No merge, push, publication or native readiness claim has occurred.
+A private beta archive was rebuilt from launch-correction commit `3c5ffd7b21`.
+The SHA-256 matched its checksum file, and both CLI and `launch-omp` help ran
+from a fresh extraction. This is packaging evidence, not release or native
+readiness. No merge, push, or publication has occurred.
