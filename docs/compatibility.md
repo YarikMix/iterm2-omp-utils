@@ -89,7 +89,7 @@ do **not** describe or verify the current omp-only product. Original dated
 specifications and validation reports remain historical; no previous result is
 promoted to omp acceptance.
 
-The intermediate multi-host bootstrap from [PR #15](https://github.com/YarikMix/iterm2-utils/pull/15)
+The intermediate multi-host bootstrap from [PR #15](https://github.com/YarikMix/iterm2-omp-utils/pull/15)
 installed the old skill bundles in an omp profile without changing their
 Codex/Claude consumers. The current bootstrap supersedes that interface:
 select the bundle and omp profile, not an `--agent` host. Profile resolution
@@ -141,8 +141,8 @@ exact target tab. Otherwise report: “команда resume запущена, �
 
 Fixture/structural checks, offline behavioral simulations and live acceptance
 are distinct. Current behavioral evidence is recorded in
-[skill results](https://github.com/YarikMix/iterm2-utils/blob/main/docs/superpowers/validation/2026-11-01-launch-api-resume/skill-results.md).
-The [final acceptance matrix](https://github.com/YarikMix/iterm2-utils/blob/main/docs/superpowers/validation/2026-11-01-launch-api-resume/acceptance.md)
+[skill results](https://github.com/YarikMix/iterm2-omp-utils/blob/main/docs/superpowers/validation/2026-11-01-launch-api-resume/skill-results.md).
+The [final acceptance matrix](https://github.com/YarikMix/iterm2-omp-utils/blob/main/docs/superpowers/validation/2026-11-01-launch-api-resume/acceptance.md)
 records the 2026-11-02 checks, controller live observations and selected
 installed-skill bootstrap separately. Final tested code/skill snapshot:
 `0ac1a75642010b33b6a3365ecb015ecbf163a5cf`, Darwin 25.6.0 arm64,
@@ -287,7 +287,7 @@ documentation commit. No native migration CI, model-behavior or live run is clai
 | Restore | Bundled Codex restore port, fzf dependency | Fixture lifecycle/transcript selection only; real dialogs unverified |
 
 Local checks ran on Darwin 25.6.0 arm64, Python 3.13.7 and zsh 5.9.
-The [CI matrix](https://github.com/YarikMix/iterm2-utils/actions/workflows/test.yml)
+The [CI matrix](https://github.com/YarikMix/iterm2-omp-utils/actions/workflows/test.yml)
 runs isolated fixtures and export checks on Linux and macOS with Python 3.11 and
 current stable (3.x); macOS also runs explicit zsh contracts. Each run logs its
 resolved Python version and, on macOS, zsh version. The verified macOS 3.x run

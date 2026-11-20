@@ -55,7 +55,7 @@ updating this source skill does not install it or authorize any close.
 
 ## Prepare
 
-Use a verified checkout/release of https://github.com/YarikMix/iterm2-utils and
+Use a verified checkout/release of https://github.com/YarikMix/iterm2-omp-utils and
 read its README. Choose existing Python 3.11+; save its absolute `sys.executable`
 without resolving virtualenv symlinks to a different interpreter. Check import
 of official `iterm2` and `launch-omp --help` with that same Python. Preserve it

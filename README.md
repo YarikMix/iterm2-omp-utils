@@ -7,7 +7,7 @@
 
 ## Быстрый старт
 
-> Настрой мне iTerm2 из https://github.com/YarikMix/iterm2-utils. Прочитай
+> Настрой мне iTerm2 из https://github.com/YarikMix/iterm2-omp-utils. Прочитай
 > skills/iterm2-setup/SKILL.md, уточни только недостающие функции и omp profile,
 > покажи план и настрой только выбранное. Ручные шаги и непроверенное перечисли.
 
@@ -15,8 +15,8 @@ Skill можно читать прямо из checkout. Отдельное ко�
 обнаружения не разрешает менять настройки и не включает функции:
 
 ```sh
-git clone https://github.com/YarikMix/iterm2-utils.git
-cd iterm2-utils
+git clone https://github.com/YarikMix/iterm2-omp-utils.git
+cd iterm2-omp-utils
 python3 --version  # >=3.11
 python3 -m iterm2_utils bootstrap-skill --skill iterm2-launch --omp-profile work --dry-run --json
 python3 -m iterm2_utils bootstrap-skill --skill iterm2-launch --omp-profile work --json
