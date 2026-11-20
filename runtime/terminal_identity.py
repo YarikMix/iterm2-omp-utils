@@ -174,8 +174,8 @@ def verified_identity(registry, observed):
     return matches[0] if len(matches) == 1 else None
 
 
-def process_image(pid):
-    """Kernel executable identity for a previously observed shell, never name trust."""
+def process_executable_path(pid):
+    """Raw absolute Darwin kernel path, without liveness or birth authority."""
     if sys.platform != 'darwin' or type(pid) is not int or not 0 < pid <= 0x7fffffff:
         return None
     try:
@@ -186,9 +186,15 @@ def process_image(pid):
         if probe(pid, buffer, len(buffer)) <= 0:
             return None
         path = buffer.value.decode('utf-8')
-        return path if path.startswith('/') and process_start(pid) is not None else None
+        return path if path.startswith('/') else None
     except (OSError, AttributeError, UnicodeError, ctypes.ArgumentError):
         return None
+
+
+def process_image(pid):
+    """Kernel executable identity for a previously observed shell, never name trust."""
+    path = process_executable_path(pid)
+    return path if path is not None and process_start(pid) is not None else None
 
 
 def foreground_state(pid, birth, tty):

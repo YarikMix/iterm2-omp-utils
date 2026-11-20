@@ -33,6 +33,8 @@ class LaunchTests(unittest.TestCase):
             def process_start(self,pid):return 'birth'
             def observe(self,sid):return binding_record(binding)
             def panes(self):return [dict(terminal_id='S',tab_id='T',window_id='W')]
+            def complete_panes(self):return self.panes()
+            def ordinary_shell(self,pane,zsh):return False
             def profile(self,name):return dict(name='Omp',guid='G')
             def variable(self,sid,name):
                 return {'session.profileName':'Omp','session.jobName':state['job'],'session.commandLine':('malformed "' if state['command_bad'] else shlex.join(state['argv']))}[name]
@@ -472,3 +474,54 @@ class LaunchTests(unittest.TestCase):
                 self.assertEqual((code,out['command']),(3,'unverified') if form=='wrong-handoff' else (0,'verified'))
                 self.assertEqual(out['ack'],'unconfirmed')
                 self.assertEqual(state['creates'],1)
+
+    def test_ambiguous_earlier_pane_or_binding_does_not_mask_exact_open_dialog(self):
+        for source in ('pane','binding'):
+            with self.subTest(source=source),TemporaryDirectory() as tmp:
+                root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+                request=replace(request,mode='resume',resume=resolve_resume(binding.session_file,'fresh',binding.profile))
+                original=transport.observe
+                transport.observe=lambda self,sid:None if sid=='unknown' else original(self,sid)
+                transport.panes=lambda self:[dict(terminal_id='unknown',tab_id='U',window_id='W'),
+                                            dict(terminal_id='S',tab_id='T',window_id='W')]
+                if source=='binding':state['bindings']=[replace(binding,terminal_id='unknown'),binding]
+                else:
+                    reads=[]
+                    def bindings(self):
+                        reads.append(True)
+                        return [] if len(reads)==1 else [binding]
+                    transport.bindings=bindings
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['status'],state['creates']),(0,'already_open',0))
+
+    def test_negative_resume_needs_complete_unchanged_inventory_and_proven_shell(self):
+        for fault in ('none','shell','inventory','changed','timeout'):
+            with self.subTest(fault=fault),TemporaryDirectory() as tmp:
+                root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+                request=replace(request,mode='resume',resume=resolve_resume(binding.session_file,'fresh',binding.profile))
+                state['bindings']=[]
+                original=transport.observe
+                transport.observe=lambda self,sid:original(self,sid) if state['creates'] else None
+                transport.ordinary_shell=lambda self,pane,zsh:fault!='shell'
+                def complete(self):
+                    if fault in {'inventory','timeout'}:raise TimeoutError('bounded inventory')
+                    if fault=='changed':return []
+                    return self.panes()
+                transport.complete_panes=complete
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual(state['creates'],int(fault=='none'))
+                self.assertEqual((code,out['status']),(0,'launched') if fault=='none' else (2,'blocked'))
+                if fault!='none':self.assertEqual(out['findings'][-1]['code'],'launch_live_candidate_incomplete')
+
+    def test_duplicate_scan_has_restored_bounded_deadline(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+            request=replace(request,mode='resume',resume=resolve_resume(binding.session_file,'fresh',binding.profile))
+            def observed(self,sid):
+                self_test.assertEqual(self.deadline,30)
+                state['now']=31
+                return None
+            self_test=self
+            transport.observe=observed
+            code,out=self.run_launch(root,request,inspection,state,transport,create)
+            self.assertEqual((code,state['creates']),(2,0))

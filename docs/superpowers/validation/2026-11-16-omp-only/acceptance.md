@@ -142,6 +142,21 @@ The launcher verified the command and live identity and accepted the private
 receipt from that identity (`ack=received`). The only task was to read and
 acknowledge the handoff. No settings, clipboard operations, or history restore.
 
+Exact resume of the saved handoff test dialog was attempted after the user
+closed its source tab. The launcher exited 2 before creation
+(`launch_precreate_unverified`); no new tab or history restoration. A scoped
+read of the earlier shell test tab independently reproduced a `TypeError`:
+the SDK returns null for its absent omp identity and the adapter tried to
+decode it as JSON. No duplicate override or retry was used.
+
+After the resume correction, the complete native inventory agreed with the
+visible panes. Shell exclusion succeeded both for a direct zsh process and for
+the native Default login supervisor. One exact resume then returned `launched`
+with command, identity, and saved history all verified. A read-only repeat
+through the CLI with creation explicitly forbidden returned `already_open` for
+the same tab and terminal, without calling creation. No model request, duplicate
+override, or changes to existing tabs or persistent settings.
+
 ## Remaining acceptance and release gates
 
 Persisted migration is verified; overall Task10/native UI acceptance is not.
@@ -149,12 +164,12 @@ Create only explicitly authorized bounded own test tabs and preserve all IDs.
 Clipboard checks require separate temporary preserve/replace/restore permission.
 
 Pending real surfaces: handoff with a named omp profile and with effective
-autoResume enabled; exact resume/continuation and no duplicate-open;
+autoResume enabled; native continuation beyond the exact saved-dialog restore;
 native idle/working/blocked/done/error; exactly one notification
 with receiver/macOS behavior; EN/RU Cmd+C/paste/Alt+Enter and unchanged Ctrl+Q;
 cd/reset/APS/light-dark/appearance and project shell buttons.
 
 A private beta archive was rebuilt from launch-correction commit `3c5ffd7b21`.
 The SHA-256 matched its checksum file, and both CLI and `launch-omp` help ran
-from a fresh extraction. This is packaging evidence, not release or native
-readiness. No merge, push, or publication has occurred.
+from a fresh extraction. This archive predates the resume correction and is
+not current release evidence. No merge, push, or publication has occurred.

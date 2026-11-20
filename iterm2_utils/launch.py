@@ -136,20 +136,37 @@ def _observed_binding(terminal, sid):
     return None
 
 
-def _existing(request,terminal):
-    """An uninstrumented live pane is uncertainty, not negative dialog evidence."""
+def _existing(request,terminal,zsh):
+    """Positive matches win; only complete stable evidence authorizes a negative."""
+    ambiguous=False
+    errors=(OSError,ValueError,KeyError,TypeError,AttributeError,TimeoutError,subprocess.SubprocessError)
     for candidate in terminal.bindings():
-        plausible=(candidate.session_id==request.resume.session_id and
-                   candidate.profile==request.resume.profile and candidate.cwd==request.resume.cwd)
-        if not plausible and not matches_conversation(request.resume,candidate):continue
-        if terminal.process_start(candidate.pid)!=candidate.process_start:continue
-        actual=_observed_binding(terminal,candidate.terminal_id)
-        if actual and matches_conversation(request.resume,actual):return actual,False
-        return None,True
-    for pane in terminal.panes():
-        actual=_observed_binding(terminal,pane['terminal_id'])
-        if actual is None:return None,True
-        if matches_conversation(request.resume,actual):return actual,False
+        try:
+            plausible=(candidate.session_id==request.resume.session_id and
+                       candidate.profile==request.resume.profile and candidate.cwd==request.resume.cwd)
+            if not plausible and not matches_conversation(request.resume,candidate):continue
+            if terminal.process_start(candidate.pid)!=candidate.process_start:continue
+            actual=_observed_binding(terminal,candidate.terminal_id)
+            if actual and matches_conversation(request.resume,actual):return actual,False
+            ambiguous=True
+        except errors:
+            ambiguous=True
+    panes=terminal.panes()
+    try:
+        if terminal.complete_panes()!=panes:ambiguous=True
+    except errors:
+        ambiguous=True
+    for pane in panes:
+        try:
+            actual=_observed_binding(terminal,pane['terminal_id'])
+            if actual is not None:
+                if matches_conversation(request.resume,actual):return actual,False
+            elif not terminal.ordinary_shell(pane,zsh):
+                ambiguous=True
+        except errors:
+            ambiguous=True
+    if ambiguous:return None,True
+    if terminal.complete_panes()!=panes:return None,True
     return None,False
 
 
@@ -195,7 +212,15 @@ def launch(request: LaunchRequest, paths, runner):
     artifact=None
     try:
         if request.mode=='resume' and not request.allow_duplicate:
-            existing,ambiguous=_existing(request,terminal)
+            prior_deadline=terminal.deadline
+            terminal.deadline=time.monotonic()+30
+            try:
+                existing,ambiguous=_existing(request,terminal,inspection.zsh)
+                if time.monotonic()>=terminal.deadline:existing,ambiguous=None,True
+            except (OSError,ValueError,KeyError,TypeError,AttributeError,TimeoutError,subprocess.SubprocessError):
+                existing,ambiguous=None,True
+            finally:
+                terminal.deadline=prior_deadline
             if existing:
                 output.update(status='already_open',window_id=existing.window_id,tab_id=existing.tab_id,
                               session_id=existing.terminal_id,identity='verified',history='verified')

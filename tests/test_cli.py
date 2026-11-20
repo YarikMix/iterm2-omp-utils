@@ -162,6 +162,7 @@ class CliTests(MigrationFixture):
                 profile = self.profile
                 binding = SessionBinding('S','T','W',saved,sid,self.home,profile,123,'birth','generation')
                 class Terminal:
+                    deadline=None
                     def __init__(self,*args):pass
                     def bindings(self):return [binding] if observed['creates'] else []
                     def process_start(self,pid):return 'birth'
@@ -172,6 +173,7 @@ class CliTests(MigrationFixture):
                     def profiles(self):
                         return [dict(name='Shell' if mode=='shell' else 'Omp',guid='G')]
                     def panes(self):return [dict(terminal_id='S',tab_id='T',window_id='W')] if observed['creates'] else []
+                    def complete_panes(self):return self.panes()
                     def profile(self,name):return dict(name='Shell' if mode=='shell' else 'Omp',guid='G')
                     def variable(self,terminal_id,name):
                         return {'session.profileName':'Shell' if mode=='shell' else 'Omp',

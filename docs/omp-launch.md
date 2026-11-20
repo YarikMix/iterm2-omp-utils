@@ -89,12 +89,29 @@ LaunchRequest has window_id/profile/cwd/omp_profile/mode/handoff/resume plus
 request (`--allow-duplicate`), never an automated retry. Before resume, matching
 live candidates require independent SDK/user-variable identity and shared kernel
 process birth evidence. Moved addresses are returned as currently observed;
-incomplete live candidates or uninstrumented panes block creation instead of
-silently duplicating. An empty/missing/unavailable registry is not negative
-evidence. Independently observed live bindings may identify an already-open
-dialog or a different dialog; unavailable identity remains genuine uncertainty.
-No unrelated feature installation is forced; new/handoff/shell remain independent,
-and duplicate creation still requires explicit `--allow-duplicate` authorization.
+incomplete live candidates block creation instead of silently duplicating. Positive
+matches win regardless of earlier ambiguous unrelated panes. An empty/missing registry
+is not negative evidence. Literal null identity may exclude an ordinary local shell
+only with independent same-pane SDK addresses, positive root/job PIDs and canonical
+`/dev/ttysN`, stable job birth, foreground association and selected system zsh image.
+Root and job must agree except for the positively verified native login form: an
+unstopped UID-0 SDK root with exact raw kernel `/usr/bin/login` path, directly parenting
+the same own-UID foreground zsh job on that TTY. Repeated parent/census/path samples
+and scoped rechecks reject restart/reparent/exec changes. Protected login's unavailable
+birth is not required or invented; the job still requires birth-qualified kernel proof.
+The raw path helper grants no liveness authority and existing image callers retain
+their birth-qualified contract. Malformed, missing or encoded-null identity stays unknown.
+Two bounded process/TTY samples reject other stopped/traced or foreign-UID processes,
+other concrete TTY holders and unavailable/diagnostic output. Same-UID prompt workers
+without TTY access are allowed; scoped `/dev/tty` holders additionally require stable
+birth and the same canonical system zsh image. No helper-name or foreground-only
+heuristic is used. `lsof -t +w` preserves warnings, which block exclusion.
+Negative decisions also require independent raw SDK inventories before and after
+the scan to match the visible typed window/tab/pane sets. Buried, minimized, mux,
+malformed or changing inventory blocks rather than guessing. This conservative
+tradeoff can refuse resume in busy or unsupported terminals. Observations are not
+atomic against a process/session starting afterward. New/handoff/shell remain
+independent; duplicate opt-in still requires explicit human authorization.
 
 Exit 2 / blocked precedes creation. Exit 3 / created_unverified or unknown keeps
 all known SDK IDs without filling missing IDs from inventory. Exit 0 / launched
@@ -109,6 +126,7 @@ Plain text output includes all four proof states and known addresses just as
 JSON does; command success retains its independent exit semantics.
 Identity transport uses the contract in omp-identity.md, never a registry echo.
 
-External reads are at most 10 seconds, SDK create plus launch observations share
-30 seconds from creation, ack separately 120. All execution/RED/GREEN and live
-acceptance are queued to Task10; no runtime success is claimed here.
+External reads are at most 10 seconds. Standard resume duplicate preflight has a
+separate 30-second bound restored before creation; SDK create plus launch observations
+share 30 seconds from creation, ack separately 120. Offline regression results do
+not establish live iTerm2/omp acceptance.

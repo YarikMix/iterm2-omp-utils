@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Resume now screens literal-null ordinary shell panes only with independent scoped
+SDK root/job/TTY and stable Darwin image/foreground evidence, bounded process and
+TTY-holder checks (including scoped `/dev/tty` holders). Hidden/minimized/mux or
+incomplete/changing SDK inventory blocks negative decisions; exact live matches
+still win across pane order and moved addresses. Malformed identity remains unknown.
+Duplicate preflight is bounded separately; no automatic duplicate override is added.
+
 Launch command proof now accepts iTerm2's basename-only argv[0] only with an
 otherwise exact approved argv and independent live foreground-job evidence for
 the created session's integer PID and exact TTY. Repeated command/binding, birth,
