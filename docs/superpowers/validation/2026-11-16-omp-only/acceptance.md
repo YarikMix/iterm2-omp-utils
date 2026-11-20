@@ -137,14 +137,19 @@ After the scoped review, one fresh `Default` shell tab and one fresh
 the empty omp tab also returned verified live identity. Both tests used an
 explicit window. No prompts, history restore, or clipboard operations.
 
+A separately authorized fresh handoff used the default omp storage profile.
+The launcher verified the command and live identity and accepted the private
+receipt from that identity (`ack=received`). The only task was to read and
+acknowledge the handoff. No settings, clipboard operations, or history restore.
+
 ## Remaining acceptance and release gates
 
 Persisted migration is verified; overall Task10/native UI acceptance is not.
 Create only explicitly authorized bounded own test tabs and preserve all IDs.
 Clipboard checks require separate temporary preserve/replace/restore permission.
 
-Pending real surfaces: selected-profile handoff with actual new ID and fresh
-ack under autoResume; exact resume/continuation and no duplicate-open;
+Pending real surfaces: handoff with a named omp profile and with effective
+autoResume enabled; exact resume/continuation and no duplicate-open;
 native idle/working/blocked/done/error; exactly one notification
 with receiver/macOS behavior; EN/RU Cmd+C/paste/Alt+Enter and unchanged Ctrl+Q;
 cd/reset/APS/light-dark/appearance and project shell buttons.
