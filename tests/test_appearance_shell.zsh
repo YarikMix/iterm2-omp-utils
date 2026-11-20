@@ -429,8 +429,25 @@ class Connection:
                     except ProcessLookupError: pass
 
     def test_fd_setup_failure_does_not_signal_a_finished_helper(self):
-        p=self.run_shell("function sysopen { sleep .15; return 1; }; function TRAPDEBUG { [[ $ZSH_DEBUG_CMD == 'builtin kill -TERM '* ]] && print signal >> \"$TEST_ROOT/signals\"; return 0; }; source \"$TEST_ROOT/appearance.zsh\"",source=False)
+        p=self.run_shell(r'''
+function sysopen {
+  [[ $argv[-1] == /dev/fd/<-> ]] || return 1
+  local fixture_fd=${argv[-1]#/dev/fd/} fixture_discard fixture_result
+  # Fail setup only after the exact supervisor lifetime pipe confirms EOF.
+  builtin sysread -i "$fixture_fd" -t 3 fixture_discard 2>/dev/null
+  fixture_result=$?
+  (( fixture_result == 5 )) || return 1
+  print -r -- confirmed-eof > "$TEST_ROOT/injected-after-eof"
+  return 1
+}
+function TRAPDEBUG {
+  [[ $ZSH_DEBUG_CMD == 'builtin kill -TERM '* ]] && print signal >> "$TEST_ROOT/signals"
+  return 0
+}
+source "$TEST_ROOT/appearance.zsh"
+''',source=False)
         self.assertEqual(p.returncode,0,p.stderr)
+        self.assertEqual((self.root/'injected-after-eof').read_text(),'confirmed-eof\n')
         self.assertFalse((self.root/'signals').exists())
     def test_lifetime_fd_is_not_inherited_by_native_omp(self):
         p=self.run_shell(self.wait_helper()+'export TEST_LIFETIME_FD=$_iterm2_utils_appearance_fd; command omp probe')
