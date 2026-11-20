@@ -181,7 +181,8 @@ blocked/error; exactly one notification
 with receiver/macOS behavior; EN/RU Cmd+C/paste/Alt+Enter and unchanged Ctrl+Q;
 cd/reset/APS/light-dark/appearance and project shell buttons.
 
-A private beta archive was rebuilt from resume-correction commit `19ed636a82`.
-The SHA-256 matched its checksum file, and both CLI and `launch-omp` help ran
-from a fresh extraction. This verifies packaging, not native readiness. No
-merge, push, or publication has occurred. That archive predates `close-tab`.
+A private beta archive was rebuilt from the `close-tab` commit `d3bfb127b5`.
+The SHA-256 matched its checksum file; `close-tab --help` and isolated
+`iterm2-launch` skill bootstrap succeeded from a fresh extraction. The installed
+copy in the isolated profile matched the bundled source. This verifies
+packaging, not full native readiness. No merge, push, or publication.
