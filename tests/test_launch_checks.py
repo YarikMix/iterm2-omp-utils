@@ -62,12 +62,22 @@ class LaunchChecksTests(unittest.TestCase):
 
     def test_bun_evidence_is_tied_to_exact_selected_script(self):
         with TemporaryDirectory() as tmp:
-            root = Path(tmp); script = root/'cli.js'; script.write_text('#!/usr/bin/env bun\n// @bun\n')
+            root = Path(tmp).resolve(); script = root/'cli.js'; script.write_text('#!/usr/bin/env bun\n// @bun\n')
             bun = root/'bun'; bun.write_text('binary'); bun.chmod(0o700)
             script.chmod(0o700)
             prefixes = executable_prefixes(script,{'PATH':str(root)})
             self.assertIn((str(bun), str(script)), prefixes)
             self.assertNotIn(('bun',), prefixes)
+
+    def test_executable_alias_preserves_selected_and_physical_prefixes(self):
+        with TemporaryDirectory() as tmp:
+            root = Path(tmp).resolve()
+            physical = root/'physical'; physical.mkdir()
+            alias = root/'alias'; alias.symlink_to(physical, target_is_directory=True)
+            binary = physical/'omp'; binary.write_bytes(b'\xcf\xfa\xed\xfe'+b'\x00'*300)
+            binary.chmod(0o700)
+            self.assertEqual(executable_prefixes(alias/'omp', {}),
+                             ((str(alias/'omp'),), (str(binary),)))
 
     def test_modes_and_exact_resume_header_are_validated(self):
         with TemporaryDirectory() as tmp:
@@ -97,7 +107,7 @@ class LaunchChecksTests(unittest.TestCase):
 
     def test_native_macho_header_is_not_decoded_as_text(self):
         with TemporaryDirectory() as tmp:
-            binary=Path(tmp)/'omp';binary.write_bytes(b'\xcf\xfa\xed\xfe'+b'\x00'*300);binary.chmod(0o700)
+            binary=Path(tmp).resolve()/'omp';binary.write_bytes(b'\xcf\xfa\xed\xfe'+b'\x00'*300);binary.chmod(0o700)
             self.assertEqual(executable_prefixes(binary,{}),((str(binary),),))
             binary.write_bytes(b'#!/bin/sh\n')
             with self.assertRaises(ValueError):executable_prefixes(binary,{})

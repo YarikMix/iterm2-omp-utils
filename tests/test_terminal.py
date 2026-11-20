@@ -55,7 +55,7 @@ class TerminalTests(unittest.TestCase):
         pane=dict(terminal_id='S',tab_id='T',window_id='W')
         sample={**pane,'identity':None,'pid':123,'job_pid':123,'tty':'/dev/ttys007'}
         state=dict(sample=sample,ps=f'123 1 {os.getuid()} S+\n124 123 {os.getuid()} S\n',
-                   holders='123\n',alias='',alias_code=1,stderr='',birth='birth',image='/bin/zsh',
+                   holders='123\n',alias='',alias_code=1,stderr='',birth='birth',image=str(Path('/bin/zsh').resolve()),
                    canonical='124 ttys007\n')
         calls=[]
         def run(argv,**kw):
@@ -85,6 +85,7 @@ class TerminalTests(unittest.TestCase):
 
     def test_idle_root_shell_allows_prompt_worker_without_tty_access(self):
         terminal,pane,state,calls=self.shell_fixture()
+        self.assertEqual(state['image'], str(Path('/bin/zsh').resolve()))
         self.assertTrue(terminal.ordinary_shell(pane,Path('/bin/zsh')))
         self.assertIn((['/usr/sbin/lsof','-nP','-t','+w','-a','-p','124','--','/dev/tty'],{'timeout':10}),calls)
         self.assertGreaterEqual(sum(argv[0]=='/bin/ps' and '-t' in argv for argv,kw in calls),2)
@@ -104,7 +105,7 @@ class TerminalTests(unittest.TestCase):
                 if fault=='holder':state['holders']='123\n124\n'
                 if fault=='alias':
                     state.update(alias='124\n',alias_code=0)
-                    terminal.process_image=lambda pid:'/bin/bun' if pid==124 else '/bin/zsh'
+                    terminal.process_image=lambda pid:'/bin/bun' if pid==124 else state['image']
                 if fault=='diagnostic':state['stderr']='warning'
                 if fault=='alias-failed':state['alias_code']=2
                 if fault=='empty-canonical':state['canonical']=''
@@ -188,7 +189,7 @@ class TerminalTests(unittest.TestCase):
                         if fault=='census':state['ps']=f'123 1 {os.getuid()} S+\n'
                         if fault=='missing':return None
                         if fault=='image' and len(reads)>1:return '/bin/bun'
-                    return '/bin/zsh'
+                    return state['image']
                 terminal.process_image=image
                 self.assertFalse(terminal.ordinary_shell(pane,Path('/bin/zsh')))
 

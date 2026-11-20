@@ -316,7 +316,7 @@ class ExportTests(unittest.TestCase):
 
     def test_fresh_extract_imports_and_bootstraps_all_bundles_without_optional_dependencies(self):
         with TemporaryDirectory() as tmp:
-            root = Path(tmp); repo = self.fixture(root)
+            root = Path(tmp).resolve(); repo = self.fixture(root)
             extracted = self.extract(build_release.build(repo, root/'dist'), root/'extract')
             shutil.rmtree(repo)
             shutil.rmtree(root/'dist')
@@ -382,7 +382,7 @@ assert raw == '# keep\nterminal: {programStatus: true}\nmodel: unchanged\n', raw
         bun = shutil.which('bun')
         self.assertIsNotNone(bun, 'Integrated native YAML coverage requires Bun')
         with TemporaryDirectory() as tmp:
-            root = Path(tmp); repo = self.fixture(root)
+            root = Path(tmp).resolve(); repo = self.fixture(root)
             extracted = self.extract(build_release.build(repo, root/'dist'), root/'extract')
             shutil.rmtree(repo)
             home = root/'home'; home.mkdir()

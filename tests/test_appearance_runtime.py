@@ -983,7 +983,7 @@ class OmpIdentityTests(unittest.IsolatedAsyncioTestCase):
 
     @unittest.skipUnless(sys.platform=='darwin','Requires Darwin process-birth and foreground kernel ABI')
     async def test_suspend_to_shell_restores_original_without_removing_live_dialog(self):
-        script = r"""import asyncio,fcntl,json,os,pathlib,signal,subprocess,sys,termios
+        script = r"""import asyncio,fcntl,json,os,pathlib,select,signal,subprocess,sys,termios
 from unittest.mock import patch
 from runtime import appearance,terminal_identity
 from iterm2_utils.omp_sessions import read_bindings
@@ -991,18 +991,26 @@ from tests.test_appearance_runtime import FakeAPI,UUID
 root=pathlib.Path(sys.argv[1]); tty=os.ttyname(0)
 registry=root/'identity'; registry.mkdir(mode=0o700)
 ready_read,ready_write=os.pipe()
+os.set_inheritable(ready_write,False)
 child=os.fork()
 if child==0:
-    os.close(ready_read); os.setpgid(0,0); os.write(ready_write,b'ready'); os.close(ready_write)
-    signal.pause(); os._exit(0)
-os.close(ready_write); os.read(ready_read,5); os.close(ready_read)
+    try:
+        os.close(ready_read); os.setpgid(0,0)
+        os.execv('/bin/sleep',['sleep','30'])
+    except BaseException:
+        os.write(ready_write,b'exec failed')
+        os._exit(1)
+os.close(ready_write)
 signal.signal(signal.SIGTTOU,signal.SIG_IGN)
 try:
+    # EOF proves the close-on-exec descriptor closed before sampling the image.
+    assert select.select([ready_read],[],[],3)[0], 'exec readiness timed out'
+    assert os.read(ready_read,32)==b'', 'exec failed'
     os.tcsetpgrp(0,child)
     birth=terminal_identity.process_start(child)
     assert birth is not None
-    image=terminal_identity.process_image(os.getpid())
-    assert image is not None and pathlib.Path(image).samefile(sys.executable)
+    image=terminal_identity.process_image(child)
+    assert image is not None and pathlib.Path(image).samefile('/bin/sleep')
     def detached_state():
         code='import sys; from runtime.terminal_identity import foreground_state; print(foreground_state(int(sys.argv[1]),sys.argv[2],sys.argv[3]))'
         result=subprocess.run([sys.executable,'-c',code,str(child),birth,tty],stdin=subprocess.DEVNULL,
@@ -1036,7 +1044,13 @@ try:
                           binding=read_bindings(registry)[0].session_id,record=path.exists(),
                           foreground=terminal_identity.foreground_process(child,birth,tty))))
 finally:
-    os.tcsetpgrp(0,os.getpgrp()); os.kill(child,signal.SIGKILL); os.waitpid(child,0)
+    os.close(ready_read)
+    os.tcsetpgrp(0,os.getpgrp())
+    try:
+        os.kill(child,signal.SIGKILL)
+    except ProcessLookupError:
+        pass
+    os.waitpid(child,0)
 """
         with tempfile.TemporaryDirectory() as root:
             master, slave = pty.openpty()

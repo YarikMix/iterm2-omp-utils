@@ -283,7 +283,8 @@ assert (current/'LICENSE').is_file() and (current/'THIRD_PARTY_NOTICES.md').is_f
         self.addCleanup(os.close, master)
         self.addCleanup(os.close, slave)
         terminal = '12345678-1234-4234-8234-123456789ABC'
-        initial = {terminal: dict(tty=os.ttyname(slave), profile={'color': 'parent'}, snapshot='saved')}
+        initial = {terminal: dict(tty=os.ttyname(slave), profile={'color': 'parent'},
+                                  snapshot=json.dumps({'launch_id': None, 'properties': None}))}
         state = home/'sdk-state.json'
         state.write_text(json.dumps(initial))
         mutations = home/'sdk-mutations.jsonl'
@@ -292,12 +293,14 @@ assert (current/'LICENSE').is_file() and (current/'THIRD_PARTY_NOTICES.md').is_f
                    ITERM2_UTILS_PYTHON=sys.executable, ITERM2_UTILS_APPEARANCE_CONFIG=str(config),
                    PYTHONPATH=str(home))
         for phase in ('shell', 'launch', 'return'):
-            result = subprocess.run([sys.executable, str(current/'appearance.py'), '--config', str(config),
-                                     '--cwd', str(project), '--phase', phase],
-                                    env=env, capture_output=True, text=True, timeout=5)
-            self.assertEqual((result.returncode, result.stdout, result.stderr), (0, 'ignored\n', ''))
-            self.assertEqual(json.loads(state.read_text()), initial)
-            self.assertFalse(mutations.exists())
+            for tty_args in ([], ['--tty', '/dev/null']):
+                with self.subTest(phase=phase, tty_args=tty_args):
+                    result = subprocess.run([sys.executable, str(current/'appearance.py'), '--config', str(config),
+                                             '--cwd', str(project), '--phase', phase, *tty_args],
+                                            env=env, capture_output=True, text=True, timeout=5)
+                    self.assertEqual((result.returncode, result.stdout, result.stderr), (0, 'ignored\n', ''))
+                    self.assertEqual(json.loads(state.read_text()), initial)
+                    self.assertFalse(mutations.exists())
         def own_terminal():
             os.setsid()
             fcntl.ioctl(slave, termios.TIOCSCTTY, 0)
@@ -306,16 +309,22 @@ assert (current/'LICENSE').is_file() and (current/'THIRD_PARTY_NOTICES.md').is_f
                                 preexec_fn=own_terminal, text=True, timeout=7)
         self.assertEqual((result.returncode, result.stdout, result.stderr), (0, '', ''))
         updated = json.loads(state.read_text())[terminal]
-        baseline = json.loads(updated['snapshot'])
-        self.assertIsNone(baseline['launch_id'])
-        self.assertIsNone(baseline['properties'])
-        self.assertEqual(baseline['shell_baseline']['owner'][0], terminal)
-        self.assertEqual(baseline['shell_baseline']['cwd'], str(project.resolve()))
+        if sys.platform == 'darwin':
+            baseline = json.loads(updated['snapshot'])
+            self.assertIsNone(baseline['launch_id'])
+            self.assertIsNone(baseline['properties'])
+            self.assertEqual(baseline['shell_baseline']['owner'][0], terminal)
+            self.assertEqual(baseline['shell_baseline']['cwd'], str(project.resolve()))
+        else:
+            # A scoped PTY permits cd styling, but cannot prove a resumable native baseline.
+            self.assertIsNone(updated['snapshot'])
         self.assertEqual(updated['profile']['tab_color'], [18, 52, 86])
         self.assertEqual(updated['profile']['custom_icon_path'], str(current.resolve()/'assets/appearance/ios.png'))
         records = [json.loads(line) for line in mutations.read_text().splitlines()]
         self.assertEqual([(sid, kind) for sid, kind, _ in records],
-                         [(terminal, 'snapshot'), (terminal, 'profile'), (terminal, 'snapshot')])
+                         [(terminal, 'snapshot'), (terminal, 'profile')] +
+                         ([(terminal, 'snapshot')] if sys.platform == 'darwin' else []))
+        self.assertEqual(records[0], [terminal, 'snapshot', None])
 
     def test_installed_chpwd_hook_survives_source_removal(self):
         from tests.test_lifecycle import LifecycleFixture

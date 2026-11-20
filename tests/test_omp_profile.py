@@ -28,7 +28,7 @@ class OmpProfileTests(unittest.TestCase):
 
     def test_directory_overrides_match_node_path_rules(self):
         with TemporaryDirectory() as root, contextlib.chdir(root):
-            home = Path(root)
+            home = Path(root).resolve()
             for env, expected in (
                     ({'PI_CONFIG_DIR':'/custom/config'}, home/'custom/config/agent'),
                     ({'PI_CONFIG_DIR':'./custom/../config'}, home/'config/agent'),
