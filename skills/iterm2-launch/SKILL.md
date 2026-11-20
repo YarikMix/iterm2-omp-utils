@@ -1,9 +1,9 @@
 ---
 name: iterm2-launch
-description: Use when opening an ordinary iTerm2 tab, a separate omp task, or an exact saved omp conversation on macOS with zsh. Not for internal subagents.
+description: Use when opening or explicitly closing one iTerm2 tab, starting a separate omp task, or opening an exact saved omp conversation on macOS with zsh. Not for internal subagents.
 ---
 
-# One shell or omp tab
+# One shell or omp tab; exact tab close
 
 An ordinary or unspecified tab means **shell**, not an agent choice. An explicit
 omp request selects new, handoff or exact resume. Create at most one tab per
@@ -14,6 +14,44 @@ An internal-subagent request stays internal. An explicitly unsupported Codex/Cla
 request is not permission to substitute an external omp tab: report unsupported
 consumer without creating anything. Only an explicit separate omp session selects
 agent mode; an ordinary tab selects shell without an agent-choice menu.
+
+## Close one explicitly authorized tab
+
+A request to close selects `close-tab`, not launch/setup. Use a verified checkout
+and existing Python 3.11+ with the official SDK; preserve absolute `sys.executable`
+without resolving virtualenv symlinks. Check `close-tab --help` with that Python.
+Missing SDK/API or denied permission blocks; do not install, change permissions,
+use GUI/another API, or type into any terminal.
+
+Select the authorized `(window_id, tab_id, session_id)` from a fresh complete
+read-only native `iterm2.rpc.async_list_sessions` snapshot, including split-tree,
+minimized and buried sessions. If the user supplied exact IDs, keep them exact.
+Ambiguous intent requires clarification, not focus/title/recency or a guessed
+target. The session ID is the **terminal** ID, not the omp conversation ID.
+Require one visible session and no minimized panels in the target tab. Unrelated
+splits/hidden sessions are accounted for, never closed. Warn that the selected
+tab and its running work will be closed, then invoke once for that authorization:
+
+```sh
+"$launch_python" -m iterm2_utils close-tab --window WINDOW_ID --tab TAB_ID --session TERMINAL_ID --json
+```
+
+The CLI rechecks the exact tuple before one official native tab-only close with
+`force=False`; no profile/settings/agent/Bun/history probes. No window/session/
+process close, retry, force, target substitution or cleanup fallback. SDK import,
+authorization and inventory are supervised (10s each); close and fresh absence
+proof share 30s, and the entire worker is bounded at 60s. Preserve/observe the same
+job if a host tool wait ends; never start a second invocation.
+
+Report returned IDs and status in either plain or JSON output:
+`closed`/0 requires native `OK` plus a fresh complete snapshot without **both**
+target tab ID and terminal ID, including minimized/buried sessions.
+`blocked`/2 means no request was sent or native `NOT_FOUND`/`USER_DECLINED` refused
+it; refusal is not a successful close. `unknown`/3 includes timeout, failed worker
+protocol, missing/non-OK results or retained/moved/buried target IDs after `OK`.
+Inspect read-only and report uncertainty; never retry automatically. The SDK
+close and snapshots are not atomic against concurrent iTerm2 changes. Copying or
+updating this source skill does not install it or authorize any close.
 
 ## Prepare
 

@@ -46,9 +46,11 @@ def _emit(args, output):
         print(json.dumps(output, sort_keys=True))
     else:
         # JSON escaping keeps terminal control characters inert in text output too.
+        fields = (('window_id','tab_id','session_id','profile','command','identity','history','ack')
+                  if args.command == 'launch-omp' else
+                  ('window_id','tab_id','session_id') if args.command == 'close-tab' else ())
         print(json.dumps(output.get('status', output['mode']))+
-              (' '+ ' '.join(key+'='+json.dumps(output.get(key))
-               for key in ('window_id','tab_id','session_id','profile','command','identity','history','ack')) if args.command=='launch-omp' else ''))
+              (' '+ ' '.join(key+'='+json.dumps(output.get(key)) for key in fields) if fields else ''))
         for finding in output.get('findings', []):
             print(json.dumps(finding['message']))
     return _exit([Finding(**f) for f in output.get('findings', [])])
@@ -94,6 +96,11 @@ def _parser():
     p.add_argument('--resume-id')
     p.add_argument('--allow-duplicate',action='store_true',help='Explicitly authorize an additional exact-resume tab.')
     p.add_argument('--json',action='store_true')
+    p = sub.add_parser('close-tab',help='Close one exact single-session tab, once, without force or retries.')
+    p.add_argument('--window',required=True)
+    p.add_argument('--tab',required=True)
+    p.add_argument('--session',required=True,help='Exact iTerm2 terminal session ID, not an omp conversation ID.')
+    p.add_argument('--json',action='store_true')
     p = sub.add_parser('bootstrap-skill',help='Copy one skill; authorize no terminal settings changes.')
     p.add_argument('--skill',choices=['iterm2-setup','iterm2-launch','iterm2-projects'],default='iterm2-setup')
     p.add_argument('--omp-profile')
@@ -129,6 +136,12 @@ def main(argv=None):
                     return _problem(args,flag+'_selection','A local configuration requires its explicitly selected feature.')
     except SystemExit as error:
         return int(error.code)
+    if args.command == 'close-tab':
+        import asyncio
+        from .launch_api import close_tab
+        result = asyncio.run(close_tab(args.window,args.tab,args.session))
+        _emit(args,dict(mode='close_tab',**asdict(result)))
+        return {'closed':0,'blocked':2,'unknown':3}[result.status]
     runner, paths = Runner(), resolve_paths()
     selected = None
     shell = args.command=='launch-omp' and args.mode=='shell'

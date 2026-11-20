@@ -394,3 +394,57 @@ Profile = SimpleNamespace(async_get=profiles)
                         self.assertEqual(json.loads(out)['selection']['omp_profile']['name'],'work')
                     code,out,err=self.invoke(['uninstall','--features','shell','--json'],environment=invalid)
                     self.assertEqual(code,0,out+err)
+
+    def test_close_tab_early_dispatch_uses_exact_sdk_target_without_discovery(self):
+        from tests.test_launch_api import CLOSE_SDK
+        sdk=self.home/'close-sdk'; sdk.mkdir()
+        log=sdk/'sdk.jsonl'
+        before=self.snapshot()
+        for scenario,status,expected in (('ok','closed',0),('declined','blocked',2),
+                                         ('buried_session','unknown',3)):
+            for structured in (True,False):
+                with self.subTest(scenario=scenario,json=structured):
+                    log.unlink(missing_ok=True)
+                    (sdk/'iterm2.py').write_text(CLOSE_SDK.replace('SCENARIO_VALUE',repr(scenario)))
+                    environment={'PYTHONPATH':str(sdk),'FAKE_SDK_LOG':str(log),
+                        'PYTHONDONTWRITEBYTECODE':'1','OMP_PROFILE':'INVALID!',
+                        'PI_CONFIG_DIR':'invalid','PI_CODING_AGENT_DIR':'invalid'}
+                    with patch.object(cli,'resolve_paths',side_effect=AssertionError('settings paths')), \
+                            patch.object(cli,'resolve_omp_profile',side_effect=AssertionError('profile')), \
+                            patch.object(cli,'discover',side_effect=AssertionError('discovery')), \
+                            patch.object(self.runner,'run',side_effect=AssertionError('external probes')):
+                        out_stream,err_stream=io.StringIO(),io.StringIO()
+                        with patch.object(cli,'Runner',side_effect=AssertionError('runner')), \
+                                patch.dict(os.environ,{'HOME':str(self.home),**environment},clear=True), \
+                                contextlib.redirect_stdout(out_stream),contextlib.redirect_stderr(err_stream):
+                            code=cli.main(['close-tab','--window','W','--tab','T','--session','S',
+                                *(['--json'] if structured else [])])
+                        out,err=out_stream.getvalue(),err_stream.getvalue()
+                    self.assertEqual(code,expected,out+err)
+                    if structured:
+                        output=json.loads(out)
+                        self.assertEqual((output['status'],output['window_id'],output['tab_id'],
+                                          output['session_id']),(status,'W','T','S'))
+                    else:
+                        self.assertIn(json.dumps(status),out)
+                        for key,value in (('window_id','W'),('tab_id','T'),('session_id','S')):
+                            self.assertIn(key+'='+json.dumps(value),out)
+                    self.assertNotIn('PRIVATE',out+err)
+                    calls=[json.loads(line) for line in log.read_text().splitlines()]
+                    self.assertEqual([value for kind,value in calls if kind=='close_tab'],
+                        [dict(sessions=None,tabs=['T'],windows=None,force=False)])
+        # The SDK fixtures are the only filesystem writes; no handoff/config/receipt.
+        after=self.snapshot()
+        for key in list(after):
+            if key.startswith('close-sdk/'):after.pop(key)
+        self.assertEqual(after,before)
+
+    def test_close_tab_requires_all_exact_ids_and_rejects_launch_options(self):
+        common=['close-tab','--window','W','--tab','T','--session','S']
+        with patch.object(cli,'discover',side_effect=AssertionError('discovery')):
+            for args in (['close-tab'],common[:-2],common+['--force'],
+                         common+['--profile','Shell'],common+['--cwd',str(self.home)]):
+                with self.subTest(args=args):
+                    code,out,err=self.invoke(args)
+                    self.assertEqual(code,2,out+err)
+        self.assertEqual(self.runner.calls,[])

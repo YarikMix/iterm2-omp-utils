@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Added explicit `close-tab --window ID --tab ID --session ID`: one native tab-only
+SDK close without force/retry, guarded by exact unique single-visible-session
+target inventory. `closed` requires native OK and fresh complete absence of both
+tab and terminal IDs, including minimized/buried; explicit refusal is blocked,
+timeout/protocol/incomplete proof is unknown. Same-Python worker supervision,
+plain/JSON IDs and early dispatch avoid settings/profile/agent probes. Source
+launch skill and documentation now include explicit close; no installed copy
+is changed and offline checks do not establish live close acceptance.
+
 Resume now screens literal-null ordinary shell panes only with independent scoped
 SDK root/job/TTY and stable Darwin image/foreground evidence, bounded process and
 TTY-holder checks (including scoped `/dev/tty` holders). Hidden/minimized/mux or

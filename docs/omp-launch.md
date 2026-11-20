@@ -130,3 +130,45 @@ External reads are at most 10 seconds. Standard resume duplicate preflight has a
 separate 30-second bound restored before creation; SDK create plus launch observations
 share 30 seconds from creation, ack separately 120. Offline regression results do
 not establish live iTerm2/omp acceptance.
+
+## Exact tab close
+
+`python3 -m iterm2_utils close-tab --window ID --tab ID --session ID [--json]`
+is a separate, explicitly authorized destructive operation, not launch cleanup.
+All three exact IDs are required; session means iTerm2 terminal, not omp history.
+Choose the authorized tuple from fresh complete native inventory, not focus,
+title or recency. Warn about closing that tab and its running work. The CLI
+dispatches before settings paths, omp profiles or executable/agent discovery.
+It uses the same absolute Python and installed official SDK, without installation,
+terminal typing, GUI, settings changes or an alternative API.
+
+One bounded `launch_api.py --close` worker owns connection, native
+`iterm2.rpc.async_list_sessions` before/after and at most one
+`iterm2.rpc.async_close(connection, tabs=[tab_id], force=False)`. No session,
+window or process close is used. Raw `HasField` envelopes, split-tree `child`
+oneofs, window/tab IDs, active visible sessions and all `unique_identifier`
+summaries are validated. Duplicate or malformed identities/trees block before
+close. The target must match its exact window, one visible terminal ID and zero
+minimized sessions, and must not be a tmux target. Other valid split/minimized/
+buried sessions are fully accounted for without being closed. The conservative
+resume inventory parser and launch creation protocol are unchanged.
+
+Native `OK` (0) alone is insufficient. `closed` / exit 0 requires a fresh complete
+snapshot with both target tab ID and terminal ID absent everywhere, including
+minimized/buried summaries. `blocked` / exit 2 means definitely no request sent
+or explicit `NOT_FOUND` (1) / `USER_DECLINED` (2). Missing/empty/extra/unknown
+native statuses, incomplete post-inventory or retained/moved/buried IDs after
+`OK` yield `unknown` / exit 3. Worker timeout or failed/malformed protocol always
+means unknown once spawned, even if it might not have sent the RPC.
+Plain and JSON output retain the supplied window/tab/session IDs and fixed
+findings, never native exception details, commands, credentials or screen data.
+
+Import/authorization and inventory phases are supervised at 10s; native external
+operations have 10s bounds, with close and absence proof sharing 30s. A 60s
+whole-worker limit also covers synchronous import/auth hooks; teardown is bounded
+and cannot turn a failed observation into success. A host tool wait ending is not
+permission to re-invoke: observe the same supervised job. Unknown outcomes never
+auto-retry, force, substitute a target or fall back to window/process closure.
+Native close and snapshots are not atomic against concurrent iTerm2 changes.
+Offline fixtures establish neither real close behavior nor human confirmation;
+live acceptance uses only a separately authorized disposable shell tab.

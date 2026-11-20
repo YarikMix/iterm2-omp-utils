@@ -128,6 +128,33 @@ Create+command proof до 30 секунд; handoff ack отдельно до 120
 истории не подтверждено». Полный контракт: [omp-launch](docs/omp-launch.md),
 [identity](docs/omp-identity.md). Raw argv/prompts/screens/settings не печатаются.
 
+## Явное закрытие одной вкладки
+
+Только по отдельному запросу на закрытие выберите точный адрес из свежего полного
+native SDK inventory (включая split/minimized/buried) и предупредите о закрытии:
+
+```sh
+"$launch_python" -m iterm2_utils close-tab --window WINDOW_ID --tab TAB_ID --session TERMINAL_ID --json
+```
+
+Все три ID обязательны; `session` — terminal ID, не ID диалога omp. Перед одним
+native tab-only RPC с `force=False` проверяются окно, уникальный tab ID и ровно
+одна видимая сессия без свёрнутых панелей в целевой вкладке. Перемещённая,
+повторно использованная или неоднозначная цель блокируется. Чужие вкладки,
+включая split/hidden, не закрываются и не пропускаются при учёте.
+Профили/настройки/omp/Bun/history не читаются, SDK не устанавливается автоматически.
+
+`closed`/0 — только native `OK` и новый полный снимок без целевых tab **и** terminal
+ID, включая minimized/buried. `blocked`/2 — запрос не отправлен либо native
+`NOT_FOUND`/`USER_DECLINED`; это не успех. `unknown`/3 — timeout, неполный ответ,
+неисправный worker protocol или сохранившиеся/перемещённые IDs после `OK`.
+Plain и JSON сохраняют переданные IDs; raw ошибки SDK не публикуются.
+Внешние операции до 10с, close+proof совместно до 30с, весь worker до 60с.
+Не повторяйте неопределённый запрос, не меняйте цель и не закрывайте окно/процесс
+в качестве fallback. Снимки и close не атомарны относительно других изменений.
+Подробности: [launch skill](skills/iterm2-launch/SKILL.md),
+[контракт](docs/omp-launch.md#exact-tab-close). Source update не устанавливает skill.
+
 ## Обслуживание и ручная проверка
 
 ```sh
