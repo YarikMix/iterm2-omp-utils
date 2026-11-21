@@ -175,7 +175,9 @@ class NativeSdkTests(unittest.IsolatedAsyncioTestCase):
         async def close(): self.closed.append(True)
         self.connection = SimpleNamespace(websocket=SimpleNamespace(close=close))
         async def connect(): return self.connection
-        async def profiles(connection): return [SimpleNamespace(all_properties=copy.deepcopy(self.properties))]
+        async def profiles(connection, guids=None):
+            return [SimpleNamespace(all_properties=copy.deepcopy(self.properties))] if (
+                guids is None or self.properties['Guid'] in guids) else []
         async def default(connection): return SimpleNamespace(guid='parent-guid')
         async def app(connection):
             return SimpleNamespace(terminal_windows=[SimpleNamespace(tabs=[SimpleNamespace(all_sessions=self.sessions)])], buried_sessions=[])
@@ -184,7 +186,11 @@ class NativeSdkTests(unittest.IsolatedAsyncioTestCase):
             self.position = value; self.writes.append(('position', key, value))
         async def set_properties(connection, session_id, assignments, guids=None):
             self.writes.append((session_id, assignments, guids))
-            self.properties.update({k: json.loads(v) for k,v in assignments})
+            if session_id is None and guids == [self.properties['Guid']]:
+                # iTerm2 3.7.7 applies each assignment to the same original profile.
+                before = self.properties.copy()
+                for key, value in assignments:
+                    self.properties = dict(before, **{key: json.loads(value)})
         self.sdk = SimpleNamespace(Connection=SimpleNamespace(async_create=connect),
             Profile=SimpleNamespace(async_get=profiles, async_get_default=default), async_get_app=app,
             preferences=SimpleNamespace(PreferenceKey=SimpleNamespace(STATUS_BAR_POSITION=SimpleNamespace(value='StatusBarPosition')),
@@ -238,15 +244,29 @@ class NativeSdkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await self.operate(operation='sessions_empty', guid='parent-guid'), {'status':'conflict'})
         self.assertEqual(self.closed, [])
 
-    async def test_group_write_only_two_fields_and_exact_guid(self):
-        result = await self.operate(operation='write_bar', guid='parent-guid', value=AFTER, expected={'exists': True, 'value': BEFORE})
-        self.assertEqual(result, {'status': 'ok', 'value': {'exists': True, 'value': AFTER}})
-        session, assignments, guids = self.writes[0]
-        self.assertIsNone(session)
-        self.assertEqual(guids, ['parent-guid'])
-        self.assertEqual({k:json.loads(v) for k,v in assignments}, AFTER)
-        self.assertEqual(self.properties['Foreign'], {'preserve': True})
-        self.assertEqual(self.closed, [True])
+    async def test_native_profile_keeps_both_bar_fields_on_install_and_restore(self):
+        installed = {'Show Status Bar': True, 'Status Bar Layout': {'components': [], 'advanced': {'margin': 2}}}
+        for before, after in ((BEFORE, installed), (installed, BEFORE)):
+            result = await self.operate(operation='write_bar', guid='parent-guid', value=after,
+                                        expected={'exists': True, 'value': before})
+            self.assertEqual(result, {'status': 'ok', 'value': {'exists': True, 'value': after}})
+            self.assertEqual(self.properties['Foreign'], {'preserve': True})
+
+    async def test_bar_write_preserves_layout_edited_during_intermediate_readback(self):
+        foreign_layout = {'components': [], 'advanced': {'margin': 3}}
+        installed = {'Show Status Bar': True, 'Status Bar Layout': {'components': [], 'advanced': {'margin': 2}}}
+
+        async def get_preference(connection, key):
+            if len(self.writes) == 1:
+                self.properties['Status Bar Layout'] = foreign_layout
+            return self.position
+
+        self.sdk.preferences.async_get_preference = get_preference
+        result = await self.operate(operation='write_bar', guid='parent-guid', value=installed,
+                                    expected={'exists': True, 'value': BEFORE})
+        self.assertEqual(result, {'status': 'unknown'})
+        self.assertEqual(self.properties['Status Bar Layout'], foreign_layout)
+        self.assertEqual(len(self.writes), 1)
 
     async def test_numeric_native_visibility_round_trips_through_cas_and_restore(self):
         key = 'Show Status Bar'
@@ -341,10 +361,18 @@ class NativeSdkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {'status':'unknown'})
         self.assertNotIn('PRIVATE', repr(result))
 
-    async def test_unchanged_bound_session_after_parent_write_is_not_success(self):
+    async def test_divergent_session_after_first_field_blocks_second_write(self):
+        installed = {'Show Status Bar': True, 'Status Bar Layout': {'components': [], 'advanced': {'margin': 2}}}
+
         async def get_profile(): return SimpleNamespace(all_properties={'Guid':'parent-guid', **BEFORE})
-        self.sessions = [SimpleNamespace(session_id='session-one', async_get_profile=get_profile)]
-        result = await self.operate(operation='write_bar', guid='parent-guid', value=AFTER, expected={'exists':True,'value':BEFORE})
+
+        async def app(connection):
+            session = SimpleNamespace(session_id='new-session', async_get_profile=get_profile)
+            return SimpleNamespace(terminal_windows=[], buried_sessions=[session] if self.writes else [])
+
+        self.sdk.async_get_app = app
+        result = await self.operate(operation='write_bar', guid='parent-guid', value=installed,
+                                    expected={'exists': True, 'value': BEFORE})
         self.assertEqual(result, {'status':'unknown'})
         self.assertEqual(len(self.writes), 1)
 
