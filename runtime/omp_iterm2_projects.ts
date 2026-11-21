@@ -98,8 +98,13 @@ export function registerProjects(api:Pick<ExtensionAPI,'registerTool'|'zod'>, op
         const first=await bounded(next(0),Math.max(0,prepareDeadline-Date.now()),signal);
         if(Object.keys(first).join(',')==='result'){
           await bounded(pump,Math.max(0,prepareDeadline-Date.now()),signal);
-          if(error || frames.length!==1 || !object(first.result) || Object.keys(first.result).join(',')!=='status' ||
+          if(error || frames.length!==1 || !object(first.result) ||
              !['blocked','noop','conflict'].includes(String(first.result.status)))throw new Error('Invalid result');
+          const guidance=first.result.status==='blocked' && first.result.reason==='handoff_requires_uninstall';
+          if(Object.keys(first.result).sort().join(',')!==(guidance?'reason,status':'status'))throw new Error('Invalid result');
+          if(guidance)await bounded(ctx.ui.confirm('Edit iTerm2 projects',
+            'Use explicit uninstall to restore the original manual launcher.',{signal:signal??new AbortController().signal}),
+            120000,signal);
           return result(String(first.result.status));
         }
         if(Object.keys(first).join(',')!=='preview' || !validPreview(first.preview))throw new Error('Invalid preview');

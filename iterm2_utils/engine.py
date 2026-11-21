@@ -200,6 +200,8 @@ def _compile(edit):
 
 def _read(r,runner,context):
     kind,loc = r['kind'],r['locator']
+    if kind == 'file' and context is not None:
+        _project_file(r, context)  # Owned identity must not disappear when topology changes.
     if kind == 'symlink':
         path = Path(r['target'])
         if path.is_symlink():
@@ -357,12 +359,15 @@ def _project_file(resource, context):
         return False
     path = Path(resource['target'])
     profiles = context.paths.profiles.resolve()
-    if path in {profiles/name for name in ('iterm2-utils.json', 'iterm2-utils-project-launcher.json')}:
-        return True
+    standard = path in {profiles/name for name in ('iterm2-utils.json', 'iterm2-utils-project-launcher.json')}
     # Noncanonical sources are addressed only by exact whole-file ownership.
-    return ('shared:project-launcher' in resource['owners'] and
-            'project-launcher' in resource['owners'] and path.parent == profiles and
-            path.suffix == '.json' and not path.is_symlink() and path.resolve() == path)
+    owned = ('shared:project-launcher' in resource['owners'] and
+             'project-launcher' in resource['owners'] and path.parent == profiles and
+             path.suffix == '.json')
+    if (standard or owned) and (path.is_symlink() or path.resolve() != path or
+            path.exists() and (not path.is_file() or path.stat().st_nlink != 1)):
+        raise ValueError('Owned launcher source topology changed')
+    return standard or owned
 
 
 

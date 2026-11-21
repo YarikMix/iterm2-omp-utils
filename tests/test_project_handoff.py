@@ -16,6 +16,26 @@ from tests.support import Fixture
 
 
 class HandoffTests(unittest.TestCase):
+    def test_deep_source_and_sibling_return_bounded_cli_conflict(self):
+        from iterm2_utils import cli
+        nested = b'[' * 2000 + b'0' + b']' * 2000
+        for sibling in (False, True):
+            with self.subTest(sibling=sibling):
+                self.write_source()
+                target = self.paths.profiles/'sibling.json' if sibling else self.source
+                target.write_bytes(nested)
+                before = self.fixture.snapshot()
+                output = io.StringIO()
+                # Exercise the recursive stdlib parser even on Python with an iterative C decoder.
+                with patch.object(cli, 'Runner', return_value=self.runner), \
+                     patch.object(cli, 'discover', return_value=self.context), \
+                     patch('json.scanner.make_scanner', json.scanner.py_make_scanner), redirect_stdout(output):
+                    code = cli.main(['handoff-project-launcher', '--source', str(self.source),
+                        '--profile', 'Default', '--profile', 'Panel', '--json'])
+                self.assertEqual(code, 2)
+                self.assertEqual(json.loads(output.getvalue()), {'mode':'handoff_preview','status':'conflict','fingerprint':None})
+                self.assertEqual(self.fixture.snapshot(), before)
+
     def setUp(self):
         self.fixture = Fixture().__enter__()
         self.addCleanup(self.fixture.__exit__, None, None, None)

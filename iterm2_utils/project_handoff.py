@@ -205,7 +205,7 @@ def prepare_handoff(context: Context, runner: Runner, source: Path,
         return HandoffPreview('ready', fingerprint, checkpoint)
     except FileNotFoundError:
         return HandoffPreview('blocked')
-    except (OSError, ValueError, TypeError, KeyError, AttributeError):
+    except (OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError):
         return HandoffPreview('conflict')
 
 

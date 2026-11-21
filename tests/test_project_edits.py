@@ -10,6 +10,53 @@ from tests.test_project_launcher import ProjectLauncherTests as LauncherFixture
 
 
 class ProjectEditTests(LauncherFixture):
+    def test_handoff_symlink_source_blocks_removal_before_inverse_writes(self):
+        for removal in ('uninstall', 'revert', 'editor'):
+            with self.subTest(removal=removal):
+                fixture = ProjectEditTests(); fixture.setUp()
+                try:
+                    fixture.handed_off()
+                    folder = fixture.folder.with_name('new-project'); folder.mkdir()
+                    preview = fixture.preview('add', name='New', path=str(folder))
+                    self.assertEqual(fixture.apply(preview).status, 'applied')
+                    added = preview.after[-1].id
+                    guid = json.loads(fixture.dynamic.read_bytes())['Profiles'][-1]['Guid']
+                    fixture.native['sessions'].append(dict(id='buried', profile_guid='parent-guid',
+                        bar=copy.deepcopy(fixture.bar), references=[guid], provenance=True))
+                    target = fixture.home/'identical.json'
+                    fixture.dynamic.rename(target); fixture.dynamic.symlink_to(target)
+                    before, native = fixture.snapshot(), copy.deepcopy(fixture.native)
+                    receipt_path = fixture.context.paths.data/'receipt.json'
+                    receipt = receipt_path.read_bytes()
+                    fixture.calls.clear()
+                    if removal == 'editor':
+                        self.assertEqual(fixture.preview('remove', project=added).status, 'conflict')
+                    else:
+                        outcome = (lifecycle.uninstall(fixture.context, frozenset({'project-launcher'}), fixture.runner)
+                            if removal == 'uninstall' else engine.revert(state.load(receipt_path),
+                                fixture.context, fixture.runner, frozenset({'project-launcher'})))
+                        self.assertTrue(outcome.findings)
+                    self.assertEqual(fixture.snapshot(), before)
+                    self.assertEqual(fixture.native, native)
+                    self.assertEqual(receipt_path.read_bytes(), receipt)
+                    self.assertTrue(fixture.dynamic.is_symlink())
+                    self.assertFalse(any(c['operation'].startswith('write_') for c in fixture.calls))
+                finally:
+                    fixture.doCleanups()
+
+    def test_worker_carries_only_fixed_last_handoff_reason(self):
+        from tests.test_mcp_project_worker import ProjectWorkerTests
+        fixture = ProjectWorkerTests(); fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.handed_off()
+        self.assertEqual(fixture.apply(fixture.preview('remove', project='project-a')).status, 'applied')
+        before, native = fixture.snapshot(), copy.deepcopy(fixture.native)
+        raw = b'{"type":"prepare","change":{"operation":"remove","project":"project-b"}}\n'
+        _, frames = fixture.worker(raw + b'{"type":"commit"}\n')
+        self.assertEqual(frames, [{'result': {'status':'blocked', 'reason':'handoff_requires_uninstall'}}])
+        self.assertEqual(fixture.snapshot(), before)
+        self.assertEqual(fixture.native, native)
+
     # Reuse setup and SDK fixture, not the inherited test cases.
     def installed(self, *features):
         self.assertSuccess(self.install(*features, 'project-launcher'))

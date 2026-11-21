@@ -50,6 +50,7 @@ class ProjectPreview:
     removes_launcher: bool = False
     _witness: object = field(default=None, repr=False, compare=False)
     message: str | None = None
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -262,7 +263,8 @@ def prepare_project_edit(context: Context, runner: Runner, change: ProjectChange
         # Handoff uninstall restores manual buttons; the editor must not imply an empty panel.
         if not after and 'handoff' in document:
             return ProjectPreview('blocked', before=before,
-                message='Use explicit uninstall to restore the original manual launcher.')
+                message='Use explicit uninstall to restore the original manual launcher.',
+                reason='handoff_requires_uninstall')
         _physical_unique(after)
         snapshot, inventory = _snapshot(context, runner, receipt, document, after)
         prepared_context, plan, owners = _checkpoint(context, runner, receipt, document, after)
