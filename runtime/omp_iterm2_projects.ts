@@ -47,7 +47,7 @@ export function registerProjects(api:Pick<ExtensionAPI,'registerTool'|'zod'>, op
   const z=api.zod;
   const text=z.string().min(1).max(4096);
   const name=z.string().min(1).max(256);
-  const parameters=z.discriminatedUnion('operation',[
+  const parameters=z.union([
     z.object({operation:z.literal('add'),name,path:text}).strict(),
     z.object({operation:z.literal('rename'),project:text,name}).strict(),
     z.object({operation:z.literal('move'),project:text,path:text}).strict(),

@@ -14,10 +14,11 @@ async function fixture(realPipe=false, first:unknown={preview}, autoPreview=true
     stdin:{write(value:string){writes.push(value);},flush(){},end(){ended=true;}},
     exited,kill(){killed=true;exit(1);controller.close();}};
   const send = (value:unknown) => controller.enqueue(new TextEncoder().encode(JSON.stringify(value)+'\n'));
-  // Schema construction is host-owned; execution must independently reject extra/model approval fields.
-  const schema = new Proxy(()=>undefined,{get:()=>schema,apply:()=>schema});
-  // The fake owns only host registration/schema construction, not edit execution.
-  const api = {zod:schema,registerTool(value:Tool){tool=value;}} as unknown as Pick<ExtensionAPI,'zod'|'registerTool'>;
+  // A catch-all proxy hid missing builders in omp 19.1; expose only the supported subset.
+  const schema = {min:()=>schema,max:()=>schema,strict:()=>schema};
+  const builder = ()=>schema;
+  const api = {zod:{string:builder,literal:builder,object:builder,union:builder},
+    registerTool(value:Tool){tool=value;}} as unknown as Pick<ExtensionAPI,'zod'|'registerTool'>;
   registerProjects(api, {
     python:'/fixture/python',entry:'/fixture/entry',profile:{name:'work',agent_dir:'/fixture/agent'},receipt:'/fixture/receipt.json',
     spawn(argv, options){
