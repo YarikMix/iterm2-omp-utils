@@ -149,16 +149,32 @@ async def _operate(request):
             if not same({'exists':True,'value':current}, request['expected']):
                 raise ValueError()
             if bar:
-                _sessions(snapshot, request['guid'], current)
+                guid = request['guid']
+                _sessions(snapshot, guid, current)
                 # Refresh both parent and session provenance immediately before dispatch.
                 fresh = await _inventory(iterm2, connection)
-                if not same(_profile(fresh, request['guid'])['bar'], current):
+                if not same(_profile(fresh, guid)['bar'], current):
                     raise ValueError()
-                _sessions(fresh, request['guid'], current)
-                sent = True
-                await iterm2.rpc.async_set_profile_properties_json(connection, None,
-                    [(key,json.dumps(request['value'][key], allow_nan=False)) for key in sorted(BAR_KEYS)],
-                    guids=[request['guid']])
+                _sessions(fresh, guid, current)
+                # iTerm2 3.7.7 applies batched assignments to the same original profile.
+                for key in sorted(BAR_KEYS):
+                    value = request['value'][key]
+                    if same(current[key], value):
+                        continue
+                    # The inventory reads profiles before checking sessions.
+                    parent, = await iterm2.Profile.async_get(connection, guids=[guid])
+                    properties = parent.all_properties
+                    if properties['Guid'] != guid or not same(_bar(properties), current):
+                        raise ValueError()
+                    sent = True
+                    await iterm2.rpc.async_set_profile_properties_json(connection, None,
+                        [(key, json.dumps(value, allow_nan=False))], guids=[guid])
+                    fresh = await _inventory(iterm2, connection)
+                    observed = _profile(fresh, guid)['bar']
+                    if not same(observed, dict(current, **{key: value})):
+                        raise ValueError()
+                    _sessions(fresh, guid, observed)
+                    current = observed
             else:
                 current = await iterm2.preferences.async_get_preference(connection, iterm2.preferences.PreferenceKey.STATUS_BAR_POSITION)
                 if not same({'exists':True,'value':current}, request['expected']):
@@ -166,12 +182,9 @@ async def _operate(request):
                 sent = True
                 await iterm2.preferences.async_set_preference(connection,
                     iterm2.preferences.PreferenceKey.STATUS_BAR_POSITION, request['value'])
-            snapshot = await _inventory(iterm2, connection)
-            current = _profile(snapshot, request['guid'])['bar'] if bar else snapshot['position']
-            if not same(current, request['value']):
-                raise ValueError()
-            if bar:
-                _sessions(snapshot, request['guid'], current)
+                current = (await _inventory(iterm2, connection))['position']
+                if not same(current, request['value']):
+                    raise ValueError()
         return {'status':'ok','value':{'exists':True,'value':current}}
     except (Exception, SystemExit, asyncio.CancelledError):
         return {'status':'unknown' if sent else 'conflict'}
