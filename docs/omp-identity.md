@@ -50,6 +50,12 @@ filename. Every update invalidates its preceding record first. Shutdown removes
 only this extension instance's current record, not another process/generation.
 It deliberately does not clear user variables that might belong to a newer
 process; orphan variables cannot establish identity without a matching live record.
+A leftover value is not itself a live dialog. Launcher idle-shell exclusion
+uses shared `valid_identity_record(raw)` validation (registry ownership/mode
+checks remain separate), the same terminal ID, two stable shell/TTY censuses
+without the recorded PID, a nonmatching old birth and no live same-pane binding.
+Malformed, changed, still-live or busy evidence blocks; no variable is cleared.
+Command proof, identity and restored history remain independent after child exit.
 
 The helper first checks explicit environment terminal-source agreement, process
 controlling tty and SDK session tty device identity. Therefore a stale inherited

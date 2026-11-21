@@ -166,6 +166,9 @@ class CliTests(MigrationFixture):
                     def __init__(self,*args):pass
                     def bindings(self):return [binding] if observed['creates'] else []
                     def process_start(self,pid):return 'birth'
+                    def job_pid(self,sid):return 123
+                    def foreground_process(self,*args):return True
+                    def process_image(self,pid):return str(executable)
                     def observe(self,terminal_id):return binding_record(binding)
                     def select_window(self,window,environment):
                         self_outer.assertEqual(window,'W')
@@ -176,7 +179,7 @@ class CliTests(MigrationFixture):
                     def complete_panes(self):return self.panes()
                     def profile(self,name):return dict(name='Shell' if mode=='shell' else 'Omp',guid='G')
                     def variable(self,terminal_id,name):
-                        return {'session.profileName':'Shell' if mode=='shell' else 'Omp',
+                        return {'tty':'/dev/ttys007','session.profileName':'Shell' if mode=='shell' else 'Omp',
                                 'session.jobName':'zsh' if mode=='shell' else 'omp',
                                 'session.commandLine':shlex.join(['/bin/zsh','-il'] if mode=='shell' else observed['argv'] or [])}[name]
                 async def create(window,profile,guid,command,**kwargs):
@@ -185,7 +188,7 @@ class CliTests(MigrationFixture):
                     if mode!='shell':
                         outer=shlex.split(command)
                         login=shlex.split(outer[2].split(' && exec ',1)[1])
-                        observed['argv']=shlex.split(login[2].split('; exec ',1)[1])[3:]
+                        observed['argv']=shlex.split(login[2].split('; if /usr/bin/env ',1)[1].split('; then :; fi;',1)[0])[2:]
                     else:
                         outer=shlex.split(command)
                         self.assertEqual(shlex.split(outer[2].split(' && exec ',1)[1]),['/bin/zsh','-il'])

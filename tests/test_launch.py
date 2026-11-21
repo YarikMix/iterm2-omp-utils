@@ -2,6 +2,10 @@
 import json
 import os
 from pathlib import Path
+import pty
+import select
+import signal
+import sys
 import shlex
 from tempfile import TemporaryDirectory
 import time
@@ -18,6 +22,118 @@ from iterm2_utils.terminal import Terminal
 
 
 class LaunchTests(unittest.TestCase):
+    def test_omp_exit_returns_to_same_interactive_pty(self):
+        for status in (0,23):
+            with self.subTest(status=status),TemporaryDirectory() as tmp:
+                root=Path(tmp).resolve(); cwd=root/"cwd ' quoted";cwd.mkdir()
+                binary=root/'bin';binary.mkdir();omp=binary/'omp'
+                evidence=root/'child.json'
+                omp.write_text('#!'+sys.executable+'\nimport os,sys,json\n'+
+                    'json.dump(dict(argv=sys.argv[1:],cwd=os.getcwd(),foreground=os.getpgrp()==os.tcgetpgrp(0),'+
+                    'profile=os.environ.get("OMP_PROFILE"),agent=os.environ.get("PI_CODING_AGENT_DIR")),open('+
+                    repr(str(evidence))+',"w"))\nsys.exit('+str(status)+')\n')
+                omp.chmod(0o700)
+                (root/'.zshenv').write_text('unsetopt GLOBAL_RCS\n')
+                (root/'.zprofile').write_text('export LOGIN_COUNT=$(( ${LOGIN_COUNT:-0} + 1 ))\n')
+                (root/'.zshrc').write_text('export PATH='+shlex.quote(str(binary))+':/usr/bin:/bin\nsetopt ERR_EXIT\nPROMPT="READY> "\nexport NORMAL_INIT=yes\n')
+                request=LaunchRequest('W','Omp',cwd,OmpProfile('work',root/'.omp/profiles/work/agent'),'new')
+                identity=LaunchIdentity(omp,(),((str(omp),),),'')
+                inspection=LaunchInspection(root/'it2',Path('/bin/zsh'),'G','W',identity)
+                argv=[str(omp),'--','literal " quote','two words']
+                command=m.build_command(request,inspection,argv)
+                pid,fd=pty.fork()
+                if pid==0:
+                    os.execve('/bin/sh',shlex.split(command),dict(HOME=str(root),ZDOTDIR=str(root),PATH='/usr/bin:/bin',TERM='xterm'))
+                output=b''
+                def until(marker):
+                    nonlocal output
+                    deadline=time.monotonic()+5
+                    while marker not in output and time.monotonic()<deadline:
+                        if select.select([fd],[],[],max(0,deadline-time.monotonic()))[0]:
+                            try:chunk=os.read(fd,65536)
+                            except OSError:break
+                            if not chunk:break
+                            output+=chunk
+                    self.assertIn(marker,output,output.decode(errors='replace'))
+                try:
+                    until(b'READY> ')
+                    actual=json.loads(evidence.read_text())
+                    self.assertEqual(actual,dict(argv=argv[1:],cwd=str(cwd),foreground=True,profile='work',agent=str(request.omp_profile.agent_dir)))
+                    output=b''
+                    os.write(fd,b"pwd; print -r -- PROMPT_OK:$NORMAL_INIT:$LOGIN_COUNT:${OMP_PROFILE-unset}:${PI_CODING_AGENT_DIR-unset}\n")
+                    until(b'PROMPT_OK:yes:1:unset:unset')
+                    self.assertIn(str(cwd).encode(),output)
+                finally:
+                    try:os.write(fd,b'exit\n')
+                    except OSError:pass
+                    deadline=time.monotonic()+2
+                    while time.monotonic()<deadline:
+                        if os.waitpid(pid,os.WNOHANG)[0]:break
+                        time.sleep(.02)
+                    else:
+                        os.close(fd)
+                        os.kill(pid,signal.SIGKILL)
+                        deadline=time.monotonic()+2
+                        while time.monotonic()<deadline:
+                            if os.waitpid(pid,os.WNOHANG)[0]:break
+                            time.sleep(.02)
+                        else:self.fail('PTY child did not reap after SIGKILL')
+                        fd=None
+                    if fd is not None:os.close(fd)
+
+    def test_omp_command_proof_tracks_foreground_child_not_bootstrap(self):
+        for fault in ('none','wrapper','extra','image','tty','pid','birth','departed','moved'):
+            with self.subTest(fault=fault),TemporaryDirectory() as tmp:
+                root=Path(tmp);request,inspection,_,state,transport,create=self.fixture(root)
+                original=transport.variable
+                def variable(self,sid,name):
+                    if name=='tty':return '/dev/ttys007'
+                    line=original(self,sid,name)
+                    if name=='session.commandLine':
+                        if fault=='wrapper':return '/bin/zsh -ilc '+shlex.quote(line)
+                        if fault=='extra':return line+' --continue'
+                    return line
+                transport.variable=variable
+                transport.job_pid=lambda self,sid:123
+                transport.foreground_process=lambda self,pid,birth,tty:fault!='tty' and (pid,birth,tty)==(123,'birth','/dev/ttys007')
+                def image(self,pid):
+                    if fault=='pid':transport.job_pid=lambda self,sid:124
+                    if fault=='birth':transport.process_start=lambda self,pid:'reused'
+                    if fault=='departed':transport.process_start=lambda self,pid:None
+                    if fault=='moved':transport.panes=lambda self:[dict(terminal_id='S',tab_id='T',window_id='other')]
+                    return str(root/('wrong' if fault=='image' else 'omp'))
+                transport.process_image=image
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual(out['command'],'verified' if fault=='none' else 'unverified')
+                self.assertEqual(state['creates'],1)
+
+    def test_verified_child_exit_leaves_history_unverified(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+            request=replace(request,mode='resume',resume=resolve_resume(binding.session_file,'fresh',binding.profile),allow_duplicate=True)
+            def departed(self,sid):
+                transport.process_start=lambda self,pid:None
+                state['job']='zsh'
+                return None
+            transport.observe=departed
+            code,out=self.run_launch(root,request,inspection,state,transport,create)
+            self.assertEqual((out['status'],out['command'],out['identity'],out['history']),('launched','verified','unverified','unverified'))
+            self.assertEqual(state['creates'],1)
+
+    def test_resume_with_idle_former_omp_tab_can_create_once(self):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp);request,inspection,binding,state,transport,create=self.fixture(root)
+            request=replace(request,mode='resume',resume=resolve_resume(binding.session_file,'fresh',binding.profile))
+            self.assertEqual(self.run_launch(root,request,inspection,state,transport,create)[1]['status'],'already_open')
+            self.assertEqual(state['creates'],0)
+            original=transport.observe
+            transport.observe=lambda self,sid:original(self,sid) if state['creates'] else None
+            state['bindings']=[]
+            transport.ordinary_shell=lambda self,pane,zsh:False
+            self.assertEqual(self.run_launch(root,request,inspection,state,transport,create)[1]['status'],'blocked')
+            transport.ordinary_shell=lambda self,pane,zsh:True
+            self.assertEqual(self.run_launch(root,request,inspection,state,transport,create)[1]['status'],'launched')
+            self.assertEqual(state['creates'],1)
     def fixture(self, root, mode='new'):
         profile=OmpProfile('work',root/'agent')
         request=LaunchRequest('W','Omp',root,profile,mode)
@@ -35,15 +151,21 @@ class LaunchTests(unittest.TestCase):
             def panes(self):return [dict(terminal_id='S',tab_id='T',window_id='W')]
             def complete_panes(self):return self.panes()
             def ordinary_shell(self,pane,zsh):return False
+            def job_pid(self,sid):return 123
+            def foreground_process(self,pid,birth,tty):return True
+            def process_image(self,pid):
+                return str(state.get('proof_image',root/'omp'))
             def profile(self,name):return dict(name='Omp',guid='G')
             def variable(self,sid,name):
-                return {'session.profileName':'Omp','session.jobName':state['job'],'session.commandLine':('malformed "' if state['command_bad'] else shlex.join(state['argv']))}[name]
+                return {'tty':'/dev/ttys007','session.profileName':'Omp','session.jobName':state['job'],'session.commandLine':('malformed "' if state['command_bad'] else shlex.join(state['argv']))}[name]
         async def create(w,p,g,command,**kwargs):
             nonlocal binding
             state['creates']+=1
             argv=shlex.split(command)
             login=shlex.split(argv[2].split(' && exec ',1)[1])
-            inner=shlex.split(login[2].split('; exec ',1)[1]); state['argv']=inner[3:]
+            script=login[2]
+            inner=shlex.split(script.split('; if /usr/bin/env ',1)[1].split('; then :; fi;',1)[0])
+            state['argv']=inner[2:]
             if '--resume' not in state['argv']:
                 settings={}
                 layers=[request.omp_profile.agent_dir/'config.yml',request.cwd/'.omp/config.yml']
@@ -93,8 +215,8 @@ class LaunchTests(unittest.TestCase):
             self.assertEqual(argv[7],'--')
             outer=shlex.split(m.build_command(request,inspection,argv))
             login=shlex.split(outer[2].split(' && exec ',1)[1])
-            executed=shlex.split(login[2].split('; exec ',1)[1])
-            self.assertEqual(executed[3:],argv)
+            executed=shlex.split(login[2].split('; if /usr/bin/env ',1)[1].split('; then :; fi;',1)[0])
+            self.assertEqual(executed[2:],argv)
             self.assertFalse((root/'NEVER').exists())
 
     def run_launch(self,root,request,inspection,state,transport,create):
@@ -319,6 +441,7 @@ class LaunchTests(unittest.TestCase):
                     if name!='session.commandLine':return original(self,sid,name)
                     argv=list(state['argv'])
                     if form.startswith('interpreter'):argv=[str(root/'bun'),*argv]
+                    state['proof_image']=root/'bun' if form.startswith('interpreter') else root/'omp'
                     if form=='extra':argv+=['--continue']
                     if form=='wrong-cwd':argv[argv.index('--cwd')+1]='/wrong'
                     if form=='wrong-id':argv[-1]=str(root/'other.jsonl')
@@ -424,13 +547,12 @@ class LaunchTests(unittest.TestCase):
                 self.assertEqual((out['window_id'],out['tab_id'],out['session_id']),('W','T','S'))
                 self.assertEqual(state['creates'],1)
 
-    def test_full_path_command_keeps_existing_proof_without_kernel_calls(self):
+    def test_full_path_command_requires_kernel_child_proof(self):
         with TemporaryDirectory() as tmp:
             root=Path(tmp);request,inspection,_,state,transport,create=self.fixture(root)
-            def forbidden(*args):raise AssertionError('Full argv must not need kernel image proof')
-            transport.job_pid=transport.foreground_process=transport.process_image=forbidden
+            transport.process_image=lambda self,pid:None
             code,out=self.run_launch(root,request,inspection,state,transport,create)
-            self.assertEqual((code,out['command']),(0,'verified'))
+            self.assertEqual((code,out['command']),(3,'unverified'))
 
     def test_handoff_producer_bounds_complete_utf8_representation_without_truncation(self):
         with TemporaryDirectory() as tmp:
@@ -467,6 +589,7 @@ class LaunchTests(unittest.TestCase):
                 def variable(self,sid,name):
                     if name!='session.commandLine':return original(self,sid,name)
                     argv=[str(root/'bun'),*state['argv']]
+                    state['proof_image']=root/'bun'
                     if form=='wrong-handoff':argv[-1]=argv[-1].replace(str(artifact.path),str(root/'other.md'))
                     return ' '.join(argv) if form=='literal' else shlex.join(argv)
                 transport.variable=variable
