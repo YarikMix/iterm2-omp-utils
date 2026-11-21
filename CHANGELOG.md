@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+Authenticated MCP payloads with the exact pre-handoff inventory remain upgradeable
+and retainable on opt-out; new builds still require every current dependency.
+Launcher removal rejects changed source topology before inverse writes. The native
+editor carries only a fixed local uninstall reason for the last handed-off project.
+Deep source or sibling JSON returns a bounded handoff conflict instead of a traceback.
+
 Added opt-in owned MCP replacement: standalone immutable payload, selected existing
 Python 3.12+ with mcp>=1.12,<2 and iterm2, 13 observe tools plus catalogue/shell/handoff.
 Profile-scoped native TUI project edit requires a fresh local confirmation and

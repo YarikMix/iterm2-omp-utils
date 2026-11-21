@@ -10,6 +10,53 @@ from tests.test_project_launcher import ProjectLauncherTests as LauncherFixture
 
 
 class ProjectEditTests(LauncherFixture):
+    def test_handoff_symlink_source_blocks_removal_before_inverse_writes(self):
+        for removal in ('uninstall', 'revert', 'editor'):
+            with self.subTest(removal=removal):
+                fixture = ProjectEditTests(); fixture.setUp()
+                try:
+                    fixture.handed_off()
+                    folder = fixture.folder.with_name('new-project'); folder.mkdir()
+                    preview = fixture.preview('add', name='New', path=str(folder))
+                    self.assertEqual(fixture.apply(preview).status, 'applied')
+                    added = preview.after[-1].id
+                    guid = json.loads(fixture.dynamic.read_bytes())['Profiles'][-1]['Guid']
+                    fixture.native['sessions'].append(dict(id='buried', profile_guid='parent-guid',
+                        bar=copy.deepcopy(fixture.bar), references=[guid], provenance=True))
+                    target = fixture.home/'identical.json'
+                    fixture.dynamic.rename(target); fixture.dynamic.symlink_to(target)
+                    before, native = fixture.snapshot(), copy.deepcopy(fixture.native)
+                    receipt_path = fixture.context.paths.data/'receipt.json'
+                    receipt = receipt_path.read_bytes()
+                    fixture.calls.clear()
+                    if removal == 'editor':
+                        self.assertEqual(fixture.preview('remove', project=added).status, 'conflict')
+                    else:
+                        outcome = (lifecycle.uninstall(fixture.context, frozenset({'project-launcher'}), fixture.runner)
+                            if removal == 'uninstall' else engine.revert(state.load(receipt_path),
+                                fixture.context, fixture.runner, frozenset({'project-launcher'})))
+                        self.assertTrue(outcome.findings)
+                    self.assertEqual(fixture.snapshot(), before)
+                    self.assertEqual(fixture.native, native)
+                    self.assertEqual(receipt_path.read_bytes(), receipt)
+                    self.assertTrue(fixture.dynamic.is_symlink())
+                    self.assertFalse(any(c['operation'].startswith('write_') for c in fixture.calls))
+                finally:
+                    fixture.doCleanups()
+
+    def test_worker_carries_only_fixed_last_handoff_reason(self):
+        from tests.test_mcp_project_worker import ProjectWorkerTests
+        fixture = ProjectWorkerTests(); fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.handed_off()
+        self.assertEqual(fixture.apply(fixture.preview('remove', project='project-a')).status, 'applied')
+        before, native = fixture.snapshot(), copy.deepcopy(fixture.native)
+        raw = b'{"type":"prepare","change":{"operation":"remove","project":"project-b"}}\n'
+        _, frames = fixture.worker(raw + b'{"type":"commit"}\n')
+        self.assertEqual(frames, [{'result': {'status':'blocked', 'reason':'handoff_requires_uninstall'}}])
+        self.assertEqual(fixture.snapshot(), before)
+        self.assertEqual(fixture.native, native)
+
     # Reuse setup and SDK fixture, not the inherited test cases.
     def installed(self, *features):
         self.assertSuccess(self.install(*features, 'project-launcher'))
@@ -22,6 +69,38 @@ class ProjectEditTests(LauncherFixture):
 
     def apply(self, preview, authorize=lambda: None):
         return edits.apply_project_edit(self.context, self.runner, preview, authorize=authorize)
+
+
+    def test_handoff_owned_catalogue_preserves_imported_guid_through_edit(self):
+        from iterm2_utils.features import project_launcher as launcher
+        self.handed_off()
+        self.assertEqual(edits.list_owned_projects(self.context.paths, self.profile).status, 'ok')
+        self.assertEqual(self.apply(self.preview('rename', project='project-a', name='Renamed')).status, 'applied')
+        moved = self.folder.with_name('moved'); self.folder.rename(moved)
+        self.assertEqual(self.apply(self.preview('move', project='project-a', path=str(moved))).status, 'applied')
+        folder = self.folder.with_name('third'); folder.mkdir()
+        preview = self.preview('add', name='Third', path=str(folder))
+        self.assertEqual(self.apply(preview).status, 'applied')
+        rows = json.loads(self.dynamic.read_bytes())['Profiles']
+        self.assertEqual([r['Guid'] for r in rows[:2]], ['manual-a', 'manual-b'])
+        self.assertEqual(rows[0]['Name'], 'Renamed')
+        self.assertEqual(rows[0]['Working Directory'], str(moved.resolve()))
+        self.assertEqual(rows[-1]['Guid'], launcher.guid(preview.after[-1].id))
+        actions = self.native['profiles'][0]['bar']['Status Bar Layout']['components'][1:]
+        self.assertEqual([c['configuration']['knobs']['action']['title'] for c in actions],
+                         ['Renamed', 'Проект B', 'Third'])
+        self.assertEqual(edits.list_owned_projects(self.context.paths, self.profile).projects, preview.after)
+
+    def test_handoff_last_remove_requires_explicit_uninstall(self):
+        self.handed_off()
+        self.assertEqual(self.apply(self.preview('remove', project='project-a')).status, 'applied')
+        before, native = self.snapshot(), copy.deepcopy(self.native)
+        preview = self.preview('remove', project='project-b')
+        self.assertEqual(preview.status, 'blocked')
+        self.assertFalse(preview.removes_launcher)
+        self.assertIn('explicit uninstall', preview.message)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.native, native)
 
     def test_catalogue_ids_and_noop_are_owned(self):
         self.assertEqual(edits.list_owned_projects(self.context.paths, self.profile).status, 'not_configured')

@@ -80,6 +80,43 @@ Profiles файл `iterm2-utils-project-launcher.json` в штатной пап�
 whole-file CAS. Ресурсы и before/installed значения учитываются существующими
 receipts и журналом транзакций; новые фоновые процессы не устанавливаются.
 
+## Принять существующую ручную панель
+
+`install` и `migrate-omp` не принимают неизменённые ручные настройки во владение.
+Для отдельного Dynamic Profiles JSON и точно выбранных полных панелей есть
+самостоятельная операция. Нужен текущий receipt с выбранным обычным parent profile.
+Все строки источника должны точно соответствовать кнопкам каждой выбранной панели:
+порядок, GUID, имя, login shell и существующая папка. Неизвестные поля,
+внешние ссылки, неполный inventory и изменённые настройки блокируют перенос.
+
+```sh
+python3 -m iterm2_utils handoff-project-launcher --source /path/to/DynamicProfiles/manual.json --profile Default --profile Shell --json
+python3 -m iterm2_utils handoff-project-launcher --source /path/to/DynamicProfiles/manual.json --profile Default --profile Shell --apply --expect-fingerprint HEX_FROM_PREVIEW --json
+```
+
+Preview ничего не пишет, не запускает recovery и возвращает только status и
+fingerprint, без имён, путей или содержимого каталога. `--expect-fingerprint`
+без `--apply` остаётся preview; apply без точного fingerprint отклоняется.
+Источник должен быть абсолютным адресом обычного собственного JSON непосредственно
+в настроенной папке Dynamic Profiles, не symlink. Apply повторяет проверку под
+transaction lock; устаревший preview требует нового подтверждения.
+
+Перенос записывает только приватный каталог `0600` и ownership receipt через
+durable journal. Исходный файл, его режим, GUID, панели, положение Status Bar и
+работающие сессии не меняются. Обычные update и editor используют тот же источник;
+GUID существующих проектов сохраняются, новые получают штатные UUIDv5.
+Имена, пути, локальные fingerprint и снимки не добавляйте в публичный репозиторий.
+
+Явный `uninstall --features project-launcher` восстанавливает **исходную ручную
+панель и точные байты/режим источника**, в том числе после managed-правок, а не
+оставляет пустую панель. Другие features, ресурсы и pending UI сохраняются.
+Поэтому удаление последнего проекта в editor блокируется с указанием на uninstall.
+Защита от default/live/buried/external ссылок остаётся обязательной. Pending journal
+блокирует handoff без записей: штатные изменяющие lifecycle-команды выполняют recovery,
+после чего нужен свежий preview. Повторное владение по совпадению исключено.
+Сначала проверьте перенос на disposable fixtures; fixture-тесты не доказывают
+работу реального клика или внешний вид панели.
+
 Панель сохраняет foreign components, их порядок и advanced layout settings,
 добавляя собственные кнопки в порядке JSON. В исходных профилях меняются только
 `Show Status Bar` и `Status Bar Layout`, учитываемые одним typed ресурсом;

@@ -36,6 +36,15 @@ def validate_bar(value):
     return value
 
 
+def source_bar(properties):
+    """Convert native-source visibility only; receipts and API bars stay strict."""
+    bar = {key: properties[key] for key in BAR_KEYS}
+    visible = bar['Show Status Bar']
+    if type(visible) is int and visible in (0, 1):
+        bar['Show Status Bar'] = bool(visible)
+    return validate_bar(bar)
+
+
 def validate_launcher_inventory(value):
     """Recognize the native component schema, independent of iTerm's version."""
     validate_inventory(value)
@@ -79,7 +88,9 @@ def validate_inventory(value):
     identifier(value['default_guid'])
     guids, names, sessions = set(), set(), set()
     for profile in value['profiles']:
-        if type(profile) is not dict or set(profile) != {'guid','name','bar','working_directory','references'}:
+        if type(profile) is not dict or set(profile) not in (
+                {'guid','name','bar','working_directory','references'},
+                {'guid','name','bar','working_directory','references','launch'}):
             raise ValueError('Native profile inventory unavailable')
         guid, name = identifier(profile['guid']), identifier(profile['name'])
         if guid in guids or name in names or (profile['working_directory'] is not None and type(profile['working_directory']) is not str):
@@ -87,6 +98,13 @@ def validate_inventory(value):
         guids.add(guid); names.add(name)
         validate_bar(profile['bar'])
         _references(profile['references'])
+        if 'launch' in profile:
+            launch = profile['launch']
+            if (type(launch) is not dict or set(launch) != {
+                    'parent_guid','custom_directory','custom_command','command'} or
+                    any(type(v) is not str for v in launch.values())):
+                raise ValueError('Native launch evidence unavailable')
+            identifier(launch['parent_guid'])
     if value['default_guid'] not in guids:
         raise ValueError('Native default profile unavailable')
     for session in value['sessions']:

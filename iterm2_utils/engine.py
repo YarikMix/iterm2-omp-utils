@@ -143,7 +143,7 @@ def _compile(edit):
     old, new = edit.before, edit.after
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else edit.mode
     locator = {'mode':mode}
-    if (edit.owner=='shared:runtime' or edit.owner=='mcp' and edit.path.name != 'mcp.json' or
+    if (edit.owner=='shared:project-launcher' or edit.owner=='shared:runtime' or edit.owner=='mcp' and edit.path.name != 'mcp.json' or
             edit.path.name in {'iterm2-utils.json','iterm2-utils-project-launcher.json'}):
         return [_resource('file',path,locator,_encode(old),_encode(new),edit.owner)]
     if edit.path.suffix in {'.json','.toml'} and new is not None:
@@ -200,6 +200,8 @@ def _compile(edit):
 
 def _read(r,runner,context):
     kind,loc = r['kind'],r['locator']
+    if kind == 'file' and context is not None:
+        _project_file(r, context)  # Owned identity must not disappear when topology changes.
     if kind == 'symlink':
         path = Path(r['target'])
         if path.is_symlink():
@@ -313,8 +315,7 @@ def _set(r,value,runner,context, *, expected, restoring=False):
     else:
         patcher = jsonfile.patch if kind=='json' else tomlfile.patch
         result = patcher(raw or (b'{}' if kind=='json' else b''),tuple(loc['pointer']),value['value'],remove=not value['exists'])
-    if kind == 'file' and path in {(context.paths.profiles/name).resolve()
-            for name in ('iterm2-utils.json','iterm2-utils-project-launcher.json')}:
+    if _project_file(r, context):
         old_guids = _project_guids(raw)
         removed = old_guids - _project_guids(result)
         if removed:
@@ -324,7 +325,18 @@ def _set(r,value,runner,context, *, expected, restoring=False):
                 if any(g in json.dumps(document) for g in removed):
                     raise ValueError('Replacement retains deleted profile references')
                 retained = _project_guids(result)
-                replacements = [dict(guid=row['Guid'],bar={k:row[k] for k in iterm.BAR_KEYS})
+                receipt = state.load(context.paths.data/'receipt.json')
+                handoff_source = None
+                if isinstance(receipt, Receipt):
+                    for resource in receipt.resources:
+                        if (resource['kind'] == 'file' and 'shared:project-launcher' in resource['owners'] and
+                                resource['target'] == str((context.paths.config/'iterm2-utils-project-launcher.json').resolve())):
+                            catalogue = json.loads(base64.b64decode(resource['installed']['value'], validate=True))
+                            handoff_source = catalogue.get('handoff', {}).get('source')
+                migrated = ('shared:project-launcher' in r['owners'] and
+                            'project-launcher' in r['owners'] and handoff_source == path.name)
+                replacements = [dict(guid=row['Guid'], bar=iterm.source_bar(row) if migrated else
+                                     {k:row[k] for k in iterm.BAR_KEYS})
                     for row in json.loads(raw)['Profiles'] if row['Guid'] in retained]
             iterm.ensure_unreferenced(removed,old_guids,context,runner,replaced_bars=replacements)
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else loc['mode']
@@ -342,10 +354,25 @@ def _project_guids(raw):
         raise ValueError('Duplicate owned project GUID')
     return guids
 
+def _project_file(resource, context):
+    if resource['kind'] != 'file':
+        return False
+    path = Path(resource['target'])
+    profiles = context.paths.profiles.resolve()
+    standard = path in {profiles/name for name in ('iterm2-utils.json', 'iterm2-utils-project-launcher.json')}
+    # Noncanonical sources are addressed only by exact whole-file ownership.
+    owned = ('shared:project-launcher' in resource['owners'] and
+             'project-launcher' in resource['owners'] and path.parent == profiles and
+             path.suffix == '.json')
+    if (standard or owned) and (path.is_symlink() or path.resolve() != path or
+            path.exists() and (not path.is_file() or path.stat().st_nlink != 1)):
+        raise ValueError('Owned launcher source topology changed')
+    return standard or owned
+
+
 
 def _deletes_projects(r, context):
-    if r['kind'] != 'file' or r['target'] not in {str((context.paths.profiles/name).resolve())
-            for name in ('iterm2-utils.json','iterm2-utils-project-launcher.json')}:
+    if not _project_file(r, context):
         return False
     def decode(value):
         return base64.b64decode(value['value'],validate=True) if value['exists'] else None
@@ -424,7 +451,7 @@ def _recover(context,runner):
     return []
 
 
-def _transaction(changes,result,context,runner, *, intent_receipt=None, restoring=frozenset()):
+def _transaction(changes,result,context,runner, *, intent_receipt=None, restoring=frozenset(), precommit_check=None):
     journal = context.paths.data/'journal'
     state.private_dir(journal)
     intent = copy.deepcopy(intent_receipt) if intent_receipt is not None else _empty(result.selection)
@@ -446,6 +473,8 @@ def _transaction(changes,result,context,runner, *, intent_receipt=None, restorin
             _set(r,r['installed'],runner,context,expected=r['before'],restoring=_identity(r) in restoring)
             if not _same(_read(r,runner,context),r['installed']):
                 raise ValueError('Write verification failed')
+        if precommit_check is not None:
+            precommit_check()
         state.save(journal/'result.json',result)
         state.durable_write(journal/'phase',b'commit')
         state.save(context.paths.data/'receipt.json',result)

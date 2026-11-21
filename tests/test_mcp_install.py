@@ -24,6 +24,47 @@ class FixtureRunner:
 
 
 class InstallTests(unittest.TestCase):
+    def previous_release(self):
+        from iterm2_utils.features import mcp as payload
+        # Freeze the immediately previous inventory, not a receipt-reported subset.
+        previous = tuple(name for name in payload.BASE_FILES if name != 'iterm2_utils/project_handoff.py')
+        with patch.object(payload, 'BASE_FILES', previous):
+            self.install()
+        return self.binding()
+
+    def test_authenticated_previous_inventory_upgrades_and_retains_valid_opt_out(self):
+        old = self.previous_release()
+        try:
+            mcp.authorize_binding(old)
+        except ValueError as error:
+            self.fail(f'Authenticated previous inventory was rejected: {error}')
+        immutable = {str(p.relative_to(old.install_root)):p.read_bytes()
+                     for p in old.install_root.rglob('*') if p.is_file()}
+        outcome = lifecycle.update(self.context, self.runner)
+        self.assertFalse([f for f in outcome.findings if f.state in lifecycle.BLOCKING], outcome.findings)
+        fresh = self.binding()
+        self.assertNotEqual(fresh.install_root, old.install_root)
+        mcp.authorize_binding(fresh)
+        self.assertEqual({name:(old.install_root/name).read_bytes() for name in immutable}, immutable)
+
+    def test_previous_inventory_opt_out_retains_only_authenticated_owned_payload(self):
+        from iterm2_utils.features import mcp as payload
+        old = self.previous_release()
+        names = [p.relative_to(old.install_root) for p in old.install_root.rglob('*') if p.is_file()]
+        foreign = old.install_root/'foreign.txt'; foreign.write_bytes(b'foreign')
+        with self.assertRaises(ValueError):
+            payload.verify_release(old.install_root, self.paths.data)
+        foreign.unlink()
+        missing = old.install_root/'iterm2_utils/engine.py'
+        raw = missing.read_bytes(); missing.unlink()
+        with self.assertRaises(ValueError):
+            payload.verify_release(old.install_root, self.paths.data)
+        missing.write_bytes(raw)
+        outcome = lifecycle.uninstall(self.context, frozenset({'mcp'}), self.runner)
+        self.assertFalse(outcome.findings, outcome.findings)
+        self.assertTrue(all((old.install_root/name).is_file() for name in names))
+        self.assertFalse((self.profile.agent_dir/'extensions/iterm2-utils-projects.ts').exists())
+
     def setUp(self):
         temp = TemporaryDirectory(); self.addCleanup(temp.cleanup)
         self.home = Path(temp.name)

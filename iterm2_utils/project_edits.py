@@ -49,6 +49,8 @@ class ProjectPreview:
     after: tuple[Project, ...] = ()
     removes_launcher: bool = False
     _witness: object = field(default=None, repr=False, compare=False)
+    message: str | None = None
+    reason: str | None = None
 
 
 @dataclass(frozen=True)
@@ -93,7 +95,10 @@ def _owned(paths, profile, *, receipt_state=None):
     if launcher.FEATURE not in receipt.selection.features:
         return None
     raw = {}
-    for path in (paths.config/launcher.FILENAME, paths.profiles/launcher.FILENAME):
+    catalogue_path = paths.config/launcher.FILENAME
+    document = launcher._owned_config(_safe_bytes(catalogue_path))
+    profile_path = launcher.dynamic_path(paths.profiles, document)
+    for path in (catalogue_path, profile_path):
         value = _safe_bytes(path)
         resource = next((r for r in receipt.resources if r['kind'] == 'file' and
             r['target'] == str(path.resolve()) and launcher.OWNER in r['owners'] and
@@ -101,10 +106,9 @@ def _owned(paths, profile, *, receipt_state=None):
         if resource is None or resource['installed'] != {'exists': True, 'value': base64.b64encode(value).decode()}:
             raise ValueError('Owned file mismatch')
         raw[str(path)] = value
-    document = launcher._config(raw[str(paths.config/launcher.FILENAME)], historical=True)
-    rows = json.loads(raw[str(paths.profiles/launcher.FILENAME)])['Profiles']
+    rows = json.loads(raw[str(profile_path)])['Profiles']
     projects = tuple(Project(**p) for p in document['projects'])
-    if len(rows) != len(projects) or any(row['Guid'] != launcher.guid(p.id) or
+    if len(rows) != len(projects) or any(row['Guid'] != launcher.project_guid(p.id, document) or
             row['Name'] != p.name or row['Working Directory'] != p.path for row, p in zip(rows, projects)):
         raise ValueError('Installed project identity mismatch')
     _physical_unique(projects)
@@ -144,10 +148,10 @@ def _physical_unique(projects):
 
 
 def _snapshot(context, runner, receipt, document, projects):
-    guids = {launcher.guid(p.id) for p in projects}
+    guids = {launcher.project_guid(p.id, document) for p in projects}
     guids.update(r['target'] for r in receipt.resources if r['kind'] == 'profile_bar' and launcher.OWNER in r['owners'])
     for resource in receipt.resources:
-        if resource['kind'] == 'file' and resource['target'] == str((context.paths.profiles/launcher.FILENAME).resolve()):
+        if resource['kind'] == 'file' and resource['target'] == str(launcher.dynamic_path(context.paths.profiles, document).resolve()):
             guids.update(engine._project_guids(base64.b64decode(resource['installed']['value'])))
     inventory = iterm.validate_launcher_inventory(iterm._request(context, runner,
         {'operation': 'inspect', 'reference_guids': sorted(guids)}))
@@ -174,7 +178,7 @@ def _snapshot(context, runner, receipt, document, projects):
 
 def _checkpoint(context, runner, receipt, document, projects):
     if projects:
-        candidate = dict(document, projects=[dict(id=p.id, name=p.name, path=p.path) for p in projects])
+        candidate = dict(profiles=document['profiles'], projects=[dict(id=p.id, name=p.name, path=p.path) for p in projects])
         raw = json.dumps(candidate, ensure_ascii=False).encode()
         candidate_context = replace(context, project_launcher_config=launcher._Candidate(raw))
         prepared_context, plan = lifecycle.prepare_install_checkpoint(candidate_context, receipt.selection, receipt, launcher.FEATURE, runner)
@@ -184,14 +188,14 @@ def _checkpoint(context, runner, receipt, document, projects):
     return prepared_context, plan, owners
 
 
-def _check_removal(receipt, projects, plan, inventory):
+def _check_removal(receipt, document, projects, plan, inventory):
     owned = set()
     for resource in receipt.resources:
         if resource['kind'] == 'file' and launcher.OWNER in resource['owners']:
             doc = json.loads(base64.b64decode(resource['installed']['value']))
             if 'Profiles' in doc:
                 owned = {row['Guid'] for row in doc['Profiles']}
-    removed = owned - {launcher.guid(p.id) for p in projects}
+    removed = owned - {launcher.project_guid(p.id, document) for p in projects}
     if not removed:
         return
     replacements = {e.guid: e.after for e in plan.changes.edits if isinstance(e, ProfileBarEdit)}
@@ -256,12 +260,17 @@ def prepare_project_edit(context: Context, runner: Runner, change: ProjectChange
         else:
             raise ValueError('Unsupported operation')
         after = tuple(after)
+        # Handoff uninstall restores manual buttons; the editor must not imply an empty panel.
+        if not after and 'handoff' in document:
+            return ProjectPreview('blocked', before=before,
+                message='Use explicit uninstall to restore the original manual launcher.',
+                reason='handoff_requires_uninstall')
         _physical_unique(after)
         snapshot, inventory = _snapshot(context, runner, receipt, document, after)
         prepared_context, plan, owners = _checkpoint(context, runner, receipt, document, after)
         if any(f.state in lifecycle.BLOCKING for f in plan.changes.findings):
             raise ValueError('Checkpoint unavailable')
-        _check_removal(receipt, after, plan, inventory)
+        _check_removal(receipt, document, after, plan, inventory)
         witness = dict(context=copy.deepcopy(context), receipt=receipt, files=files, document=document,
                        snapshot=snapshot, plan=plan, prepared_context=prepared_context, owners=owners, used=False)
         return ProjectPreview('noop' if before == after else 'ready', before, after, not after, witness)

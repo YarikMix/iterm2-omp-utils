@@ -251,3 +251,26 @@ test('true resolving after elapsed confirmation expiration cannot commit',async(
     expect(atDeadline).toBe('declined');expect(f.writes).toHaveLength(1);expect(f.ended).toBe(true);
   }finally{clock.restore();}
 });
+
+test('blocked migrated last removal shows only fixed local uninstall guidance',async()=>{
+  const f=await fixture(false,{result:{status:'blocked',reason:'handoff_requires_uninstall'}});
+  const dialogs:string[]=[];
+  f.ctx.ui.confirm=async(_title,message)=>{dialogs.push(message);return true;};
+  const running=f.run();await tick();f.lost();
+  const result=await running;
+  expect(result.details).toEqual({status:'blocked'});
+  expect(dialogs).toEqual(['Use explicit uninstall to restore the original manual launcher.']);
+  expect(f.writes).toHaveLength(1);
+  expect(JSON.stringify(result)).not.toContain('uninstall');
+});
+
+test('untrusted child guidance never reaches the native dialog',async()=>{
+  for(const extra of [{reason:'private arbitrary text'},{message:'do something else'},
+      {reason:'handoff_requires_uninstall',message:'private text'}]){
+    const f=await fixture(false,{result:{status:'blocked',...extra}});let dialogs=0;
+    f.ctx.ui.confirm=async()=>{dialogs++;return true;};
+    const running=f.run();await tick();f.lost();
+    expect((await running).details.status).toBe('blocked');
+    expect(dialogs).toBe(0);expect(f.writes).toHaveLength(1);
+  }
+});

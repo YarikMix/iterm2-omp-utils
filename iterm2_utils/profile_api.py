@@ -14,6 +14,13 @@ def _request(request):
         raise ValueError()
     operation = request.get('operation')
     fields = {'operation'}
+    if operation == 'inspect' and 'launch_guids' in request:
+        fields.add('launch_guids')
+        rows = request['launch_guids']
+        if type(rows) is not list or not rows or len(rows) > 256:
+            raise ValueError()
+        if len({identifier(g) for g in rows}) != len(rows):
+            raise ValueError()
     if operation == 'inspect' and 'reference_guids' in request:
         fields.add('reference_guids')
         if type(request['reference_guids']) is not list:
@@ -77,11 +84,13 @@ def _bar(properties):
     return validate_bar(value)
 
 
-async def _inventory(sdk, connection, reference_guids=(), replaced_bars=()):
+async def _inventory(sdk, connection, reference_guids=(), replaced_bars=(), launch_guids=()):
     profiles = await sdk.Profile.async_get(connection)
     raw = [p.all_properties for p in profiles]
     persistent_guids = {identifier(p['Guid']) for p in raw}
     guids = persistent_guids | set(reference_guids)
+    if not set(launch_guids) <= persistent_guids:
+        raise ValueError('Launch evidence unavailable')
     names = {identifier(p['Name']):p['Guid'] for p in raw}
     replacements = {p['guid']:p['bar'] for p in replaced_bars}
     if not set(replacements) <= persistent_guids:
@@ -95,6 +104,10 @@ async def _inventory(sdk, connection, reference_guids=(), replaced_bars=()):
             properties = {k:v for k,v in p.items() if k not in BAR_KEYS}
         rows.append(dict(guid=p['Guid'], name=p['Name'], bar=_bar(p),
             working_directory=p.get('Working Directory'), references=_refs(properties,guids,names)))
+        if p['Guid'] in launch_guids:
+            rows[-1]['launch'] = dict(parent_guid=p.get('Dynamic Profile Parent GUID'),
+                custom_directory=p.get('Custom Directory'), custom_command=p.get('Custom Command'),
+                command=p.get('Command'))
     app = await sdk.async_get_app(connection)
     sessions = [s for window in app.terminal_windows for tab in window.tabs for s in tab.all_sessions]
     sessions.extend(app.buried_sessions)
@@ -103,8 +116,13 @@ async def _inventory(sdk, connection, reference_guids=(), replaced_bars=()):
         properties = (await session.async_get_profile()).all_properties
         original = properties.get('Original Guid')
         guid = identifier(original if original is not None else properties.get('Guid'))
+        reference_properties = properties
+        if launch_guids and guid in replacements:
+            if not same(_bar(properties), replacements[guid]):
+                raise ValueError('Session panel changed')
+            reference_properties = {k:v for k,v in properties.items() if k not in BAR_KEYS}
         records.append(dict(id=session.session_id, profile_guid=guid, bar=_bar(properties),
-                            references=_refs(properties, guids, names), provenance=guid in persistent_guids))
+                            references=_refs(reference_properties, guids, names), provenance=guid in persistent_guids))
     default = await sdk.Profile.async_get_default(connection)
     position = await sdk.preferences.async_get_preference(connection, sdk.preferences.PreferenceKey.STATUS_BAR_POSITION)
     return validate_inventory(dict(complete=True, profiles=rows, sessions=records,
@@ -140,7 +158,8 @@ async def _operate(request):
                 not tab.minimized_sessions and not tab.active_session_id
                 for window in sessions.windows for tab in window.tabs)
             return {'status':'ok','value':empty}
-        snapshot = await _inventory(iterm2, connection, request.get('reference_guids', ()), request.get('replaced_bars', ()))
+        snapshot = await _inventory(iterm2, connection, request.get('reference_guids', ()),
+            request.get('replaced_bars', ()), request.get('launch_guids', ()))
         if operation == 'inspect':
             return {'status':'ok','value':snapshot}
         bar = operation.endswith('_bar')

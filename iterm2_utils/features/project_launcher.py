@@ -6,6 +6,7 @@ import unicodedata
 import uuid
 from dataclasses import dataclass, replace
 
+from pathlib import Path
 from .. import state
 from ..config import iterm
 from ..models import ChangeSet, FileEdit, Finding, ProfileBarEdit, Selection, StatusBarPositionEdit
@@ -72,12 +73,63 @@ def guid(project_id):
     return str(uuid.uuid5(uuid.NAMESPACE_URL, 'iterm2-utils:project-launcher:'+project_id))
 
 
+def _owned_config(raw):
+    """Decode private catalogue metadata, never external candidate fields."""
+    if len(raw) > 1048576:
+        raise ValueError('Configuration too large')
+    doc = json.loads(raw, object_pairs_hook=_unique_object)
+    if type(doc) is not dict or set(doc) not in ({'profiles', 'projects'}, {'profiles', 'projects', 'handoff'}):
+        raise ValueError('Invalid owned configuration')
+    _config(json.dumps({k: doc[k] for k in ('profiles', 'projects')}).encode(), historical=True)
+    if 'handoff' in doc:
+        handoff = doc['handoff']
+        if type(handoff) is not dict or set(handoff) != {'source', 'guids'}:
+            raise ValueError('Invalid handoff metadata')
+        dynamic_path(Path('/'), doc)
+        if type(handoff['guids']) is not dict or not handoff['guids']:
+            raise ValueError('Invalid handoff GUID mapping')
+        for key, value in handoff['guids'].items():
+            _text(key); iterm.identifier(value)
+        if len(set(handoff['guids'].values())) != len(handoff['guids']):
+            raise ValueError('Duplicate handoff GUID')
+    return doc
+
+
+def project_guid(project_id: str, document: dict) -> str:
+    existing = document.get('handoff', {}).get('guids', {}).get(project_id)
+    return existing if existing is not None else guid(project_id)
+
+
+def dynamic_path(profiles: Path, document: dict) -> Path:
+    source = document.get('handoff', {}).get('source', FILENAME)
+    if (type(source) is not str or not source.endswith('.json') or
+            source in {'.', '..'} or '/' in source or '\\' in source):
+        raise ValueError('Invalid Dynamic Profiles basename')
+    _text(source)
+    return profiles/source
+
+
+def _handoff_row(row):
+    required = {'Name', 'Guid', 'Dynamic Profile Parent GUID', 'Custom Directory',
+                'Working Directory', *iterm.BAR_KEYS}
+    if type(row) is not dict or not required <= set(row) or set(row) - required - {'Custom Command', 'Command'}:
+        raise ValueError('Unrecognized handoff source fields')
+    result = dict(row, **iterm.source_bar(row))
+    result.setdefault('Custom Command', 'No')
+    result.setdefault('Command', '')
+    return result
+
 def _load(context):
     receipt = state.load(context.paths.data/'receipt.json')
     config_path = context.paths.config/FILENAME
-    dynamic_path = context.paths.profiles/FILENAME
+    previous = None
     config_owned = False
-    for path in (config_path, dynamic_path):
+    paths = [config_path]
+    if config_path.exists() and not config_path.is_symlink():
+        previous = _owned_config(config_path.read_bytes())
+    profile_path = dynamic_path(context.paths.profiles, previous or {})
+    paths.append(profile_path)
+    for path in paths:
         if path.is_symlink():
             raise ValueError('Owned file must not be a symlink')
         if path.exists():
@@ -88,19 +140,24 @@ def _load(context):
                 raise ValueError('Owned configuration changed or externally owned')
             if path==config_path:
                 config_owned = True
+        elif path == profile_path and previous and 'handoff' in previous:
+            raise ValueError('Owned handoff source unavailable')
     source = context.project_launcher_config
     if source is None and not config_owned:
         raise ValueError('Explicit initial configuration required')
-    raw = (source if source is not None else config_path).read_bytes()
-    config = _config(raw, historical=isinstance(source, _Candidate))
-    if isinstance(source, _Candidate):
-        if not config_owned:
-            raise ValueError('Candidate requires confirmed installed configuration')
-        previous = _config(config_path.read_bytes(), historical=True)['projects']
-        from pathlib import Path
-        for project in config['projects']:
-            if not Path(project['path']).is_dir() and project not in previous:
-                raise ValueError('New project directory unavailable')
+    if source is None:
+        config = previous
+    else:
+        raw = source.read_bytes()
+        config = _config(raw, historical=isinstance(source, _Candidate))
+        if isinstance(source, _Candidate):
+            if not config_owned:
+                raise ValueError('Candidate requires confirmed installed configuration')
+            for project in config['projects']:
+                if not Path(project['path']).is_dir() and project not in previous['projects']:
+                    raise ValueError('New project directory unavailable')
+        if previous and 'handoff' in previous:
+            config['handoff'] = copy.deepcopy(previous['handoff'])
     return config, receipt
 
 
@@ -119,9 +176,9 @@ def prepare(context, selection, runner):
     return replace(context, project_launcher_snapshot=snapshot)
 
 
-def _component(project):
+def _component(project, document=None):
     action = dict(action=27, version=2, applyMode=0, escaping=1,
-                  title=project['name'], parameter=guid(project['id']))
+                  title=project['name'], parameter=project_guid(project['id'], document or {}))
     return {'class':'iTermStatusBarActionComponent', 'configuration':{
         'knobs':{'base: compression resistance':1, 'maxwidth':1.7976931348623157e+308,
                  'base: priority':5, 'minwidth':'0', 'shared font':'', 'action':action},
@@ -130,19 +187,30 @@ def _component(project):
             'draw separator between status bar and terminal':False, 'algorithm':0}}}
 
 
-def _panel(bar, projects, previous, baseline):
+def _panel(bar, projects, previous, baseline, document=None, previous_document=None):
     result = copy.deepcopy(bar)
     layout = result['Status Bar Layout']
     components = layout.get('components')
     if type(components) is not list:
         raise ValueError('Native component list unavailable')
     baseline_components = baseline['Status Bar Layout']['components']
-    previous_components = [_component(p) for p in previous if _component(p) not in baseline_components]
-    layout['components'] = [c for c in components if c not in previous_components]
-    for project in projects:
-        component = _component(project)
-        if component not in layout['components']:
-            layout['components'].append(component)
+    previous_components = [_component(p, previous_document) for p in previous
+        if document and 'handoff' in document or _component(p, previous_document) not in baseline_components]
+    if document and 'handoff' in document:
+        replacements = iter(_component(p, document) for p in projects)
+        updated = []
+        for component in components:
+            replacement = next(replacements, None) if component in previous_components else component
+            if replacement is not None:
+                updated.append(replacement)
+        updated.extend(replacements)
+        layout['components'] = updated
+    else:
+        layout['components'] = [c for c in components if c not in previous_components]
+        for project in projects:
+            component = _component(project, document)
+            if component not in layout['components']:
+                layout['components'].append(component)
     result['Show Status Bar'] = True
     return result
 
@@ -167,18 +235,19 @@ def build(context, selection):
         parent = profiles[selection.parent_profile]
         targets = [profiles[name] for name in config['profiles']]
         old_path = context.paths.config/FILENAME
-        previous = _config(old_path.read_bytes(),historical=True)['projects'] if old_path.exists() else []
-        dynamic_path = context.paths.profiles/FILENAME
-        before = dynamic_path.read_bytes() if dynamic_path.exists() else None
+        previous_document = _owned_config(old_path.read_bytes()) if old_path.exists() else {}
+        previous = previous_document.get('projects', [])
+        profile_path = dynamic_path(context.paths.profiles, config)
+        before = profile_path.read_bytes() if profile_path.exists() else None
         owned_guids = {p['Guid'] for p in json.loads(before)['Profiles']} if before else set()
         existing_guids = {p['guid'] for p in snapshot['profiles']}
         baseline_bars = {r['target']:r['before']['value'] for r in receipt.resources
             if r['kind']=='profile_bar' and OWNER in r['owners']} if receipt else {}
         for project in config['projects']:
-            if guid(project['id']) in existing_guids - owned_guids:
+            if project_guid(project['id'], config) in existing_guids - owned_guids:
                 raise ValueError('Generated project GUID is externally owned')
             existing = profiles.get(project['name'])
-            if existing and existing['guid'] != guid(project['id']):
+            if existing and existing['guid'] != project_guid(project['id'], config):
                 raise ValueError('Project name collision')
         bars = []
         for target in targets:
@@ -187,7 +256,7 @@ def build(context, selection):
                     raise ValueError('Session propagation conflict')
             # Owned project bars change atomically with their dedicated file.
             if target['guid'] not in owned_guids:
-                bars.append(ProfileBarEdit(target['guid'],target['bar'],_panel(target['bar'],config['projects'],previous,baseline_bars.get(target['guid'],target['bar'])),OWNER))
+                bars.append(ProfileBarEdit(target['guid'],target['bar'],_panel(target['bar'],config['projects'],previous,baseline_bars.get(target['guid'],target['bar']),config,previous_document),OWNER))
         target_guids = {p['guid'] for p in targets}
         for resource in receipt.resources if receipt else ():
             if resource['kind']=='profile_bar' and OWNER in resource['owners'] and resource['target'] not in target_guids:
@@ -195,12 +264,24 @@ def build(context, selection):
                 if not iterm.same(current['bar'],resource['installed']['value']):
                     raise ValueError('Removed target bar changed')
                 bars.append(ProfileBarEdit(resource['target'],current['bar'],resource['before']['value'],OWNER))
-        panel = _panel(parent['bar'],config['projects'],previous,baseline_bars.get(parent['guid'],parent['bar']))
-        rows = [dict(Name=p['name'], Guid=guid(p['id']), **{
+        panel = _panel(parent['bar'],config['projects'],previous,baseline_bars.get(parent['guid'],parent['bar']),config,previous_document)
+        rows = [dict(Name=p['name'], Guid=project_guid(p['id'], config), **{
             'Dynamic Profile Parent GUID':parent['guid'], 'Custom Command':'No', 'Command':'',
             'Custom Directory':'Yes', 'Working Directory':p['path'], **panel}) for p in config['projects']]
+        if len({row['Guid'] for row in rows}) != len(rows):
+            raise ValueError('Duplicate project GUID')
         after = (json.dumps({'Profiles':rows},sort_keys=True,indent=2)+'\n').encode()
-        dynamic = FileEdit(dynamic_path,before,after,0o600,OWNER)
+        if before is not None:
+            original = json.loads(before)
+            if set(original) != {'Profiles'}:
+                raise ValueError('Unrecognized owned profile fields')
+            if 'handoff' in config:
+                original = {'Profiles': [_handoff_row(row) for row in original['Profiles']]}
+            elif any(set(row) != set(rows[0]) for row in original['Profiles']):
+                raise ValueError('Unrecognized owned profile fields')
+            if iterm.same(original, {'Profiles': rows}):
+                after = before
+        dynamic = FileEdit(profile_path,before,after,0o600,OWNER)
         # Remove confirmed owned buttons before deleting their profile targets.
         removing = owned_guids - {p['Guid'] for p in rows}
         changes.edits = bars+[dynamic] if removing else [dynamic]+bars

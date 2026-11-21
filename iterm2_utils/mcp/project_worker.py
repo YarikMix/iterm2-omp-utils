@@ -60,6 +60,7 @@ def main(binding: McpBinding, *, authorize: Callable[[], None]) -> int:
         protocol.write(encoded)
         protocol.flush()
     status = 'blocked'
+    reason = None
     committing = False
     with open(os.devnull, 'w') as sink, redirect_stdout(sink), redirect_stderr(sink):
         try:
@@ -75,6 +76,8 @@ def main(binding: McpBinding, *, authorize: Callable[[], None]) -> int:
                                omp_profile=binding.profile, python=binding.python)
             preview = prepare_project_edit(context, runner, change)
             status = preview.status
+            if status == 'blocked' and preview.reason == 'handoff_requires_uninstall':
+                reason = 'handoff_requires_uninstall'
             if status == 'ready':
                 emit({'preview': dict(status=status, before=[asdict(p) for p in preview.before],
                                       after=[asdict(p) for p in preview.after], removes_launcher=preview.removes_launcher)})
@@ -89,7 +92,10 @@ def main(binding: McpBinding, *, authorize: Callable[[], None]) -> int:
         except Exception:
             status = 'unknown' if committing else 'blocked'
         try:
-            emit({'result': {'status': status}})
+            result = {'status': status}
+            if status == 'blocked' and reason is not None:
+                result['reason'] = reason
+            emit({'result': result})
         except (OSError, ValueError):
             return 1
     return 0

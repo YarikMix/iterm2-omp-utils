@@ -14,7 +14,7 @@ PACKAGE_FILES = (
     '__init__.py', '__main__.py', 'cli.py', 'commands.py', 'discovery.py', 'engine.py',
     'lifecycle.py', 'launch.py', 'launch_api.py', 'launch_checks.py', 'legacy_state.py',
     'migration.py', 'models.py', 'omp_profile.py', 'omp_sessions.py', 'planner.py',
-    'profile_api.py', 'project_edits.py', 'skill_install.py', 'state.py', 'terminal.py',
+    'profile_api.py', 'project_edits.py', 'project_handoff.py', 'skill_install.py', 'state.py', 'terminal.py',
     'config/__init__.py', 'config/iterm.py', 'config/jsonfile.py', 'config/legacy_mcp.py',
     'config/mcp.py', 'config/omp.py', 'config/preferences.py', 'config/tomlfile.py', 'config/zshrc.py',
     'features/__init__.py', 'features/appearance.py', 'features/mcp.py', 'features/notifications.py',
@@ -56,9 +56,18 @@ def verify_release(root, data):
     if (root.parent.resolve() != (data/'mcp/releases').resolve() or
             not re.fullmatch('[0-9a-f]{64}', root.name) or root.is_symlink()):
         raise ValueError('Invalid release namespace')
-    files = {name:_source(root, Path(name)) for name in payload_names(root)}
+    names = payload_names(root)
+    # The immediately previous release predates only this new package dependency.
+    if not (root/'iterm2_utils/project_handoff.py').exists():
+        names = tuple(name for name in names if name != 'iterm2_utils/project_handoff.py')
+        actual = {str(path.relative_to(root)) for path in root.rglob('*')
+                  if path.is_symlink() or not path.is_dir()}
+        if actual != set(names):
+            raise ValueError('Historical payload inventory changed')
+    files = {name:_source(root, Path(name)) for name in names}
     if _digest(files) != root.name:
         raise ValueError('Immutable payload changed')
+    return names
 
 
 def retain_release_resource(resource, context):
@@ -74,8 +83,7 @@ def retain_release_resource(resource, context):
         return False
     root = base/relative.parts[0]
     try:
-        verify_release(root, context.paths.data)
-        return str(path.relative_to(root)) in payload_names(root)
+        return str(path.relative_to(root)) in verify_release(root, context.paths.data)
     except (OSError, ValueError, KeyError, TypeError, AttributeError):
         # Damaged payloads lose retention, not the ability to revoke their entry.
         return False
@@ -104,7 +112,7 @@ def superseded_payload_resources(receipt, compiled, context):
             value != definition(new) or replacement['before']['value'] != definition(old)):
         return set()
     mcp.authorize_binding(old)
-    targets = {str((old.install_root/name).resolve()) for name in payload_names(old.install_root)}
+    targets = {str((old.install_root/name).resolve()) for name in verify_release(old.install_root, context.paths.data)}
     retired = set()
     for resource in receipt.resources:
         if resource['kind'] == 'file' and resource['owners'] == ['mcp'] and resource['target'] in targets:

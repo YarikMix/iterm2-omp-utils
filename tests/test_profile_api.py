@@ -201,6 +201,44 @@ class NativeSdkTests(unittest.IsolatedAsyncioTestCase):
     async def operate(self, **request):
         return await profile_api._operate(request)
 
+    async def test_filtered_launch_evidence_is_typed_and_read_only(self):
+        self.properties.update({'Dynamic Profile Parent GUID':'base', 'Custom Directory':'Yes',
+                                'Custom Command':'No', 'Command':''})
+        result = await self.operate(operation='inspect', launch_guids=['parent-guid'])
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['value']['profiles'][0]['launch'], {
+            'parent_guid':'base', 'custom_directory':'Yes', 'custom_command':'No', 'command':''})
+        self.assertNotIn('Foreign', json.dumps(result))
+        self.assertEqual(self.writes, [])
+        self.properties['Command'] = None
+        self.assertEqual(await self.operate(operation='inspect', launch_guids=['parent-guid']), {'status':'conflict'})
+
+    async def test_filtered_launch_request_rejects_invalid_scope(self):
+        for guids in ('parent-guid', [None], ['parent-guid','parent-guid'], ['missing']):
+            with self.subTest(guids=guids):
+                self.assertEqual(await self.operate(operation='inspect', launch_guids=guids), {'status':'conflict'})
+        self.assertEqual(self.writes, [])
+
+    async def test_handoff_session_reference_filter_requires_matching_bar(self):
+        self.properties.update({'Dynamic Profile Parent GUID':'base', 'Custom Directory':'Yes',
+                                'Custom Command':'No', 'Command':''})
+        self.properties['Status Bar Layout'] = {'components':[{'class':'fixture', 'target':'project-guid'}]}
+        session_properties = copy.deepcopy(self.properties)
+        async def profile():
+            return SimpleNamespace(all_properties=copy.deepcopy(session_properties))
+        self.sessions = [SimpleNamespace(session_id='buried', async_get_profile=profile)]
+        request = dict(operation='inspect', launch_guids=['parent-guid'], reference_guids=['project-guid'],
+                       replaced_bars=[dict(guid='parent-guid', bar=profile_api._bar(self.properties))])
+        result = await self.operate(**request)
+        self.assertEqual(result['status'], 'ok')
+        self.assertEqual(result['value']['sessions'][0]['references'], [])
+        session_properties['Hidden'] = 'project-guid'
+        result = await self.operate(**request)
+        self.assertIn('project-guid', result['value']['sessions'][0]['references'])
+        session_properties['Show Status Bar'] = True
+        self.assertEqual(await self.operate(**request), {'status':'conflict'})
+        self.assertEqual(self.writes, [])
+
     async def test_sessions_empty_ignores_profile_schema(self):
         self.properties['Show Status Bar'] = 0
         self.properties['Status Bar Layout'] = 'future-schema'

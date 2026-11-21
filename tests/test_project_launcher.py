@@ -36,7 +36,7 @@ class ProjectLauncherTests(LifecycleFixture):
 
     @property
     def dynamic(self):
-        return self.context.paths.profiles/'iterm2-utils-project-launcher.json'
+        return self.context.paths.profiles/getattr(self, 'source_name', 'iterm2-utils-project-launcher.json')
 
     def write_config(self):
         self.config.write_text(json.dumps(self.document))
@@ -50,6 +50,12 @@ class ProjectLauncherTests(LifecycleFixture):
                 for row in json.loads(self.dynamic.read_text())['Profiles']:
                     snapshot['profiles'].append(dict(guid=row['Guid'], name=row['Name'],
                         bar={k:row[k] for k in iterm.BAR_KEYS}, working_directory=row['Working Directory'], references=[]))
+                    if type(row['Show Status Bar']) is int and row['Show Status Bar'] in (0, 1):
+                        snapshot['profiles'][-1]['bar']['Show Status Bar'] = bool(row['Show Status Bar'])
+                    if row['Guid'] in request.get('launch_guids', ()):
+                        snapshot['profiles'][-1]['launch'] = dict(
+                            parent_guid=row['Dynamic Profile Parent GUID'], custom_directory=row['Custom Directory'],
+                            custom_command=row.get('Custom Command', 'No'), command=row.get('Command', ''))
             guids = set(request.get('reference_guids', ())) | {p['guid'] for p in snapshot['profiles']}
             replacements = {r['guid']:r['bar'] for r in request.get('replaced_bars',())}
             for row in snapshot['profiles']:
@@ -72,6 +78,161 @@ class ProjectLauncherTests(LifecycleFixture):
                 self.native['position'] = request['value']
             value = request['value']
         return {'exists': True, 'value': copy.deepcopy(value)}
+
+    def handed_off(self, *, interleaved=False):
+        """Synthetic current receipt: manual bytes and panels were adopted unchanged."""
+        from iterm2_utils.features import project_launcher as launcher
+        from iterm2_utils.models import Receipt
+        self.source_name = 'manual-projects.json'
+        self.document['handoff'] = {'source': self.source_name, 'guids': {
+            'project-a': 'manual-a', 'project-b': 'manual-b'}}
+        panel = copy.deepcopy(self.bar)
+        panel['Show Status Bar'] = True
+        for project in self.document['projects']:
+            component = launcher._component(project)
+            component['configuration']['knobs']['action']['parameter'] = self.document['handoff']['guids'][project['id']]
+            panel['Status Bar Layout']['components'].append(component)
+        if interleaved:
+            panel['Status Bar Layout']['components'].insert(2, {'class': 'foreign-middle', 'knobs': {}})
+            panel['Status Bar Layout']['components'].append({'class': 'foreign-last', 'knobs': {}})
+        self.native['profiles'][0]['bar'] = panel
+        self.native['position'] = 1
+        rows = [dict(Name=p['name'], Guid=self.document['handoff']['guids'][p['id']], **{
+            'Dynamic Profile Parent GUID': 'parent-guid', 'Custom Command': 'No', 'Command': '',
+            'Custom Directory': 'Yes', 'Working Directory': p['path'], **panel})
+            for p in self.document['projects']]
+        self.manual_bytes = (json.dumps({'Profiles': rows}, indent=4)+'\n').encode()
+        self.dynamic.parent.mkdir(parents=True, exist_ok=True)
+        self.dynamic.write_bytes(self.manual_bytes); self.dynamic.chmod(0o640)
+        catalogue = self.context.paths.config/launcher.FILENAME
+        catalogue.parent.mkdir(parents=True, exist_ok=True)
+        catalogue.write_text(json.dumps(self.document, sort_keys=True, indent=2)+'\n')
+        resources = [
+            engine._resource('file', self.dynamic.resolve(), {'mode': 0o640},
+                engine._encode(self.manual_bytes), engine._encode(self.manual_bytes), launcher.OWNER),
+            engine._resource('file', catalogue.resolve(), {'mode': 0o600},
+                engine._encode(None), engine._encode(catalogue.read_bytes()), launcher.OWNER),
+            engine._resource('profile_bar', 'parent-guid', {}, engine._value(panel), engine._value(panel), launcher.OWNER),
+            engine._resource('status_bar_position', iterm.DOMAIN, {}, engine._value(1), engine._value(1), launcher.OWNER)]
+        for resource in resources:
+            resource['owners'].append(launcher.FEATURE)
+        receipt = Receipt(state.VERSION, self.selection(launcher.FEATURE), resources, [])
+        state.save(self.context.paths.data/'receipt.json', receipt)
+        self.context.project_launcher_config = None
+        self.context.omp_profile = self.profile
+        self.manual_native = copy.deepcopy(self.native)
+        self.calls.clear()
+        return receipt
+
+    def test_accepted_legacy_checkpoint_updates_retires_and_renames(self):
+        from iterm2_utils import project_handoff, project_edits
+        from iterm2_utils.features import project_launcher as launcher
+        from iterm2_utils.models import Receipt
+        receipt = self.handed_off()
+        rows = json.loads(self.dynamic.read_bytes())['Profiles']
+        for row in rows:
+            row['Show Status Bar'] = 1
+            del row['Custom Command']; del row['Command']
+        raw = (json.dumps({'Profiles':rows}, indent=4)+'\n').encode()
+        self.dynamic.write_bytes(raw)
+        catalogue = self.context.paths.config/launcher.FILENAME
+        catalogue.unlink()
+        state.save(self.context.paths.data/'receipt.json', Receipt(state.VERSION, self.selection(), [], []))
+        preview = project_handoff.prepare_handoff(self.context, self.runner, self.dynamic, ('Default',))
+        self.assertEqual(preview.status, 'ready')
+        # Synthesize only the ownership commit; Task 2 does not provide apply.
+        catalogue.write_text(json.dumps(preview._checkpoint['document'], sort_keys=True, indent=2)+'\n')
+        receipt.resources[0]['before'] = engine._encode(raw)
+        receipt.resources[0]['installed'] = engine._encode(raw)
+        receipt.resources[1]['installed'] = engine._encode(catalogue.read_bytes())
+        state.save(self.context.paths.data/'receipt.json', receipt)
+        self.assertSuccess(lifecycle.update(self.context, self.runner))
+        self.assertEqual(self.dynamic.read_bytes(), raw)
+        self.assertEqual(self.dynamic.stat().st_mode & 0o777, 0o640)
+        remove = project_edits.prepare_project_edit(self.context, self.runner,
+            project_edits.ProjectChange('remove', project='manual-b'))
+        self.assertEqual(remove.status, 'ready')
+        self.assertEqual(project_edits.apply_project_edit(self.context, self.runner, remove, authorize=lambda:None).status, 'applied')
+        rename = project_edits.prepare_project_edit(self.context, self.runner,
+            project_edits.ProjectChange('rename', project='manual-a', name='Renamed'))
+        self.assertEqual(rename.status, 'ready')
+        self.assertEqual(project_edits.apply_project_edit(self.context, self.runner, rename, authorize=lambda:None).status, 'applied')
+        rows = json.loads(self.dynamic.read_bytes())['Profiles']
+        self.assertEqual([(r['Guid'],r['Name']) for r in rows], [('manual-a','Renamed')])
+        self.assertSuccess(lifecycle.uninstall(self.context, {'project-launcher'}, self.runner))
+        self.assertEqual(self.dynamic.read_bytes(), raw)
+        self.assertEqual(self.dynamic.stat().st_mode & 0o777, 0o640)
+
+
+    def test_handoff_repeated_update_preserves_checkpoint(self):
+        receipt = self.handed_off(interleaved=True)
+        original = self.dynamic.stat()
+        for _ in range(2):
+            self.assertSuccess(lifecycle.update(self.context, self.runner))
+        self.assertEqual(self.dynamic.read_bytes(), self.manual_bytes)
+        self.assertEqual((self.dynamic.stat().st_ino, self.dynamic.stat().st_mtime_ns),
+                         (original.st_ino, original.st_mtime_ns))
+        self.assertEqual(state.load(self.context.paths.data/'receipt.json'), receipt)
+        self.assertEqual(self.native, self.manual_native)
+        self.assertFalse(any(c['operation'].startswith('write_') for c in self.calls))
+        self.document['projects'][0]['name'] = 'Renamed'
+        self.config.write_text(json.dumps({k:v for k,v in self.document.items() if k != 'handoff'}))
+        self.context.project_launcher_config = self.config
+        self.assertSuccess(self.install('project-launcher'))
+        components = self.native['profiles'][0]['bar']['Status Bar Layout']['components']
+        self.assertEqual([c['class'] for c in components],
+                         ['foreign', 'iTermStatusBarActionComponent', 'foreign-middle',
+                          'iTermStatusBarActionComponent', 'foreign-last'])
+        self.assertEqual(components[1]['configuration']['knobs']['action']['title'], 'Renamed')
+        self.assertEqual(components[3]['configuration']['knobs']['action']['parameter'], 'manual-b')
+
+    def test_standard_install_rejects_handoff_metadata(self):
+        self.document['handoff'] = {'source': 'manual-projects.json', 'guids': {
+            'project-a': 'manual-a', 'project-b': 'manual-b'}}
+        self.write_config()
+        before = self.snapshot()
+        self.assertTrue(any(f.state == 'conflict' for f in self.install('project-launcher').findings))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_handoff_uninstall_restores_exact_manual_baseline(self):
+        self.handed_off()
+        self.document['projects'].reverse()
+        self.document['projects'][0]['name'] = 'Changed'
+        external = {k:v for k,v in self.document.items() if k != 'handoff'}
+        self.config.write_text(json.dumps(external))
+        self.context.project_launcher_config = self.config
+        self.assertSuccess(self.install('project-launcher'))
+        self.assertEqual([r['Guid'] for r in json.loads(self.dynamic.read_bytes())['Profiles']], ['manual-b', 'manual-a'])
+        self.assertSuccess(lifecycle.uninstall(self.context, {'project-launcher'}, self.runner))
+        self.assertEqual(self.dynamic.read_bytes(), self.manual_bytes)
+        self.assertEqual(self.dynamic.stat().st_mode & 0o777, 0o640)
+        self.assertEqual(self.native, self.manual_native)
+        self.assertFalse((self.context.paths.config/'iterm2-utils-project-launcher.json').exists())
+
+    def test_handoff_file_retirement_blocks_buried_reference(self):
+        self.handed_off()
+        from iterm2_utils import project_edits as edits
+        folder = self.folder.with_name('third'); folder.mkdir()
+        preview = edits.prepare_project_edit(self.context, self.runner, edits.ProjectChange('add', name='Third', path=str(folder)))
+        self.assertEqual(preview.status, 'ready')
+        self.assertEqual(edits.apply_project_edit(self.context, self.runner, preview, authorize=lambda: None).status, 'applied')
+        guid = json.loads(self.dynamic.read_bytes())['Profiles'][-1]['Guid']
+        for reference in ('bound', 'buried', 'hidden'):
+            with self.subTest(reference=reference):
+                self.native['sessions'] = []
+                self.native['profiles'][0]['references'] = []
+                if reference == 'hidden':
+                    self.native['profiles'][0]['references'] = [guid]
+                else:
+                    self.native['sessions'] = [dict(id='buried', profile_guid=guid if reference == 'bound' else 'parent-guid',
+                        bar=copy.deepcopy(self.bar), references=[guid] if reference == 'buried' else [], provenance=True)]
+                before, native = self.dynamic.read_bytes(), copy.deepcopy(self.native)
+                receipt = state.load(self.context.paths.data/'receipt.json')
+                result = lifecycle.uninstall(self.context, {'project-launcher'}, self.runner)
+                self.assertTrue(any(f.state == 'conflict' for f in result.findings))
+                self.assertEqual(self.dynamic.read_bytes(), before)
+                self.assertEqual(self.native, native)
+                self.assertEqual(state.load(self.context.paths.data/'receipt.json'), receipt)
 
     def test_feature_is_explicit_and_builder_preserves_foreign_layout(self):
         self.assertIn('project-launcher', FEATURES)
