@@ -32,9 +32,21 @@ class MCPTests(unittest.TestCase):
         paths = Paths(self.home, self.home/'.zshrc', self.home/'config', self.home/'cache', self.home/'data', self.home/'profiles', Path(__file__).resolve().parents[1])
         self.context = Context(paths, {}, {}, frozenset(), {}, {}, omp_profile=self.profile)
         self.selection = Selection(frozenset({'mcp'}), frozenset(), 'Default', self.profile)
+        from iterm2_utils.mcp.binding import McpBinding
+        self.binding = McpBinding(self.profile, self.home/'release', self.home/'data/receipt.json', Path(sys.executable))
+
+    def owned(self):
+        from dataclasses import replace
+        from iterm2_utils import lifecycle
+        self.context = replace(self.context,
+            executables={'python3':Path(sys.executable),'zsh':Path('/bin/zsh'),'iterm2':self.home/'iTerm.app'},
+            versions={'python3':'3.12.0'}, capabilities=frozenset({'macos','python:iterm2','python:mcp'}))
+        result=lifecycle.install(self.context,self.selection,self.runner)
+        self.assertFalse([f for f in result.findings if f.state in {'conflict','unavailable','missing_dependency'}],result.findings)
+        return result.receipt
 
     def install(self):
-        edit = mcp.server_edit(self.profile, self.runner)
+        edit = mcp.server_edit(self.profile, self.runner, binding=self.binding)
         return engine.apply(Plan(self.selection, ChangeSet([edit], [], []), ''), self.context, self.runner)
 
     def test_owned_server_is_one_json_pointer_and_preserves_foreign_servers(self):
@@ -47,7 +59,7 @@ class MCPTests(unittest.TestCase):
         self.assertEqual(resource['kind'], 'json')
         self.assertEqual(resource['locator']['pointer'], ['mcpServers', mcp.NAME])
         current = json.loads(self.path.read_text())
-        self.assertEqual(current['mcpServers'][mcp.NAME], mcp.definition())
+        self.assertEqual(current['mcpServers'][mcp.NAME], mcp.definition(self.binding))
         self.assertEqual(current['mcpServers']['foreign'], original['mcpServers']['foreign'])
         self.assertEqual(current['foreignRoot'], original['foreignRoot'])
         reverted = engine.revert(result.receipt, self.context, self.runner, frozenset({'mcp'}))
@@ -55,7 +67,7 @@ class MCPTests(unittest.TestCase):
         self.assertEqual(json.loads(self.path.read_text()), original)
 
     def test_equivalent_foreign_server_reuses_without_ownership(self):
-        self.path.write_text(json.dumps({'mcpServers': {mcp.NAME: mcp.definition()}}))
+        self.path.write_text(json.dumps({'mcpServers': {mcp.NAME: mcp.definition(self.binding)}}))
         before = self.path.read_bytes()
         result = self.install()
         self.assertFalse(result.findings)
@@ -63,18 +75,18 @@ class MCPTests(unittest.TestCase):
         self.assertEqual(self.path.read_bytes(), before)
 
     def test_foreign_name_collision_is_not_overwritten(self):
-        for value in ({'command': 'other'}, None, {'command': 'uvx', 'args': mcp.ARGS, 'env': {'TOKEN': 'secret'}}):
+        for value in ({'command': 'other'}, None, {'command': 'uvx', 'args': ['--with','mcp<2','mcp-server-iterm2==0.1.1'], 'env': {'TOKEN': 'secret'}}):
             self.path.write_text(json.dumps({'mcpServers': {mcp.NAME: value}}))
             before = self.path.read_bytes()
             with self.assertRaises(ValueError):
-                mcp.server_edit(self.profile, self.runner)
+                mcp.server_edit(self.profile, self.runner, binding=self.binding)
             self.assertEqual(self.path.read_bytes(), before)
 
     def test_malformed_storage_and_disabled_server_block_without_mutation(self):
         for content in ('null', '[]', '{', '{"mcpServers":null}', '{"mcpServers":{},"mcpServers":{}}', json.dumps({'disabledServers': [mcp.NAME]})):
             self.path.write_text(content)
             with self.assertRaises(ValueError):
-                mcp.server_edit(self.profile, self.runner)
+                mcp.server_edit(self.profile, self.runner, binding=self.binding)
             self.assertEqual(self.path.read_text(), content)
 
     def test_changed_server_is_retained_on_uninstall(self):
@@ -97,29 +109,32 @@ class MCPTests(unittest.TestCase):
         self.assertTrue(reverted.findings)
         self.assertEqual(json.loads(self.path.read_text()), data)
 
-    def test_pinned_definition_is_native_stdio_not_agent_cli_metadata(self):
-        definition = mcp.definition()
-        self.assertEqual(definition, {'command': 'uvx', 'args': ['--with', 'mcp<2', 'mcp-server-iterm2==0.1.1'], 'env': {}, 'enabled': True})
+    def test_owned_definition_is_isolated_native_stdio_not_agent_cli_metadata(self):
+        definition = mcp.definition(self.binding)
+        self.assertEqual(definition, {'command':sys.executable,'args':['-I',str(self.home/'release/runtime/iterm2_mcp_entry.py'),
+            '--omp-profile',str(self.profile.agent_dir),'--receipt',str(self.home/'data/receipt.json')],
+            'env':{},'timeout':300000,'enabled':True})
         self.assertNotIn('scope', definition)
         self.assertNotIn('environment_empty', definition)
 
     def test_probe_checks_exact_tool_allowlist_and_session_evidence(self):
-        self.path.write_text(json.dumps({'mcpServers': {mcp.NAME: mcp.definition()}}))
+        self.owned()
         class Probe(NoAgentRunner):
             extra = False
             def mcp_probe(inner, argv, *, timeout, env=None):
-                self.assertEqual(argv, ['uvx', *mcp.ARGS])
+                value=mcp.definition(mcp.installed_binding(self.context))
+                self.assertEqual(argv, [value['command'], *value['args']])
                 self.assertEqual(timeout, 5)
                 self.assertEqual(env['HOME'], str(self.home))
-                return {'tools': sorted(mcp.TOOLS | ({'dangerous'} if inner.extra else set())), 'sessions': True}
+                return {'tools': sorted(mcp.PUBLIC_TOOLS | ({'dangerous'} if inner.extra else set())), 'sessions': True}
         runner = Probe()
         self.assertEqual(mcp.probe(self.context, runner).state, 'ready')
         runner.extra = True
         self.assertNotEqual(mcp.probe(self.context, runner).state, 'ready')
 
     def test_adapter_rejects_incomplete_duplicate_or_unknown_tool_inventory(self):
-        self.path.write_text(json.dumps({'mcpServers': {mcp.NAME: mcp.definition()}}))
-        complete = sorted(mcp.TOOLS)
+        self.owned()
+        complete = sorted(mcp.PUBLIC_TOOLS)
         class Probe(NoAgentRunner):
             tools = []
             def mcp_probe(inner, *args, **kwargs):
@@ -132,7 +147,7 @@ class MCPTests(unittest.TestCase):
     def test_protocol_rejects_invalid_inventory_before_sessions_call(self):
         import sys
         from iterm2_utils.commands import Runner
-        complete = sorted(mcp.TOOLS)
+        complete = sorted(mcp.PUBLIC_TOOLS)
         script = self.home/'inventory-server.py'
         marker = self.home/'sessions-called'
         for inventory in ([complete[0]], complete[:-1], complete + [complete[0]], complete[:-1] + [complete[0]], complete + ['execute']):
@@ -158,7 +173,7 @@ for line in sys.stdin:
         import sys
         from iterm2_utils.commands import Runner
         script = self.home/'error-server.py'
-        script.write_text('tools=' + repr(sorted(mcp.TOOLS)) + '\n' + """import sys,json
+        script.write_text('tools=' + repr(sorted(mcp.PUBLIC_TOOLS)) + '\n' + """import sys,json
 for line in sys.stdin:
  request=json.loads(line)
  if 'id' not in request:continue
@@ -176,14 +191,12 @@ for line in sys.stdin:
         from dataclasses import replace
         from iterm2_utils import lifecycle, state
         from iterm2_utils.models import Receipt, UiStep
-        self.path.write_text(json.dumps({'mcpServers': {mcp.NAME: mcp.definition()}}))
-        receipt = Receipt('2', self.selection, [], [UiStep('mcp_authorize', 'mcp', None, 'Authorize the selected server.')])
-        state.save(self.context.paths.data/'receipt.json', receipt)
+        receipt = self.owned()
         class Probe(NoAgentRunner):
             calls = 0
             def mcp_probe(inner, argv, *, timeout, env=None):
                 inner.calls += 1
-                return {'tools': sorted(mcp.TOOLS), 'sessions': True}
+                return {'tools': sorted(mcp.PUBLIC_TOOLS), 'sessions': True}
         runner = Probe()
         different = replace(self.context, omp_profile=OmpProfile(None, self.home/'foreign/agent'))
         result = lifecycle.reconcile_ui(different, 'mcp_authorize', runner)
@@ -197,13 +210,12 @@ for line in sys.stdin:
         import io
         from iterm2_utils import cli, state
         from iterm2_utils.models import Receipt
-        self.path.write_text(json.dumps({'mcpServers': {mcp.NAME: mcp.definition()}}))
-        state.save(self.context.paths.data/'receipt.json', Receipt('2', self.selection, [], []))
+        self.owned()
         class Probe(NoAgentRunner):
             calls = 0
             def mcp_probe(inner, argv, *, timeout, env=None):
                 inner.calls += 1
-                return {'tools': sorted(mcp.TOOLS), 'sessions': True}
+                return {'tools': sorted(mcp.PUBLIC_TOOLS), 'sessions': True}
         runner = Probe()
         output = io.StringIO()
         with patch.object(cli, 'resolve_paths', return_value=self.context.paths), patch.object(cli, 'Runner', return_value=runner), patch.object(cli, 'discover', return_value=self.context) as discovery, contextlib.redirect_stdout(output):
@@ -244,3 +256,26 @@ else:
             capture_output=True,text=True,timeout=3,env=dict(os.environ),cwd=self.context.paths.repo)
         self.assertEqual((result.returncode,result.stdout),(0,'special-file refused\n'),result.stderr)
         self.assertTrue(__import__('stat').S_ISFIFO(self.path.lstat().st_mode))
+
+    def test_bound_stdio_requires_supported_selected_optional_runtime(self):
+        from iterm2_utils.mcp.__main__ import main
+        import contextlib
+        import io
+        with patch('iterm2_utils.mcp.__main__.sys.version_info',(3,11)), contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(main(object(),authorize=lambda:None),2)
+
+    def test_live_probe_requires_catalogue_readiness_not_only_inventory(self):
+        from iterm2_utils.commands import Runner
+        script=self.home/'catalogue-denied.py'
+        script.write_text('tools='+repr(sorted(mcp.PUBLIC_TOOLS))+'\n'+'''import sys,json
+for line in sys.stdin:
+ request=json.loads(line)
+ if 'id' not in request:continue
+ if request['method']=='initialize': result={'protocolVersion':'2024-11-05','capabilities':{}}
+ elif request['method']=='tools/list':result={'tools':[{'name':name} for name in tools]}
+ elif request['params']['name']=='list_projects':
+  result={'isError':False,'content':[{'type':'text','text':'{\"status\":\"conflict\",\"projects\":[]}'}]}
+ else:result={'content':[{'type':'text','text':'{\"windows\":[],\"buried_sessions\":[]}'}]}
+ print(json.dumps({'jsonrpc':'2.0','id':request['id'],'result':result}),flush=True)
+''')
+        self.assertFalse(Runner().mcp_probe([sys.executable,str(script)],timeout=2)['sessions'])

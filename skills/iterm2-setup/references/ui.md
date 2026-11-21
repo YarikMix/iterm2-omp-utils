@@ -15,7 +15,10 @@ handles authorization. For the returned code run
 For appearance the API code is `appearance_api`; reconcile from an explicit
 consistent local iTerm2 session outside tmux. This probe does not change
 color/icon and is not rendered acceptance. For MCP use the returned
-`mcp_authorize` code; SDK readiness alone is not a server connection.
+`mcp_authorize` code; SDK readiness alone is not a server connection. Its live
+probe proves read-only catalogue/observe readiness only. Native TUI project edit
+requires local preview and fresh confirm; remote/headless denial is not bypassed.
+Prompt after `/exit`, dialog acceptance and panel clicks remain separate checks.
 
 Native omp status (`terminal.programStatus`, OSC7501), notifications (OSC9),
 resume and shortcuts require their actual effective/event/keyboard acceptance.

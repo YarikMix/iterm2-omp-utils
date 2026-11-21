@@ -6,6 +6,7 @@ import subprocess
 import sys
 from tempfile import TemporaryDirectory
 import unittest
+import importlib.util
 
 
 FIXTURE = r'''
@@ -40,6 +41,8 @@ asyncio.run(main())
 '''
 
 
+@unittest.skipUnless(sys.version_info >= (3,12) and importlib.util.find_spec('mcp') and
+                     importlib.util.find_spec('iterm2'), 'Optional SDK suite requires selected Python 3.12+ with mcp and iterm2')
 class StdioTests(unittest.TestCase):
     def test_stdio_catalogue_does_not_open_websocket(self):
         # No skip: the controller explicitly supplies the optional-dependency Python.
@@ -103,4 +106,43 @@ class StdioTests(unittest.TestCase):
                 except Exception as exc: self.assertNotIn('private authorization payload',str(exc))
                 else: self.fail('Unauthorized catalogue call succeeded')
                 self.assertEqual((len(calls),len(closed)),(1,1))
+        asyncio.run(check())
+
+    def test_extracted_installed_runtime_without_source_checkout(self):
+        from tests.test_export import ExportTests
+        ExportTests().installed_mcp_smoke()
+
+    def test_loaded_owned_binding_revocation_closes_and_blocks_all_effects(self):
+        import asyncio
+        from unittest.mock import patch
+        from tests.test_mcp_install import InstallTests
+        from iterm2_utils.config.mcp import authorize_binding
+        from iterm2_utils import lifecycle
+        from iterm2_utils.mcp.connection import ObserveConnection
+        from iterm2_utils.mcp.server import create_server
+        fixture=InstallTests(); fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        fixture.install(); binding=fixture.binding()
+        counts={'opens':0,'closes':0}
+        class Transport:
+            reader=None; connected=True; connection=object()
+            async def open(self): counts['opens']+=1
+            async def build_app(self): return object()
+            async def close(self): counts['closes']+=1; return True
+        async def check():
+            owner=ObserveConnection(transport_factory=Transport)
+            async def authorize(): authorize_binding(binding)
+            server=create_server(binding,owner,authorize=authorize)
+            async with owner.lease(): pass  # Independently accepted prior work.
+            self.assertEqual(counts,{'opens':1,'closes':0})
+            fixture.assertFalse(lifecycle.uninstall(fixture.context,frozenset({'mcp'}),fixture.runner).findings)
+            with patch('iterm2_utils.mcp.server.run_launch',side_effect=AssertionError('New launch after revocation')) as launch, \
+                 patch('iterm2_utils.mcp.tools.write.post_notification_impl',side_effect=AssertionError('Notification after revocation')) as notify:
+                for name,args in [('list_projects',{}),('list_sessions',{}),
+                                  ('post_notification',{'title':'fixture','body':'fixture'}),
+                                  ('open_shell',{'cwd':str(fixture.home)})]:
+                    with self.assertRaises(Exception):
+                        await server.call_tool(name,args)
+                launch.assert_not_called(); notify.assert_not_called()
+            self.assertEqual(counts,{'opens':1,'closes':1})
         asyncio.run(check())

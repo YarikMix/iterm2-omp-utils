@@ -56,21 +56,33 @@ class ProjectEditResult:
     status: str
 
 
-def _safe_bytes(path):
+FILE_LIMIT = 1024 * 1024
+RECEIPT_LIMIT = 16 * 1024 * 1024
+
+def _safe_bytes(path, *, limit=FILE_LIMIT):
     fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK)
     with os.fdopen(fd, 'rb') as stream:
         info = os.fstat(stream.fileno())
-        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > 1048576:
+        if not stat.S_ISREG(info.st_mode) or info.st_nlink != 1 or info.st_size > limit:
             raise ValueError('Unsafe owned file')
-        raw = stream.read(1048577)
-        if len(raw) > 1048576:
+        raw = stream.read(limit+1)
+        if len(raw) > limit:
             raise ValueError('Owned file too large')
         return raw
 
 
+def read_receipt(path):
+    """Decode exactly the bounded no-follow bytes, never reopen after validation."""
+    from .config.jsonfile import parse
+    raw = _safe_bytes(path, limit=RECEIPT_LIMIT)
+    receipt = state.decode(parse(raw))
+    if not isinstance(receipt, Receipt):
+        raise ValueError('Current ownership required')
+    return raw, receipt
+
+
 def _owned_receipt(paths, profile):
-    receipt_raw = _safe_bytes(paths.data/'receipt.json')
-    receipt = state.load(paths.data/'receipt.json')
+    receipt_raw, receipt = read_receipt(paths.data/'receipt.json')
     if not isinstance(receipt, Receipt) or receipt.selection.omp_profile != profile:
         raise ValueError('Ownership profile mismatch')
     return receipt_raw, receipt

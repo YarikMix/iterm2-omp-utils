@@ -9,6 +9,14 @@ Project buttons open **shell** tabs, never implicitly omp. Preserve project JSON
 retained profile/button GUIDs, native action27 and login-shell/cwd semantics.
 Keep actual names/paths/receipts private; public examples use Project A/B.
 
+When explicitly available, use owned MCP `list_projects` for read-only listing;
+returned `id/name/path` are visible to the configured model provider. Interactive
+changes use only native omp TUI `iterm2_project_edit`, with a fresh local preview
+and human confirm for that exact edit. Remote/headless or missing native editor
+means blocked, not permission to bypass confirmation via file/CLI writes. A
+separately requested operator CLI/setup workflow remains distinct below.
+Decline, stale preview or revoked ownership means preserve data; never replay.
+
 ## Read first
 
 Use a verified public checkout/release. Choose existing Python 3.11+ with official

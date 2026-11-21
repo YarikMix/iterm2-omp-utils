@@ -15,6 +15,13 @@ request is not permission to substitute an external omp tab: report unsupported
 consumer without creating anything. Only an explicit separate omp session selects
 agent mode; an ordinary tab selects shell without an agent-choice menu.
 
+If the owned `iterm2-observe` tools are explicitly available, use `open_shell` for
+ordinary separate tabs and `launch_omp_task` for authorized separate task handoff.
+Use exactly one cwd/project; preserve explicit window/profile and uncertainty.
+Do not retry after unknown creation, type commands, or substitute another MCP.
+Tool receipt is not completion; returned terminal/project data reaches the model
+provider. Exact resume, exact close and setup stay in their separate flows below.
+
 ## Close one explicitly authorized tab
 
 A request to close selects `close-tab`, not launch/setup. Use a verified checkout

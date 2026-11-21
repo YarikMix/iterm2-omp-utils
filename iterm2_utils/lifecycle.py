@@ -144,6 +144,12 @@ def uninstall(context, owners, runner, *, dry_run=False):
         return _problem(context)
     if not owners or owners - FEATURES:
         return _problem(context, receipt, 'invalid_selection', 'Choose supported features explicitly.')
+    if 'mcp' in owners and 'mcp' in receipt.selection.features:
+        try:
+            from .config.mcp import read_server
+            read_server(receipt.selection.omp_profile)
+        except (ValueError, OSError):
+            return _problem(context, receipt, 'mcp_opt_out', 'Disabled or unavailable MCP policy requires explicit operator handling.')
     prepared_context, prepared, remove_owners = prepare_uninstall_checkpoint(context, receipt, owners, runner)
     if dry_run:
         return Outcome(receipt, prepared.changes.findings + [
@@ -226,10 +232,7 @@ def doctor(context, receipt, runner):
     if 'mcp' in receipt.selection.features:
         from .config import mcp
         try:
-            actual = mcp.read_server(context.omp_profile, runner)
-            if not engine._same(actual, {'exists':True, 'value':mcp.definition()}):
-                findings.append(Finding('mcp', 'omp', 'registration_missing' if not actual['exists'] else 'registration_changed',
-                                        'conflict', 'Selected MCP server entry is missing or differs from the pinned definition.'))
+            mcp.authorize_binding(mcp.installed_binding(context))
         except (ValueError, OSError, RuntimeError):
             findings.append(Finding('mcp', 'omp', 'registration_unavailable', 'unavailable',
                                     'Selected MCP server entry could not be verified.'))

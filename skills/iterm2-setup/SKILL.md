@@ -9,6 +9,14 @@ Use https://github.com/YarikMix/iterm2-omp-utils from a verified checkout/releas
 read README there. This skill can be read directly before discovery refresh.
 Copying a skill authorizes **no settings changes** and selects no features.
 
+For optional MCP choose existing Python 3.12+ containing mcp>=1.12,<2 and official
+iterm2 through `ITERM2_UTILS_PYTHON`; never download packages or change permissions
+implicitly. Old owned uvx requires explicit mcp-only removal preview, authorized
+uninstall, then new plan/dry-run/install. Update is not legacy cutover. Disabled
+or foreign registration remains untouched. Opt-out removes registration/adapter,
+not immutable in-flight runtime or project panel; old running third-party MCP
+cleanup needs separate operator authorization. See [features](references/features.md).
+
 1. Choose existing Python 3.11+. Run `python3 -m iterm2_utils doctor --json`
    read-only. Ask only for missing choices: selected omp storage profile,
    [features](references/features.md) and ordinary iTerm parent profile. Preserve

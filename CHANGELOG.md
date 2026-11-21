@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+Added opt-in owned MCP replacement: standalone immutable payload, selected existing
+Python 3.12+ with mcp>=1.12,<2 and iterm2, 13 observe tools plus catalogue/shell/handoff.
+Profile-scoped native TUI project edit requires a fresh local confirmation and
+authorization under the write lock. Every tool dispatch checks live ownership;
+revocation closes observe and removes registration/adapter, not in-flight runtime,
+project panel, unrelated features or user processes. Legacy uvx requires explicit
+preview/removal/reinstall; update never silently migrates it. Offline/package
+checks do not establish live iTerm2, native dialog or shell-after-exit acceptance.
+
 Added explicit `close-tab --window ID --tab ID --session ID`: one native tab-only
 SDK close without force/retry, guarded by exact unique single-visible-session
 target inventory. `closed` requires native OK and fresh complete absence of both

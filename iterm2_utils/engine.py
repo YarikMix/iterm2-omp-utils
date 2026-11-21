@@ -143,7 +143,8 @@ def _compile(edit):
     old, new = edit.before, edit.after
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else edit.mode
     locator = {'mode':mode}
-    if edit.owner=='shared:runtime' or edit.path.name in {'iterm2-utils.json','iterm2-utils-project-launcher.json'}:
+    if (edit.owner=='shared:runtime' or edit.owner=='mcp' and edit.path.name != 'mcp.json' or
+            edit.path.name in {'iterm2-utils.json','iterm2-utils-project-launcher.json'}):
         return [_resource('file',path,locator,_encode(old),_encode(new),edit.owner)]
     if edit.path.suffix in {'.json','.toml'} and new is not None:
         kind = edit.path.suffix[1:]
@@ -582,8 +583,10 @@ def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozens
                         retained.append(resource)
                         findings.append(_finding('uninstall_changed','User-changed value was preserved; ownership remains unresolved.',resource['owners'][0]))
                     else:
-                        changes.append(dict(resource,before=resource['installed'],installed=resource['before']))
-                        restoring.add(_identity(resource))
+                        from .features.mcp import retain_release_resource
+                        if not retain_release_resource(resource, context):
+                            changes.append(dict(resource,before=resource['installed'],installed=resource['before']))
+                            restoring.add(_identity(resource))
                 resources = retained
             selection = plan.selection
             if remove_owners:
@@ -635,7 +638,9 @@ def revert(receipt: Receipt, context: Context, runner: Runner, owners: frozenset
                     remaining.append(r)
                     findings.append(_finding('uninstall_changed','User-changed value was preserved; ownership remains unresolved.',r['owners'][0]))
                     continue
-                changes.append(dict(r,before=r['installed'],installed=r['before']))
+                from .features.mcp import retain_release_resource
+                if not retain_release_resource(r, context):
+                    changes.append(dict(r,before=r['installed'],installed=r['before']))
             result = Receipt(state.VERSION,receipt.selection,remaining,receipt.pending_ui,copy.deepcopy(receipt.legacy_cleanup))
             ok,failed = _transaction(changes,result,context,runner,restoring={_identity(r) for r in changes})
             return Outcome(result if ok else receipt,findings+failed)
