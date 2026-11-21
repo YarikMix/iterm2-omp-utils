@@ -73,7 +73,7 @@ class ProjectLauncherTests(LifecycleFixture):
             value = request['value']
         return {'exists': True, 'value': copy.deepcopy(value)}
 
-    def handed_off(self):
+    def handed_off(self, *, interleaved=False):
         """Synthetic current receipt: manual bytes and panels were adopted unchanged."""
         from iterm2_utils.features import project_launcher as launcher
         from iterm2_utils.models import Receipt
@@ -86,6 +86,9 @@ class ProjectLauncherTests(LifecycleFixture):
             component = launcher._component(project)
             component['configuration']['knobs']['action']['parameter'] = self.document['handoff']['guids'][project['id']]
             panel['Status Bar Layout']['components'].append(component)
+        if interleaved:
+            panel['Status Bar Layout']['components'].insert(2, {'class': 'foreign-middle', 'knobs': {}})
+            panel['Status Bar Layout']['components'].append({'class': 'foreign-last', 'knobs': {}})
         self.native['profiles'][0]['bar'] = panel
         self.native['position'] = 1
         rows = [dict(Name=p['name'], Guid=self.document['handoff']['guids'][p['id']], **{
@@ -116,7 +119,7 @@ class ProjectLauncherTests(LifecycleFixture):
         return receipt
 
     def test_handoff_repeated_update_preserves_checkpoint(self):
-        receipt = self.handed_off()
+        receipt = self.handed_off(interleaved=True)
         original = self.dynamic.stat()
         for _ in range(2):
             self.assertSuccess(lifecycle.update(self.context, self.runner))
@@ -124,10 +127,22 @@ class ProjectLauncherTests(LifecycleFixture):
         self.assertEqual((self.dynamic.stat().st_ino, self.dynamic.stat().st_mtime_ns),
                          (original.st_ino, original.st_mtime_ns))
         self.assertEqual(state.load(self.context.paths.data/'receipt.json'), receipt)
+        self.assertEqual(self.native, self.manual_native)
         self.assertFalse(any(c['operation'].startswith('write_') for c in self.calls))
+        self.document['projects'][0]['name'] = 'Renamed'
+        self.config.write_text(json.dumps({k:v for k,v in self.document.items() if k != 'handoff'}))
+        self.context.project_launcher_config = self.config
+        self.assertSuccess(self.install('project-launcher'))
+        components = self.native['profiles'][0]['bar']['Status Bar Layout']['components']
+        self.assertEqual([c['class'] for c in components],
+                         ['foreign', 'iTermStatusBarActionComponent', 'foreign-middle',
+                          'iTermStatusBarActionComponent', 'foreign-last'])
+        self.assertEqual(components[1]['configuration']['knobs']['action']['title'], 'Renamed')
+        self.assertEqual(components[3]['configuration']['knobs']['action']['parameter'], 'manual-b')
 
     def test_standard_install_rejects_handoff_metadata(self):
-        self.document['handoff'] = {'source': '../foreign.json', 'guids': {'project-a': 'foreign'}}
+        self.document['handoff'] = {'source': 'manual-projects.json', 'guids': {
+            'project-a': 'manual-a', 'project-b': 'manual-b'}}
         self.write_config()
         before = self.snapshot()
         self.assertTrue(any(f.state == 'conflict' for f in self.install('project-launcher').findings))

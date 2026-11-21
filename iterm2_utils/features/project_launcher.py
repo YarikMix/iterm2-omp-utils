@@ -185,11 +185,21 @@ def _panel(bar, projects, previous, baseline, document=None, previous_document=N
     baseline_components = baseline['Status Bar Layout']['components']
     previous_components = [_component(p, previous_document) for p in previous
         if document and 'handoff' in document or _component(p, previous_document) not in baseline_components]
-    layout['components'] = [c for c in components if c not in previous_components]
-    for project in projects:
-        component = _component(project, document)
-        if component not in layout['components']:
-            layout['components'].append(component)
+    if document and 'handoff' in document:
+        replacements = iter(_component(p, document) for p in projects)
+        updated = []
+        for component in components:
+            replacement = next(replacements, None) if component in previous_components else component
+            if replacement is not None:
+                updated.append(replacement)
+        updated.extend(replacements)
+        layout['components'] = updated
+    else:
+        layout['components'] = [c for c in components if c not in previous_components]
+        for project in projects:
+            component = _component(project, document)
+            if component not in layout['components']:
+                layout['components'].append(component)
     result['Show Status Bar'] = True
     return result
 
