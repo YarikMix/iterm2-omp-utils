@@ -59,6 +59,7 @@ EXPORT_FILES = (
     'iterm2_utils/state.py',
     'iterm2_utils/terminal.py',
     'iterm2_utils/project_edits.py',
+    'iterm2_utils/project_handoff.py',
     'iterm2_utils/mcp/__init__.py',
     'iterm2_utils/mcp/__main__.py',
     'iterm2_utils/mcp/binding.py',

@@ -113,6 +113,12 @@ def _parser():
     p.add_argument('--restore-external',action='store_true',help='Explicitly restore proven previously disabled external integration values.')
     p.add_argument('--omp-profile')
     p.add_argument('--json',action='store_true')
+    p = sub.add_parser('handoff-project-launcher',help='Preview explicit in-place launcher ownership; apply requires the exact fingerprint.')
+    p.add_argument('--source',type=Path,required=True)
+    p.add_argument('--profile',action='append',required=True)
+    p.add_argument('--apply',action='store_true')
+    p.add_argument('--expect-fingerprint')
+    p.add_argument('--json',action='store_true')
     return parser
 
 
@@ -143,6 +149,18 @@ def main(argv=None):
         _emit(args,dict(mode='close_tab',**asdict(result)))
         return {'closed':0,'blocked':2,'unknown':3}[result.status]
     runner, paths = Runner(), resolve_paths()
+    if args.command == 'handoff-project-launcher':
+        from .project_handoff import prepare_handoff, apply_handoff
+        context = discover(paths,runner,features=frozenset({'project-launcher'}))
+        if not args.apply:
+            preview = prepare_handoff(context,runner,args.source,tuple(args.profile))
+            output = dict(mode='handoff_preview',status=preview.status,fingerprint=preview.fingerprint)
+            _emit(args,output)
+            return 0 if preview.status == 'ready' else 2
+        result = apply_handoff(context,runner,args.source,tuple(args.profile),args.expect_fingerprint)
+        output = dict(mode='handoff_apply',status='conflict' if result.findings else 'applied',
+            findings=[asdict(f) for f in result.findings])
+        return _emit(args,output)
     selected = None
     shell = args.command=='launch-omp' and args.mode=='shell'
     recorded_profile = args.command in {'update','uninstall','doctor','reconcile'} and args.omp_profile is None

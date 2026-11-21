@@ -14,7 +14,7 @@ PACKAGE_FILES = (
     '__init__.py', '__main__.py', 'cli.py', 'commands.py', 'discovery.py', 'engine.py',
     'lifecycle.py', 'launch.py', 'launch_api.py', 'launch_checks.py', 'legacy_state.py',
     'migration.py', 'models.py', 'omp_profile.py', 'omp_sessions.py', 'planner.py',
-    'profile_api.py', 'project_edits.py', 'skill_install.py', 'state.py', 'terminal.py',
+    'profile_api.py', 'project_edits.py', 'project_handoff.py', 'skill_install.py', 'state.py', 'terminal.py',
     'config/__init__.py', 'config/iterm.py', 'config/jsonfile.py', 'config/legacy_mcp.py',
     'config/mcp.py', 'config/omp.py', 'config/preferences.py', 'config/tomlfile.py', 'config/zshrc.py',
     'features/__init__.py', 'features/appearance.py', 'features/mcp.py', 'features/notifications.py',

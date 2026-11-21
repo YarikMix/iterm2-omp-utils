@@ -446,7 +446,7 @@ def _recover(context,runner):
     return []
 
 
-def _transaction(changes,result,context,runner, *, intent_receipt=None, restoring=frozenset()):
+def _transaction(changes,result,context,runner, *, intent_receipt=None, restoring=frozenset(), precommit_check=None):
     journal = context.paths.data/'journal'
     state.private_dir(journal)
     intent = copy.deepcopy(intent_receipt) if intent_receipt is not None else _empty(result.selection)
@@ -468,6 +468,8 @@ def _transaction(changes,result,context,runner, *, intent_receipt=None, restorin
             _set(r,r['installed'],runner,context,expected=r['before'],restoring=_identity(r) in restoring)
             if not _same(_read(r,runner,context),r['installed']):
                 raise ValueError('Write verification failed')
+        if precommit_check is not None:
+            precommit_check()
         state.save(journal/'result.json',result)
         state.durable_write(journal/'phase',b'commit')
         state.save(context.paths.data/'receipt.json',result)

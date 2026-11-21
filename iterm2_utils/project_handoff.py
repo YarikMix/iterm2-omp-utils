@@ -1,16 +1,16 @@
-"""Read-only proof for explicit in-place ownership of a dedicated manual panel."""
+"""Explicit proof and durable in-place ownership of a dedicated manual panel."""
 import copy
 import hashlib
 import json
 import os
 import stat
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from .commands import Runner
 from .config import iterm
 from .features import project_launcher as launcher
-from .models import Context
+from .models import Context, Outcome, Selection, OmpProfile
 from .profile_api import _refs
 from .project_edits import read_receipt
 
@@ -207,3 +207,80 @@ def prepare_handoff(context: Context, runner: Runner, source: Path,
         return HandoffPreview('blocked')
     except (OSError, ValueError, TypeError, KeyError, AttributeError):
         return HandoffPreview('conflict')
+
+
+def apply_handoff(context: Context, runner: Runner, source: Path,
+                  profiles: tuple[str, ...], expected_fingerprint: str) -> Outcome:
+    """Only this entry may acquire unchanged manual launcher resources."""
+    from . import engine, state
+    previous = engine._empty(Selection(frozenset(), frozenset(), 'Default',
+        context.omp_profile or OmpProfile(None, context.paths.home/'.omp')))
+    def conflict():
+        return Outcome(previous, [engine._finding('handoff_conflict',
+            'The explicit launcher checkpoint could not be verified.', launcher.FEATURE)])
+    try:
+        if (type(expected_fingerprint) is not str or len(expected_fingerprint) != 64 or
+                any(c not in '0123456789abcdef' for c in expected_fingerprint)):
+            return conflict()
+        # Invalid confirmations do not even create a lock file. Revalidation below
+        # is authoritative; the outside read is not permission to commit.
+        preview = prepare_handoff(context, runner, source, profiles)
+        if preview.status != 'ready' or preview.fingerprint != expected_fingerprint:
+            return conflict()
+        with engine._lock(context):
+            preview = prepare_handoff(context, runner, source, profiles)
+            if preview.status != 'ready' or preview.fingerprint != expected_fingerprint:
+                return conflict()
+            checkpoint = preview._checkpoint
+            previous = checkpoint['receipt']
+            document, inventory = checkpoint['document'], checkpoint['inventory']
+            source = checkpoint['source']
+            catalogue = (context.paths.config/launcher.FILENAME).resolve()
+            raw = (json.dumps(document, sort_keys=True, indent=2)+'\n').encode()
+            records = [
+                engine._resource('file', source, {'mode':checkpoint['mode']},
+                    engine._encode(checkpoint['raw']), engine._encode(checkpoint['raw']), launcher.OWNER),
+                engine._resource('file', catalogue, {'mode':0o600},
+                    engine._encode(None), engine._encode(raw), launcher.OWNER)]
+            for row in inventory['profiles']:
+                if row['name'] in profiles:
+                    value = engine._value(row['bar'])
+                    records.append(engine._resource('profile_bar', row['guid'], {},
+                        value, copy.deepcopy(value), launcher.OWNER))
+            value = engine._value(inventory['position'])
+            records.append(engine._resource('status_bar_position', iterm.DOMAIN, {},
+                value, copy.deepcopy(value), launcher.OWNER))
+            addresses = {engine._identity(r) for r in records}
+            if any(engine._identity(r) in addresses for r in previous.resources):
+                return conflict()
+            for record in records:
+                record['owners'].append(launcher.FEATURE)
+            result = copy.deepcopy(previous)
+            result.selection = replace(previous.selection, features=previous.selection.features | {launcher.FEATURE})
+            result.resources.extend(records)
+            state.validate(result)
+            guids = set(document['handoff']['guids'].values())
+            selected = {r['target'] for r in records if r['kind'] == 'profile_bar'}
+            query = dict(operation='inspect', reference_guids=sorted(guids), launch_guids=sorted(guids),
+                replaced_bars=[dict(guid=p['guid'], bar=p['bar']) for p in inventory['profiles']
+                    if p['guid'] in guids | selected])
+            def verify():
+                if (read_receipt(context.paths.data/'receipt.json')[0] != checkpoint['receipt_raw'] or
+                        _source(source, context.paths.profiles) != (checkpoint['raw'], checkpoint['mode']) or
+                        _source_provenance(context.paths.profiles, source, guids,
+                            checkpoint['raw'], checkpoint['mode']) != checkpoint['source_provenance']):
+                    raise ValueError('File checkpoint changed')
+                current = iterm.validate_launcher_inventory(iterm._request(context, runner, query))
+                if not iterm.same(current, inventory):
+                    raise ValueError('Native checkpoint changed')
+                for record in records:
+                    if record['kind'] == 'file' and not engine._same(
+                            engine._read(record, runner, context), record['installed']):
+                        raise ValueError('Ownership checkpoint changed')
+                if stat.S_IMODE(catalogue.stat().st_mode) != 0o600:
+                    raise ValueError('Catalogue mode changed')
+            ok, findings = engine._transaction([records[1]], result, context, runner,
+                precommit_check=verify)
+            return Outcome(result if ok else previous, findings)
+    except Exception:
+        return conflict()
