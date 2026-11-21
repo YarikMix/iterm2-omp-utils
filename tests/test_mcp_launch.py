@@ -94,11 +94,12 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
                     self.assertIn(marker, output)
                 try:
                     until(b'READY> '); output=b''
-                    os.write(fd, b"print -r -- PTY_$((6*7)); /bin/pwd; /usr/bin/tty && print -r -- TTY_$((6*7))\n")
-                    until(b'PTY_42'); until(str(self.cwd).encode()); until(b'TTY_42')
+                    os.write(fd, b'print -r -- PTY_$((6*7)); /bin/pwd; '
+                                 b'tty_path=$(/usr/bin/tty) && print -r -- "TTY_$((6*7))=$tty_path;"\n')
+                    until(b'PTY_42'); until(str(self.cwd).encode()); until(b'TTY_42=')
                     if mode=='handoff':
                         child = json.loads(evidence.read_text())
-                        self.assertIn(child['tty'].encode(), output.splitlines())
+                        until(b'TTY_42='+child['tty'].encode()+b';')
                         self.assertEqual(child['cwd'], str(self.cwd))
                 finally:
                     os.write(fd,b'exit\n')
