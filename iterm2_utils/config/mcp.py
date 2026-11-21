@@ -11,7 +11,7 @@ NAME = 'iterm2-observe'
 TOOLS = frozenset({'list_sessions', 'get_session_info', 'get_screen_contents', 'get_selection',
     'get_scrollback', 'get_recent_output', 'get_variable', 'list_profiles', 'set_badge',
     'set_title', 'set_tab_color', 'set_user_variable', 'post_notification'})
-PUBLIC_TOOLS = TOOLS | {'list_projects', 'open_shell', 'launch_omp_task'}
+PUBLIC_TOOLS = TOOLS | {'list_projects', 'open_shell', 'launch_omp_task', 'open_shell_window', 'launch_omp_task_window'}
 
 
 def definition(binding):

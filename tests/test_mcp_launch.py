@@ -45,6 +45,101 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
                 request = tools.make_launch_request(self.binding, self.paths, tools.LaunchArgs('handoff', cwd=str(self.cwd), task='private', omp_profile='other'))
                 self.assertEqual(request.omp_profile.agent_dir, self.root/'other')
 
+    async def test_window_launch_routing_and_progress_loss(self):
+        with patch.object(tools, 'list_owned_projects', return_value=self.catalogue):
+            for mode, destination in (('shell', dict(project='one')), ('handoff', dict(cwd=str(self.cwd)))):
+                args = tools.LaunchArgs(mode, new_window=True, task='private' if mode=='handoff' else None, **destination)
+                request = tools.make_launch_request(self.binding, self.paths, args)
+                self.assertEqual((request.new_window, request.window_id, request.cwd, request.profile),
+                                 (True, '', self.cwd, 'Ordinary' if mode=='shell' else 'iterm2-utils:omp'))
+                if mode=='handoff':
+                    self.assertEqual(request.handoff.stat().st_mode & 0o777, 0o600)
+            for bad in (dict(new_window=1), dict(new_window=True, window_id='Old'),
+                        dict(new_window=True, window_id='')):
+                with self.assertRaises(ValueError): tools.LaunchArgs('shell', **bad)
+            for destination in ({}, dict(cwd=str(self.cwd), project='one'), dict(cwd='relative'),
+                                dict(cwd=str(self.root/'missing')), dict(project='missing')):
+                with self.assertRaises(ValueError):
+                    tools.make_launch_request(self.binding, self.paths, tools.LaunchArgs('shell', new_window=True, **destination))
+        for deadline in (False, True):
+            for publish in (False, True):
+                await self._exercise_worker_loss(deadline=deadline, publish=publish, new_window=True)
+
+    async def test_window_worker_rejects_missing_or_changed_results(self):
+        real_spawn=asyncio.create_subprocess_exec
+        for frames, expected in (
+            ([], ('unknown',None)),
+            ([{'progress':{'window_id':'New'}}], ('created_unverified','New')),
+            ([{'progress':{'window_id':'New'}},{'result':None}], ('created_unverified','New')),
+            ([{'progress':{'window_id':'New'}},{'progress':{'window_id':'Other'}}], ('created_unverified','New')),
+            ([{'progress':{'window_id':'New'}},{'result':dict(tools.uncertain({}),window_id='Other')}], ('created_unverified','New')),
+        ):
+            children=[]
+            async def spawn(*argv, **kwargs):
+                child=await real_spawn(sys.executable,'-c','import sys;sys.stdin.readline();print('+repr('\n'.join(json.dumps(f) for f in frames))+')',**kwargs)
+                children.append(child)
+                return child
+            with patch.object(tools,'list_owned_projects',return_value=self.catalogue), patch.object(tools.asyncio,'create_subprocess_exec',spawn):
+                result=await tools.run_launch(self.binding,tools.LaunchArgs('shell',cwd=str(self.cwd),new_window=True))
+            self.assertEqual((result['status'],result['window_id']),expected)
+            self.assertEqual(len(children),1)
+            self.assertIsNotNone(children[0].returncode)
+
+    async def test_window_pregrant_refusal_stays_blocked(self):
+        fixture = r'''
+import sys,time
+from pathlib import Path
+from iterm2_utils import launch
+from iterm2_utils.launch_checks import LaunchInspection
+from iterm2_utils.launch_api import LaunchCreation
+from iterm2_utils.mcp.launch_worker import main
+launch.inspect_launch=lambda *args:(LaunchInspection(Path('/fixture/it2'),Path('/bin/zsh'),'G','',None,('new','')),[])
+async def create(*args,**kwargs):
+    assert args[0]=='' and kwargs['window_basis']==('new','')
+    return LaunchCreation(sys.argv[1],None,None,None,time.monotonic(),())
+launch.create_tab=create
+main()
+'''
+        real_spawn=asyncio.create_subprocess_exec
+        for native_status in ('blocked','unknown'):
+            children=[]
+            async def spawn(*argv, **kwargs):
+                child=await real_spawn(sys.executable,'-c',fixture,native_status,**kwargs)
+                children.append(child)
+                return child
+            with patch.object(tools,'list_owned_projects',return_value=self.catalogue), patch.object(tools.asyncio,'create_subprocess_exec',spawn):
+                result=await tools.run_launch(self.binding,tools.LaunchArgs('shell',cwd=str(self.cwd),new_window=True))
+            self.assertEqual((result['status'],result['window_id'],result['tab_id'],result['session_id']),
+                             (native_status,None,None,None))
+            self.assertEqual(len(children),1)
+            self.assertIsNotNone(children[0].returncode)
+
+    async def test_window_worker_keeps_callback_ids_when_native_result_is_lost(self):
+        fixture = r'''
+import sys
+from pathlib import Path
+from iterm2_utils import launch
+from iterm2_utils.launch_checks import LaunchInspection
+from iterm2_utils.mcp.launch_worker import main
+launch.inspect_launch=lambda *args:(LaunchInspection(Path('/fixture/it2'),Path('/bin/zsh'),'G','',None,('new','')),[])
+async def create(*args,**kwargs):
+    assert args[0]==''
+    kwargs['on_window_progress']({'window_id':'New'})
+    if sys.argv[1]=='raise': raise RuntimeError('PRIVATE SDK OUTPUT')
+    return None
+launch.create_tab=create
+main()
+'''
+        real_spawn=asyncio.create_subprocess_exec
+        for outcome in ('raise','none'):
+            async def spawn(*argv, **kwargs):
+                return await real_spawn(sys.executable,'-c',fixture,outcome,**kwargs)
+            with patch.object(tools,'list_owned_projects',return_value=self.catalogue), patch.object(tools.asyncio,'create_subprocess_exec',spawn):
+                result=await tools.run_launch(self.binding,tools.LaunchArgs('shell',cwd=str(self.cwd),new_window=True))
+            self.assertEqual((result['status'],result['window_id'],result['tab_id'],result['session_id']),
+                             ('created_unverified','New',None,None))
+            self.assertNotIn('PRIVATE',json.dumps(result))
+
     async def test_no_guess_or_private_payload_in_result(self):
         with patch.object(tools, 'list_owned_projects', return_value=ProjectCatalogue('not_configured')):
             with self.assertRaises(ValueError): tools.make_launch_request(self.binding, self.paths, tools.LaunchArgs('shell', cwd=str(self.cwd)))
@@ -147,7 +242,7 @@ class LaunchTests(unittest.IsolatedAsyncioTestCase):
         with self.assertRaisesRegex(AssertionError, 'Worker outer deadline'):
             await self._exercise_worker_loss(deadline=True, enforce_timeout=False)
 
-    async def _exercise_worker_loss(self, *, deadline=False, publish=True, enforce_timeout=True):
+    async def _exercise_worker_loss(self, *, deadline=False, publish=True, enforce_timeout=True, new_window=False):
         # Run the actual worker and launch(), replacing only native boundaries.
         fixture = r'''
 import json,os,signal,sys,time
@@ -158,10 +253,17 @@ from iterm2_utils.launch_api import LaunchCreation
 from iterm2_utils.mcp.launch_worker import main
 root=Path(sys.argv[1])
 identity=LaunchIdentity(Path('/fixture/omp'),(),(('/fixture/omp',),),'')
-launch.inspect_launch=lambda paths,request,runner:(LaunchInspection(Path('/fixture/it2'),Path('/bin/zsh'),'G','W',identity),[])
+new_window=sys.argv[3]=='1'
+launch.inspect_launch=lambda paths,request,runner:(LaunchInspection(Path('/fixture/it2'),Path('/bin/zsh'),'G','' if new_window else 'W',identity,('new','') if new_window else None),[])
 async def create(*args,**kwargs):
     with (root/'creates').open('a') as log: log.write('create\n')
     print('PRIVATE SDK OUTPUT')
+    if new_window:
+        assert args[0]=='' and kwargs['window_basis']==('new','')
+        kwargs['on_window_progress']({'window_id':'New'})
+        signal.signal(signal.SIGTERM,lambda *unused:(time.sleep(.2),os._exit(0)))
+        (root/'observing').touch()
+        time.sleep(30)
     return LaunchCreation('created_unverified','W','T','S',time.monotonic()+30,())
 def paused_observation(self):
     # Simulate unrecoverable final observations; never emit a replacement result.
@@ -186,7 +288,7 @@ main()
         children=[]
         async def spawn(*argv, **kwargs):
             self.assertNotIn('private task',repr(argv))
-            child=await real_spawn(sys.executable,'-c',fixture,str(self.root),str(int(publish)),**kwargs)
+            child=await real_spawn(sys.executable,'-c',fixture,str(self.root),str(int(publish)),str(int(new_window)),**kwargs)
             children.append(child)
             return child
         def timeout(seconds):
@@ -194,7 +296,7 @@ main()
         task=None
         try:
             with patch.object(tools,'list_owned_projects',return_value=self.catalogue), patch.object(tools.asyncio,'create_subprocess_exec',spawn), patch.object(tools,'WORKER_SECONDS',1 if deadline else 10), patch.object(tools.asyncio,'timeout',timeout):
-                task=asyncio.create_task(tools.run_launch(self.binding,tools.LaunchArgs('handoff',cwd=str(self.cwd),task='private task')))
+                task=asyncio.create_task(tools.run_launch(self.binding,tools.LaunchArgs('handoff',cwd=str(self.cwd),task='private task',new_window=new_window)))
                 ready_by=time.monotonic()+3
                 while not (self.root/'observing').exists() and not task.done() and time.monotonic()<ready_by:
                     await asyncio.sleep(.01)
@@ -213,7 +315,9 @@ main()
             self.assertIsNotNone(children[0].returncode,'Private worker was not reaped')
             self.assertEqual((self.root/'creates').read_text(),'create\n','Native creation was retried')
             self.assertTrue(met_deadline,'Worker outer deadline did not terminate observations')
-            self.assertEqual((result['status'],result['window_id'],result['tab_id'],result['session_id']),('created_unverified','W','T','S'),'Retained created IDs were lost')
+            expected = ('created_unverified','New',None,None) if new_window and publish else (
+                ('unknown',None,None,None) if new_window else ('created_unverified','W','T','S'))
+            self.assertEqual((result['status'],result['window_id'],result['tab_id'],result['session_id']),expected,'Retained created IDs were lost')
             self.assertNotIn('private task',json.dumps(result))
             self.assertNotIn('PRIVATE SDK OUTPUT',json.dumps(result))
         finally:

@@ -64,6 +64,18 @@ def create_server(binding: McpBinding, observe: ObserveConnection, *,
         """Open one explicitly requested separate omp task tab via private handoff, not history resume. Ack is receipt, not completion; never retry uncertainty."""
         return await launch('handoff', task=task, cwd=cwd, project=project, window_id=window_id, omp_profile=omp_profile)
 
+    @server.tool()
+    async def open_shell_window(cwd: str | None = None, project: str | None = None,
+                                shell_profile: str | None = None) -> dict[str, Any]:
+        """Open one explicitly requested separate login-zsh window; choose cwd OR installed project. Never retry an uncertain result."""
+        return await launch('shell', cwd=cwd, project=project, shell_profile=shell_profile, new_window=True)
+
+    @server.tool()
+    async def launch_omp_task_window(task: str, cwd: str | None = None, project: str | None = None,
+                                     omp_profile: str | None = None) -> dict[str, Any]:
+        """Open one explicitly requested separate omp task window via private handoff, not history resume. Ack is receipt, not completion; never retry uncertainty."""
+        return await launch('handoff', task=task, cwd=cwd, project=project, omp_profile=omp_profile, new_window=True)
+
     return server
 
 

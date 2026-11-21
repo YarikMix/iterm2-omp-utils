@@ -27,10 +27,13 @@ class LaunchArgs:
     shell_profile: str | None = None
     task: str | None = None
     omp_profile: str | None = None
+    new_window: bool = False
 
     def __post_init__(self):
         if self.mode not in {'shell', 'handoff'}:
             raise ValueError('Invalid launch mode')
+        if type(self.new_window) is not bool or self.new_window and self.window_id is not None:
+            raise ValueError('Invalid launch destination')
         for field in ('cwd', 'project', 'window_id', 'shell_profile', 'omp_profile'):
             value = getattr(self, field)
             if value is not None and (type(value) is not str or not value.strip() or len(value)>4096 or any(ord(c)<32 or ord(c)==127 for c in value)):
@@ -67,7 +70,7 @@ def make_launch_request(binding: McpBinding, paths: Paths, args: LaunchArgs) -> 
         raise ValueError('Choose an ordinary shell profile')
     artifact = prepare_handoff(cwd, args.task) if args.mode == 'handoff' else None
     request = LaunchRequest(args.window_id or '', profile, cwd, selected if args.mode == 'handoff' else None,
-                            args.mode, artifact.path if artifact else None)
+                            args.mode, artifact.path if artifact else None, new_window=args.new_window)
     validate_request(request)
     return request
 
@@ -97,8 +100,8 @@ def safe_result(raw: dict) -> dict:
     return result
 
 
-def uncertain(known):
-    return dict(status='created_unverified' if known.get('tab_id') or known.get('session_id') else 'unknown',
+def uncertain(known, *, new_window=False):
+    return dict(status='created_unverified' if known.get('tab_id') or known.get('session_id') or new_window and known.get('window_id') else 'unknown',
                 window_id=known.get('window_id'), tab_id=known.get('tab_id'), session_id=known.get('session_id'),
                 command='unverified', identity='unverified', history='not_requested', ack='unconfirmed', findings=[])
 
@@ -120,6 +123,9 @@ async def run_launch(binding: McpBinding, args: LaunchArgs) -> dict:
             frame = json.loads(line)
             if set(frame) == {'progress'}:
                 progress = frame['progress']
+                if request.new_window and (not isinstance(progress, dict) or not progress or
+                                           not set(progress) <= {'window_id','tab_id','session_id'}):
+                    raise ValueError('Invalid worker progress')
                 checked = safe_result(dict(uncertain(progress), **progress))
                 for key in ('window_id','tab_id','session_id'):
                     value = checked[key]
@@ -177,4 +183,4 @@ async def run_launch(binding: McpBinding, args: LaunchArgs) -> dict:
     if reader is not None and reader.done() and not reader.cancelled():
         try: return reader.result()
         except Exception: pass
-    return uncertain(known)
+    return uncertain(known, new_window=request.new_window)

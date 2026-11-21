@@ -17,6 +17,7 @@ from .launch_tools import FRAME_LIMIT, REQUEST_LIMIT, safe_result, uncertain
 def main():
     protocol = sys.stdout
     known = {}
+    new_window = False
     def emit(frame):
         data = json.dumps(frame)
         if len(data.encode())+1 > FRAME_LIMIT:
@@ -48,15 +49,23 @@ def main():
                 raw['omp_profile'] = OmpProfile(profile['name'], Path(profile['agent_dir']))
             request = LaunchRequest(**raw)
             validate_request(request)
+            new_window = request.new_window
             native_create = orchestration.create_tab
             async def create(*args, **kwargs):
-                known['window_id'] = args[0]
-                emit({'progress': dict(known)})
+                if new_window:
+                    def progress(ids):
+                        known.update(ids)
+                        emit({'progress': dict(known)})
+                    kwargs['on_window_progress'] = progress
+                else:
+                    known['window_id'] = args[0]
+                    emit({'progress': dict(known)})
                 creation = await native_create(*args, **kwargs)
                 for key in ('window_id','tab_id','session_id'):
                     value = getattr(creation,key)
                     if value is not None: known[key] = value
-                emit({'progress': dict(known)})
+                if not new_window or known:
+                    emit({'progress': dict(known)})
                 return creation
             # The module's existing launch orchestration owns all SDK/ack deadlines.
             original = orchestration.create_tab
@@ -67,7 +76,7 @@ def main():
             finally:
                 orchestration.create_tab = original
         except (Exception, SystemExit, asyncio.CancelledError):
-            result = uncertain(known)
+            result = uncertain(known, new_window=new_window)
     emit({'result': result})
 
 

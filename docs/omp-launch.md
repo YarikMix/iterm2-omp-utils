@@ -1,4 +1,4 @@
-# One-tab omp launch
+# One-tab or separate-window omp launch
 
 When the owned `iterm2-observe` MCP is explicitly available, prefer `open_shell`
 for an authorized separate ordinary tab, or `launch_omp_task` for a separate omp
@@ -10,6 +10,20 @@ setup and optional dependency installation remain separate CLI/skill operations.
 The MCP does not send arbitrary commands/keys to existing terminals. Installed
 MCP needs no source checkout or enabled shell feature; the selected interpreter
 and authorized API remain prerequisites. Live `/exit` prompt acceptance is separate.
+
+An explicit request for a separate window uses `open_shell_window(cwd?, project?,
+shell_profile?)` or `launch_omp_task_window(task, cwd?, project?, omp_profile?)`.
+Choose exactly one destination as above; neither accepts `window_id`. Ordinary
+profile selection, bound catalogue access, private handoff/task limits and
+authorization are identical to the tab tools. The installed interpreter needs
+Python 3.12+ with `mcp>=1.12,<2` and the official `iterm2` SDK.
+One native window is created with its first tab/session, without selecting an
+existing window, detaching a tab, typing into terminals or extra activation.
+Returned IDs come only from the SDK; `launched` still requires independent
+command/profile/address verification. A known window ID alone means
+`created_unverified`; no IDs means `unknown`. Never retry or close automatically
+after uncertainty. No CLI window-creation option is added; live acceptance
+requires separately authorized visible windows and is not proved by fixtures.
 
 `python3 -m iterm2_utils launch-omp --mode MODE --profile NAME --cwd ABS`
 requires `MODE` to be `shell`, `new`, `handoff` or `resume`. Handoff requires

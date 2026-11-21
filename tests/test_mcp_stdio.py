@@ -28,7 +28,10 @@ import iterm2_utils.mcp.server as server_module
 async def launch_fixture(binding,args):
     from iterm2_utils.mcp.launch_tools import make_launch_request, bound_paths, uncertain
     request=make_launch_request(binding,bound_paths(binding),args)
-    assert request.cwd==root and request.window_id=='Explicit'
+    assert request.cwd==root and request.window_id==('' if args.new_window else 'Explicit')
+    assert request.new_window is args.new_window
+    assert request.mode==args.mode
+    assert request.omp_profile==(binding.profile if args.mode=='handoff' else None)
     assert request.profile==('Ordinary' if args.mode=='shell' else 'iterm2-utils:omp')
     return uncertain(dict(window_id='Explicit',tab_id='T',session_id='S'))
 server_module.run_launch=launch_fixture
@@ -54,7 +57,10 @@ class StdioTests(unittest.TestCase):
                     dict(jsonrpc='2.0',id=2,method='tools/list'),
                     dict(jsonrpc='2.0',id=3,method='tools/call',params=dict(name='list_projects',arguments={})),
                     dict(jsonrpc='2.0',id=4,method='tools/call',params=dict(name='open_shell',arguments=dict(cwd=temp,window_id='Explicit',shell_profile='Ordinary'))),
-                    dict(jsonrpc='2.0',id=5,method='tools/call',params=dict(name='launch_omp_task',arguments=dict(cwd=temp,window_id='Explicit',task='PRIVATE TASK')))]
+                    dict(jsonrpc='2.0',id=5,method='tools/call',params=dict(name='launch_omp_task',arguments=dict(cwd=temp,window_id='Explicit',task='PRIVATE TASK'))),
+                    dict(jsonrpc='2.0',id=6,method='tools/call',params=dict(name='open_shell_window',arguments=dict(cwd=temp,shell_profile='Ordinary'))),
+                    dict(jsonrpc='2.0',id=7,method='tools/call',params=dict(name='launch_omp_task_window',arguments=dict(cwd=temp,task='PRIVATE TASK'))),
+                    dict(jsonrpc='2.0',id=8,method='tools/call',params=dict(name='open_shell_window',arguments=dict(cwd=temp,project='invalid',shell_profile='Ordinary')))]
             env=dict(os.environ,HOME=temp,XDG_CONFIG_HOME=temp+'/config',XDG_DATA_HOME=temp+'/data',XDG_CACHE_HOME=temp+'/cache')
             child=subprocess.Popen([sys.executable,'-c',FIXTURE,temp],cwd=Path(__file__).resolve().parents[1],env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
             responses=[]
@@ -73,16 +79,20 @@ class StdioTests(unittest.TestCase):
                 if child.poll() is None: child.kill()
                 child.communicate()
             by_id={r['id']:r for r in responses if 'id' in r}
-            self.assertEqual(set(by_id),{1,2,3,4,5},responses)
+            self.assertEqual(set(by_id),{1,2,3,4,5,6,7,8},responses)
             names={t['name'] for t in by_id[2]['result']['tools']}
-            self.assertEqual(names,{'list_sessions','get_session_info','get_screen_contents','get_selection','get_scrollback','get_recent_output','get_variable','list_profiles','set_badge','set_title','set_tab_color','set_user_variable','post_notification','list_projects','open_shell','launch_omp_task'})
+            self.assertEqual(names,{'list_sessions','get_session_info','get_screen_contents','get_selection','get_scrollback','get_recent_output','get_variable','list_profiles','set_badge','set_title','set_tab_color','set_user_variable','post_notification','list_projects','open_shell','launch_omp_task','open_shell_window','launch_omp_task_window'})
+            for tool in by_id[2]['result']['tools']:
+                if tool['name'] in {'open_shell_window','launch_omp_task_window'}:
+                    self.assertNotIn('window_id',tool['inputSchema']['properties'])
             result=by_id[3]['result']; self.assertFalse(result.get('isError',False),result)
             self.assertEqual(json.loads(result['content'][0]['text']),{'status':'not_configured','projects':[]})
-            for tool_id in (4,5):
+            for tool_id in (4,5,6,7):
                 self.assertFalse(by_id[tool_id]['result'].get('isError',False),by_id[tool_id])
                 self.assertEqual(json.loads(by_id[tool_id]['result']['content'][0]['text'])['tab_id'],'T')
+            self.assertTrue(by_id[8]['result'].get('isError',False),by_id[8])
             self.assertNotIn('PRIVATE TASK',json.dumps(responses))
-            self.assertEqual(json.loads((root/'counts.json').read_text()),dict(opens=0,authorizations=3,closed=True))
+            self.assertEqual(json.loads((root/'counts.json').read_text()),dict(opens=0,authorizations=6,closed=True))
 
     def test_authorization_loss_on_catalogue_closes_observe(self):
         import asyncio
@@ -140,7 +150,9 @@ class StdioTests(unittest.TestCase):
                  patch('iterm2_utils.mcp.tools.write.post_notification_impl',side_effect=AssertionError('Notification after revocation')) as notify:
                 for name,args in [('list_projects',{}),('list_sessions',{}),
                                   ('post_notification',{'title':'fixture','body':'fixture'}),
-                                  ('open_shell',{'cwd':str(fixture.home)})]:
+                                  ('open_shell',{'cwd':str(fixture.home)}),
+                                  ('open_shell_window',{'cwd':str(fixture.home)}),
+                                  ('launch_omp_task_window',{'cwd':str(fixture.home),'task':'PRIVATE TASK'})]:
                     with self.assertRaises(Exception):
                         await server.call_tool(name,args)
                 launch.assert_not_called(); notify.assert_not_called()

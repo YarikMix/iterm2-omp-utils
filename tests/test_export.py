@@ -344,7 +344,18 @@ assert not (context.paths.data/'current').exists()
             self.assertIn('r6e/mcp-server-iterm2',(release/'THIRD_PARTY_NOTICES.md').read_text())
             shutil.rmtree(extracted); shutil.rmtree(root/'dist')
             import select
-            child=subprocess.Popen([registration['command'],*registration['args']],cwd=home,
+            guard = r'''
+import asyncio, pathlib, runpy, sys
+import iterm2
+async def no_native(*args, **kwargs):
+    pathlib.Path('forbidden-sdk').touch()
+    raise AssertionError('Installed authorization reached native effects')
+asyncio.create_subprocess_exec = no_native
+iterm2.Connection.async_create = no_native
+sys.argv = sys.argv[1:]
+runpy.run_path(sys.argv[0], run_name='__main__')
+'''
+            child=subprocess.Popen([registration['command'],'-I','-c',guard,*registration['args'][1:]],cwd=home,
                                    env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
             def exchange(frame):
                 child.stdin.write(json.dumps(frame)+'\n');child.stdin.flush()
@@ -358,6 +369,10 @@ assert not (context.paths.data/'current').exists()
                 exchange(dict(jsonrpc='2.0',method='notifications/initialized'))
                 inventory=exchange(dict(jsonrpc='2.0',id=2,method='tools/list'))
                 self.assertEqual({t['name'] for t in inventory['tools']}, PUBLIC_TOOLS)
+                self.assertTrue({'open_shell_window','launch_omp_task_window'} <= {t['name'] for t in inventory['tools']})
+                for tool in inventory['tools']:
+                    if tool['name'] in {'open_shell_window','launch_omp_task_window'}:
+                        self.assertNotIn('window_id',tool['inputSchema']['properties'])
                 result=exchange(dict(jsonrpc='2.0',id=3,method='tools/call',params=dict(name='list_projects',arguments={})))
                 self.assertFalse(result.get('isError',False),result)
                 self.assertEqual(json.loads(result['content'][0]['text']),{'status':'not_configured','projects':[]})
@@ -366,6 +381,17 @@ assert not (context.paths.data/'current').exists()
                 result=exchange(dict(jsonrpc='2.0',id=4,method='tools/call',
                     params=dict(name='list_projects',arguments={})))
                 self.assertTrue(result.get('isError',False),result)
+                self.assertIn('Installation authorization unavailable.',json.dumps(result))
+                for request_id,name,args in (
+                    (5,'open_shell_window',dict(cwd=str(home),shell_profile='Default')),
+                    (6,'launch_omp_task_window',dict(cwd=str(home),task='PRIVATE TASK')),
+                ):
+                    result=exchange(dict(jsonrpc='2.0',id=request_id,method='tools/call',
+                        params=dict(name=name,arguments=args)))
+                    self.assertTrue(result.get('isError',False),result)
+                    self.assertIn('Installation authorization unavailable.',json.dumps(result))
+                    self.assertNotIn('PRIVATE TASK',json.dumps(result))
+                self.assertFalse((home/'forbidden-sdk').exists(),'Revoked installed server reached SDK or launch worker')
                 child.stdin.close();child.stdin=None
                 stdout,stderr=child.communicate(timeout=15)
                 self.assertEqual((child.returncode,stdout,stderr),(0,'',''))

@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+Added `open_shell_window` and `launch_omp_task_window` to the owned MCP. Explicit
+separate-window requests reuse authorization, profile/catalogue selection and
+private task handoff without changing the tab tools or CLI. One native create
+retains accepted SDK IDs across worker loss; window-only evidence remains
+`created_unverified`, never inferred success or an automatic retry. Package
+fixtures do not establish live iTerm2 acceptance or install the updated tools.
+
 Authenticated MCP payloads with the exact pre-handoff inventory remain upgradeable
 and retainable on opt-out; new builds still require every current dependency.
 Launcher removal rejects changed source topology before inverse writes. The native

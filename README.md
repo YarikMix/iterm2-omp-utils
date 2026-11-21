@@ -85,7 +85,11 @@ Opt-in `--features mcp` устанавливает единственный `ite
 `timeout: 300000`, `enabled: true`, плюс профильный local projects extension.
 Shell feature не требуется; installed runtime не зависит от checkout.
 Сохраняются 13 observe/annotation tools; добавлены `list_projects`, `open_shell`,
-`launch_omp_task`. Интерактивная правка — только `iterm2_project_edit` в native
+`launch_omp_task`, `open_shell_window`, `launch_omp_task_window`. Последние два —
+только по явному запросу отдельного окна, без входного `window_id`: ровно один
+`cwd` или installed `project`, те же профили и приватный handoff. При потере ответа
+с известными IDs — `created_unverified`, без IDs — `unknown`; не повторяйте запрос.
+Интерактивная правка — только `iterm2_project_edit` в native
 omp TUI с новым локальным подтверждением; не MCP commit/approval token.
 Вывод терминала и project `id/name/path` видны выбранному model provider.
 Не читайте и не публикуйте секреты; локальный edit preview не уходит в MCP.
