@@ -16,7 +16,8 @@ from . import engine, lifecycle, state
 from .commands import Runner
 from .config import iterm
 from .features import project_launcher as launcher
-from .models import Context, OmpProfile, Paths, ProfileBarEdit, Receipt
+from .models import Context, FileEdit, OmpProfile, Paths, ProfileBarEdit, Receipt
+from .profile_api import _refs
 
 
 @dataclass(frozen=True)
@@ -132,6 +133,11 @@ def _snapshot(context, runner, receipt, document, projects):
             guids.update(engine._project_guids(base64.b64decode(resource['installed']['value'])))
     inventory = iterm.validate_launcher_inventory(iterm._request(context, runner,
         {'operation': 'inspect', 'reference_guids': sorted(guids)}))
+    # The inspector excludes bar properties before deduplicating hidden edges.
+    replaced_bars = [dict(guid=row['guid'], bar=row['bar'])
+                     for row in inventory['profiles'] if row['guid'] in guids]
+    inventory = iterm.validate_launcher_inventory(iterm._request(context, runner,
+        {'operation': 'inspect', 'reference_guids': sorted(guids), 'replaced_bars': replaced_bars}))
     names = set(document['profiles']) | {receipt.selection.parent_profile} | {p.name for p in projects}
     relevant = guids | {p['guid'] for p in inventory['profiles'] if p['name'] in names}
     profiles = []
@@ -174,15 +180,18 @@ def _check_removal(receipt, projects, plan, inventory):
     if not projects:
         replacements.update({r['target']: r['before']['value'] for r in receipt.resources
             if r['kind'] == 'profile_bar' and launcher.OWNER in r['owners']})
+    for edit in plan.changes.edits:
+        if isinstance(edit, FileEdit) and edit.owner == launcher.OWNER and edit.after is not None:
+            rows = json.loads(edit.after).get('Profiles', ())
+            replacements.update({row['Guid']: {key: row[key] for key in iterm.BAR_KEYS} for row in rows})
     if inventory['default_guid'] in removed:
         raise ValueError('Removed profile is default')
     for row in inventory['profiles']:
-        if row['guid'] in owned:
+        if row['guid'] in removed:
             continue
         refs = set(row['references'])
         if row['guid'] in replacements:
-            refs -= {g for g in removed if g in json.dumps(row['bar'])}
-            refs |= {g for g in removed if g in json.dumps(replacements[row['guid']])}
+            refs.update(_refs(replacements[row['guid']], removed, {}))
         if removed & refs:
             raise ValueError('Surviving reference')
     for row in inventory['sessions']:

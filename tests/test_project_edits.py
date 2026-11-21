@@ -78,6 +78,46 @@ class ProjectEditTests(LauncherFixture):
         self.assertEqual(preview.status, 'conflict')
         self.assertFalse(any(c['operation'].startswith('write_') for c in self.calls))
 
+    def test_hidden_reference_on_owned_button_target_blocks_preview(self):
+        self.installed()
+        guid = json.loads(self.dynamic.read_bytes())['Profiles'][0]['Guid']
+        target = self.native['profiles'][0]
+        target['references'] = [guid]
+        files, native = self.snapshot(), copy.deepcopy(self.native)
+        with patch.object(engine, '_set', wraps=engine._set) as mutate:
+            preview = self.preview('remove', project='project-a')
+            self.assertEqual(preview.status, 'conflict')
+            mutate.assert_not_called()
+        self.assertEqual(self.snapshot(), files)
+        self.assertEqual(self.native, native)
+        self.assertFalse(any(c['operation'].startswith('write_') for c in self.calls))
+
+    def test_hidden_reference_inserted_after_preview_conflicts_without_mutation(self):
+        self.installed()
+        guid = json.loads(self.dynamic.read_bytes())['Profiles'][0]['Guid']
+        target = self.native['profiles'][0]
+        request = {'operation': 'inspect', 'reference_guids': [guid]}
+        excluded = dict(request, replaced_bars=[dict(guid=target['guid'], bar=copy.deepcopy(target['bar']))])
+        def references(query):
+            return self.request(self.context, self.runner, query)['profiles'][0]['references']
+        self.assertIn(guid, references(request))
+        self.assertNotIn(guid, references(excluded))
+        preview = self.preview('remove', project='project-a')
+        self.assertEqual(preview.status, 'ready')
+        before_refs = references(request)
+        target['references'] = [guid]
+        self.assertEqual(references(request), before_refs)
+        self.assertIn(guid, references(excluded))
+        files, native = self.snapshot(), copy.deepcopy(self.native)
+        self.calls.clear()
+        with patch.object(engine, '_set', wraps=engine._set) as mutate:
+            result = self.apply(preview)
+            self.assertEqual(result.status, 'conflict')
+            mutate.assert_not_called()
+        self.assertEqual(self.snapshot(), files)
+        self.assertEqual(self.native, native)
+        self.assertFalse(any(c['operation'].startswith('write_') for c in self.calls))
+
     def test_panel_drift_and_late_inverse_conflict(self):
         self.installed()
         for target in ('native', 'config', 'dynamic', 'receipt'):
