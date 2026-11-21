@@ -4,14 +4,24 @@ import contextlib
 import importlib.util
 import inspect
 import io
+import json
+import subprocess
 from types import SimpleNamespace as NS
 import unittest
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, call, patch
 
 from iterm2_utils.mcp.connection import ObserveConnection
 from iterm2_utils.mcp.errors import Disconnected, AuthDenied
 from iterm2_utils.mcp.observe import register_observe, OBSERVE_TOOLS
 from iterm2_utils.mcp.output_cursor import encode_cursor, decode_cursor
+
+
+def setUpModule():
+    # Import optional SDKs outside unittest's timed async test tasks.
+    if importlib.util.find_spec('iterm2') and importlib.util.find_spec('mcp'):
+        global iterm2, FastMCP
+        import iterm2
+        from mcp.server.fastmcp import FastMCP
 
 
 class Transport:
@@ -165,6 +175,53 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
         await asyncio.gather(transport.reader, return_exceptions=True)
         await owner.aclose()
 
+    async def test_repeated_cancellation_cannot_reopen_before_close_proof(self):
+        events = []
+        old, new = Transport(events), Transport(events)
+        closing, prove_close, reopened = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        async def slow_close():
+            events.append('closing')
+            closing.set()
+            await prove_close.wait()
+            return await Transport.close(old)
+        old.close = slow_close
+        async def new_open():
+            reopened.set()
+            await Transport.open(new)
+        new.open = new_open
+        transports = iter([old, new])
+        owner = ObserveConnection(transport_factory=lambda: next(transports), timeout=1)
+        async def failed_call():
+            async with owner.lease():
+                raise ConnectionError('lost response')
+        async def next_call():
+            async with owner.lease():
+                pass
+        failed = asyncio.create_task(failed_call())
+        await closing.wait()
+        # Each yield delivers one separate cancellation while close is blocked.
+        for _ in range(3):
+            failed.cancel()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+        following = asyncio.create_task(next_call())
+        opened = asyncio.create_task(reopened.wait())
+        try:
+            done, _ = await asyncio.wait({opened}, timeout=0.03)
+            self.assertFalse(done, 'second socket opened before old close proof')
+            self.assertFalse(old.closed)
+            prove_close.set()
+            with self.assertRaises(asyncio.CancelledError):
+                await failed
+            await following
+            self.assertEqual(events, ['open', 'closing', 'close', 'open'])
+            self.assertTrue(old.reader.done())
+        finally:
+            prove_close.set()
+            opened.cancel()
+            await asyncio.gather(failed, following, opened, return_exceptions=True)
+            await owner.aclose()
+
 
 CONTRACTS = {
     'list_sessions': (), 'get_session_info': (('session_id', None),),
@@ -177,6 +234,16 @@ CONTRACTS = {
     'set_tab_color': (('r', inspect.Parameter.empty), ('g', inspect.Parameter.empty), ('b', inspect.Parameter.empty), ('session_id', None)),
     'set_user_variable': (('name', inspect.Parameter.empty), ('value', inspect.Parameter.empty), ('session_id', None)),
     'post_notification': (('title', inspect.Parameter.empty), ('body', inspect.Parameter.empty)),
+}
+
+# Upstream v0.1.1 input contracts; descriptive schema titles are not API.
+SCHEMA_PROPERTIES = {
+    'session_id': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None},
+    'cursor': {'anyOf': [{'type': 'string'}, {'type': 'null'}], 'default': None},
+    'n_lines': {'type': 'integer', 'default': 200},
+    'name': {'type': 'string'}, 'value': {'type': 'string'},
+    'text': {'type': 'string'}, 'title': {'type': 'string'}, 'body': {'type': 'string'},
+    'r': {'type': 'integer'}, 'g': {'type': 'integer'}, 'b': {'type': 'integer'},
 }
 
 
@@ -247,8 +314,6 @@ class CompatibilityTests(unittest.IsolatedAsyncioTestCase):
 
     @unittest.skipUnless(importlib.util.find_spec('iterm2') and importlib.util.find_spec('mcp'), 'optional SDK dependencies unavailable')
     async def test_sdk_schema_and_transaction_results(self):
-        import iterm2
-        from mcp.server.fastmcp import FastMCP
         from iterm2_utils.mcp.tools import read, write
         server = FastMCP('offline')
         owner = ObserveConnection()
@@ -256,7 +321,10 @@ class CompatibilityTests(unittest.IsolatedAsyncioTestCase):
         schemas = {t.name: t.inputSchema for t in await server.list_tools()}
         for name, params in CONTRACTS.items():
             self.assertEqual(set(schemas[name].get('required', [])), {n for n, d in params if d is inspect.Parameter.empty})
-            self.assertEqual(set(schemas[name]['properties']), {n for n, _ in params})
+            properties = {key: {field: value for field, value in prop.items()
+                                if field not in ('title', 'description')}
+                          for key, prop in schemas[name]['properties'].items()}
+            self.assertEqual(properties, {key: SCHEMA_PROPERTIES[key] for key, _ in params})
         active = []
         class Transaction:
             def __init__(self, conn): self.conn = conn
@@ -300,6 +368,20 @@ class CompatibilityTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(await write.set_title_impl(client, **args, title='title'), {'ok':True,'title':'title'})
         self.assertEqual(await write.set_user_variable_impl(client, **args, name='user.x', value='x'), {'ok':True,'name':'user.x','value':'x'})
         self.assertEqual(await write.set_tab_color_impl(client, **args, r=1,g=2,b=3), {'ok':True,'rgb':[1,2,3]})
+        session.async_set_variable.assert_has_awaits([
+            call('user.badge', 'badge'), call('user.x', 'x')])
+        self.assertEqual(session.async_set_variable.await_count, 2)
+        session.async_set_name.assert_awaited_once_with('title')
+        session.async_set_profile_properties.assert_awaited_once()
+        profile_args = session.async_set_profile_properties.await_args
+        self.assertEqual(profile_args.kwargs, {})
+        self.assertEqual(len(profile_args.args), 1)
+        color = {'Red Component': 1 / 255, 'Green Component': 2 / 255,
+                 'Blue Component': 3 / 255, 'Alpha Component': 1.0,
+                 'Color Space': 'sRGB'}
+        self.assertEqual({key: json.loads(value) for key, value in profile_args.args[0].values.items()}, {
+            'Tab Color': color, 'Tab Color (Light)': color, 'Tab Color (Dark)': color,
+            'Use Tab Color': True, 'Use Tab Color (Light)': True, 'Use Tab Color (Dark)': True})
         await owner.aclose()
 
     async def test_cancel_during_app_and_reader_loss_cleanup(self):
@@ -428,4 +510,49 @@ class CompatibilityTests(unittest.IsolatedAsyncioTestCase):
             with self.assertRaisesRegex(RuntimeError, 'denied'):
                 await server.tools[name](**kwargs)
         self.assertEqual(authorize.await_count, 13)
+        await owner.aclose()
+
+    async def test_variable_tab_window_scope_and_unavailable_containers(self):
+        from iterm2_utils.mcp.errors import ScopeUnavailable
+        from iterm2_utils.mcp.tools.read import get_variable_impl
+        tab = NS(tab_id='tab', async_get_variable=AsyncMock(return_value='tab title'))
+        window = NS(async_get_variable=AsyncMock(return_value='window name'))
+        session = NS(tab=tab, async_get_variable=AsyncMock())
+        app = NS(get_session_by_id=lambda sid: session if sid == 'id' else None,
+                 get_window_for_tab=lambda tid: window if tid == 'tab' else None)
+        client = NS(require_app=lambda: app)
+        args = dict(session_id_arg='id', env_session_id=None)
+        self.assertEqual(await get_variable_impl(client, **args, name='tab.title'),
+                         {'name': 'tab.title', 'value': 'tab title'})
+        tab.async_get_variable.assert_awaited_once_with('tab.title')
+        self.assertEqual(await get_variable_impl(client, **args, name='window.name'),
+                         {'name': 'window.name', 'value': 'window name'})
+        window.async_get_variable.assert_awaited_once_with('window.name')
+        session.async_get_variable.assert_not_awaited()
+        session.tab = None
+        for name in ('tab.title', 'window.name'):
+            with self.assertRaises(ScopeUnavailable) as error:
+                await get_variable_impl(client, **args, name=name)
+            self.assertEqual(error.exception.scope, 'tab')
+        session.tab = tab
+        app.get_window_for_tab = lambda tid: None
+        with self.assertRaises(ScopeUnavailable) as error:
+            await get_variable_impl(client, **args, name='window.name')
+        self.assertEqual(error.exception.scope, 'window')
+
+    async def test_notification_subprocess_timeout_is_bounded_and_sanitized(self):
+        server = Server()
+        owner = ObserveConnection(transport_factory=lambda: self.fail('notification opened socket'))
+        register_observe(server, owner, AsyncMock(), None)
+        output = io.StringIO()
+        timeout = subprocess.TimeoutExpired('private command', 5, stderr='private payload')
+        with patch('iterm2_utils.mcp.tools.write.subprocess.run', side_effect=timeout) as run, contextlib.redirect_stdout(output):
+            with self.assertRaisesRegex(RuntimeError, 'timed out after 5s') as error:
+                await server.tools['post_notification']('title', 'body')
+            self.assertNotIn('private', str(error.exception))
+            self.assertEqual(run.call_args.kwargs['timeout'], 5.0)
+            self.assertEqual(run.call_args.args[0], [
+                '/usr/bin/osascript', '-e', 'display notification "body" with title "title"'])
+            self.assertEqual(run.call_count, 1)
+        self.assertEqual(output.getvalue(), '')
         await owner.aclose()

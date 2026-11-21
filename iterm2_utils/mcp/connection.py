@@ -34,9 +34,10 @@ class ObserveConnection:
         self._holder = None
         self._closed = False
         self._poisoned = False
+        self._cleanup_task = None
 
     async def _cleanup(self):
-        transport, self._transport = self._transport, None
+        transport = self._transport
         self._app = None
         if transport is None:
             return
@@ -52,15 +53,31 @@ class ObserveConnection:
                 self._poisoned |= cleanup.result() is not True
             except BaseException:
                 self._poisoned = True
+        if self._transport is transport:
+            self._transport = None
 
     async def _finish_cleanup(self):
-        cleanup = asyncio.create_task(self._cleanup())
+        if self._cleanup_task is None:
+            self._cleanup_task = asyncio.create_task(self._cleanup())
+        cleanup = self._cleanup_task
+        cancelled = False
+        # Keep the lease lock through every cancellation until bounded cleanup
+        # proves close or poisons the owner. Concurrent shutdown joins this task.
+        while not cleanup.done():
+            try:
+                await asyncio.shield(cleanup)
+            except asyncio.CancelledError:
+                cancelled = True
+            except Exception:
+                break
         try:
-            await asyncio.shield(cleanup)
-        except asyncio.CancelledError:
-            # A second cancellation cannot abandon the socket owner.
-            await asyncio.shield(cleanup)
-            raise
+            cleanup.result()
+        except BaseException:
+            self._poisoned = True
+        if self._cleanup_task is cleanup:
+            self._cleanup_task = None
+        if cancelled:
+            raise asyncio.CancelledError()
 
     @asynccontextmanager
     async def lease(self):
