@@ -50,6 +50,12 @@ class ProjectLauncherTests(LifecycleFixture):
                 for row in json.loads(self.dynamic.read_text())['Profiles']:
                     snapshot['profiles'].append(dict(guid=row['Guid'], name=row['Name'],
                         bar={k:row[k] for k in iterm.BAR_KEYS}, working_directory=row['Working Directory'], references=[]))
+                    if type(row['Show Status Bar']) is int and row['Show Status Bar'] in (0, 1):
+                        snapshot['profiles'][-1]['bar']['Show Status Bar'] = bool(row['Show Status Bar'])
+                    if row['Guid'] in request.get('launch_guids', ()):
+                        snapshot['profiles'][-1]['launch'] = dict(
+                            parent_guid=row['Dynamic Profile Parent GUID'], custom_directory=row['Custom Directory'],
+                            custom_command=row.get('Custom Command', 'No'), command=row.get('Command', ''))
             guids = set(request.get('reference_guids', ())) | {p['guid'] for p in snapshot['profiles']}
             replacements = {r['guid']:r['bar'] for r in request.get('replaced_bars',())}
             for row in snapshot['profiles']:
@@ -117,6 +123,46 @@ class ProjectLauncherTests(LifecycleFixture):
         self.manual_native = copy.deepcopy(self.native)
         self.calls.clear()
         return receipt
+
+    def test_accepted_legacy_checkpoint_updates_retires_and_renames(self):
+        from iterm2_utils import project_handoff, project_edits
+        from iterm2_utils.features import project_launcher as launcher
+        from iterm2_utils.models import Receipt
+        receipt = self.handed_off()
+        rows = json.loads(self.dynamic.read_bytes())['Profiles']
+        for row in rows:
+            row['Show Status Bar'] = 1
+            del row['Custom Command']; del row['Command']
+        raw = (json.dumps({'Profiles':rows}, indent=4)+'\n').encode()
+        self.dynamic.write_bytes(raw)
+        catalogue = self.context.paths.config/launcher.FILENAME
+        catalogue.unlink()
+        state.save(self.context.paths.data/'receipt.json', Receipt(state.VERSION, self.selection(), [], []))
+        preview = project_handoff.prepare_handoff(self.context, self.runner, self.dynamic, ('Default',))
+        self.assertEqual(preview.status, 'ready')
+        # Synthesize only the ownership commit; Task 2 does not provide apply.
+        catalogue.write_text(json.dumps(preview._checkpoint['document'], sort_keys=True, indent=2)+'\n')
+        receipt.resources[0]['before'] = engine._encode(raw)
+        receipt.resources[0]['installed'] = engine._encode(raw)
+        receipt.resources[1]['installed'] = engine._encode(catalogue.read_bytes())
+        state.save(self.context.paths.data/'receipt.json', receipt)
+        self.assertSuccess(lifecycle.update(self.context, self.runner))
+        self.assertEqual(self.dynamic.read_bytes(), raw)
+        self.assertEqual(self.dynamic.stat().st_mode & 0o777, 0o640)
+        remove = project_edits.prepare_project_edit(self.context, self.runner,
+            project_edits.ProjectChange('remove', project='manual-b'))
+        self.assertEqual(remove.status, 'ready')
+        self.assertEqual(project_edits.apply_project_edit(self.context, self.runner, remove, authorize=lambda:None).status, 'applied')
+        rename = project_edits.prepare_project_edit(self.context, self.runner,
+            project_edits.ProjectChange('rename', project='manual-a', name='Renamed'))
+        self.assertEqual(rename.status, 'ready')
+        self.assertEqual(project_edits.apply_project_edit(self.context, self.runner, rename, authorize=lambda:None).status, 'applied')
+        rows = json.loads(self.dynamic.read_bytes())['Profiles']
+        self.assertEqual([(r['Guid'],r['Name']) for r in rows], [('manual-a','Renamed')])
+        self.assertSuccess(lifecycle.uninstall(self.context, {'project-launcher'}, self.runner))
+        self.assertEqual(self.dynamic.read_bytes(), raw)
+        self.assertEqual(self.dynamic.stat().st_mode & 0o777, 0o640)
+
 
     def test_handoff_repeated_update_preserves_checkpoint(self):
         receipt = self.handed_off(interleaved=True)

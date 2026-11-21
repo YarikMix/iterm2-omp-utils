@@ -43,6 +43,42 @@ def _source(path, directory):
         os.close(directory_fd)
 
 
+def _source_provenance(directory, source, guids, raw, mode):
+    """Prove no competing definition, not merely one SDK effective row."""
+    proof, total = [], 0
+    fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        with os.scandir(fd) as entries:
+            for entry in entries:
+                if len(proof) >= 256:
+                    raise ValueError('Dynamic source inventory too large')
+                path = directory/entry.name
+                content, file_mode = _source(path, directory)
+                total += len(content)
+                if total > 16 * 1048576:
+                    raise ValueError('Dynamic source inventory too large')
+                document = json.loads(content, object_pairs_hook=launcher._unique_object)
+                if (type(document) is not dict or type(document.get('Profiles')) is not list or
+                        len(document['Profiles']) > 4096):
+                    raise ValueError('Dynamic source inventory incomplete')
+                ids = [iterm.identifier(row['Guid']) for row in document['Profiles']]
+                if path.resolve() == source:
+                    if content != raw or file_mode != mode:
+                        raise ValueError('Source changed')
+                elif guids.intersection(ids):
+                    raise ValueError('Competing dynamic definition')
+                proof.append(dict(name=entry.name, digest=hashlib.sha256(content).hexdigest(), mode=file_mode))
+        address = os.stat(directory, follow_symlinks=False)
+        opened = os.fstat(fd)
+        if (address.st_dev, address.st_ino) != (opened.st_dev, opened.st_ino):
+            raise ValueError('Dynamic source directory changed')
+    finally:
+        os.close(fd)
+    if source.name not in {row['name'] for row in proof}:
+        raise ValueError('Source inventory incomplete')
+    return sorted(proof, key=lambda row:row['name'])
+
+
 def _buttons(bar, projects, document):
     if bar['Show Status Bar'] is not True:
         raise ValueError('Panel is not visible')
@@ -109,6 +145,7 @@ def prepare_handoff(context: Context, runner: Runner, source: Path,
         document = dict(profiles=list(profiles), projects=projects,
             handoff=dict(source=source.name, guids={p['id']:p['id'] for p in projects}))
         launcher._owned_config(json.dumps(document).encode())
+        provenance = _source_provenance(paths.profiles, source, guids, raw, mode)
         query = dict(operation='inspect', reference_guids=sorted(guids), launch_guids=sorted(guids))
         inventory = iterm.validate_launcher_inventory(iterm._request(context, runner, query))
         native = {p['name']:p for p in inventory['profiles']}
@@ -124,13 +161,13 @@ def prepare_handoff(context: Context, runner: Runner, source: Path,
                     row['Dynamic Profile Parent GUID'] != parent['guid'] or
                     not iterm.same(live.get('launch'), dict(parent_guid=parent['guid'],
                         custom_directory='Yes', custom_command='No', command='')) or
-                    not iterm.same(live['bar'], {k:row[k] for k in iterm.BAR_KEYS}) or
+                    not iterm.same(live['bar'], iterm.source_bar(row)) or
                     not iterm.same(live['bar'], parent['bar'])):
                 raise ValueError('Source and effective profile differ')
         for target in targets:
             _buttons(target['bar'], projects, document)
         for row in rows:
-            _buttons({k:row[k] for k in iterm.BAR_KEYS}, projects, document)
+            _buttons(iterm.source_bar(row), projects, document)
         if inventory['position'] != iterm.POSITION_BOTTOM or inventory['default_guid'] in guids:
             raise ValueError('Native checkpoint differs')
         selected = {p['guid'] for p in targets}
@@ -156,11 +193,15 @@ def prepare_handoff(context: Context, runner: Runner, source: Path,
         evidence = dict(profiles=sorted([p for p in filtered['profiles'] if p['guid'] in relevant], key=lambda p:p['guid']),
             sessions=sorted([s for s in filtered['sessions'] if s['profile_guid'] in relevant], key=lambda s:s['id']),
             default_guid=filtered['default_guid'], position=filtered['position'])
+        if provenance != _source_provenance(paths.profiles, source, guids, raw, mode):
+            raise ValueError('Dynamic source provenance changed')
         witness = dict(source=str(source), source_digest=hashlib.sha256(raw).hexdigest(), mode=mode,
-            receipt_digest=hashlib.sha256(receipt_raw).hexdigest(), document=document, evidence=evidence)
+            receipt_digest=hashlib.sha256(receipt_raw).hexdigest(), document=document, evidence=evidence,
+            source_provenance=provenance)
         fingerprint = hashlib.sha256(json.dumps(witness, sort_keys=True, allow_nan=False).encode()).hexdigest()
         checkpoint = dict(context=copy.deepcopy(context), source=source, raw=raw, mode=mode,
-            receipt_raw=receipt_raw, receipt=receipt, document=document, inventory=filtered, evidence=evidence)
+            receipt_raw=receipt_raw, receipt=receipt, document=document, inventory=filtered, evidence=evidence,
+            source_provenance=provenance)
         return HandoffPreview('ready', fingerprint, checkpoint)
     except FileNotFoundError:
         return HandoffPreview('blocked')

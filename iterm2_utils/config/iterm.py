@@ -36,6 +36,15 @@ def validate_bar(value):
     return value
 
 
+def source_bar(properties):
+    """Convert native-source visibility only; receipts and API bars stay strict."""
+    bar = {key: properties[key] for key in BAR_KEYS}
+    visible = bar['Show Status Bar']
+    if type(visible) is int and visible in (0, 1):
+        bar['Show Status Bar'] = bool(visible)
+    return validate_bar(bar)
+
+
 def validate_launcher_inventory(value):
     """Recognize the native component schema, independent of iTerm's version."""
     validate_inventory(value)

@@ -108,6 +108,17 @@ def dynamic_path(profiles: Path, document: dict) -> Path:
     _text(source)
     return profiles/source
 
+
+def _handoff_row(row):
+    required = {'Name', 'Guid', 'Dynamic Profile Parent GUID', 'Custom Directory',
+                'Working Directory', *iterm.BAR_KEYS}
+    if type(row) is not dict or not required <= set(row) or set(row) - required - {'Custom Command', 'Command'}:
+        raise ValueError('Unrecognized handoff source fields')
+    result = dict(row, **iterm.source_bar(row))
+    result.setdefault('Custom Command', 'No')
+    result.setdefault('Command', '')
+    return result
+
 def _load(context):
     receipt = state.load(context.paths.data/'receipt.json')
     config_path = context.paths.config/FILENAME
@@ -262,7 +273,11 @@ def build(context, selection):
         after = (json.dumps({'Profiles':rows},sort_keys=True,indent=2)+'\n').encode()
         if before is not None:
             original = json.loads(before)
-            if set(original) != {'Profiles'} or any(set(row) != set(rows[0]) for row in original['Profiles']):
+            if set(original) != {'Profiles'}:
+                raise ValueError('Unrecognized owned profile fields')
+            if 'handoff' in config:
+                original = {'Profiles': [_handoff_row(row) for row in original['Profiles']]}
+            elif any(set(row) != set(rows[0]) for row in original['Profiles']):
                 raise ValueError('Unrecognized owned profile fields')
             if iterm.same(original, {'Profiles': rows}):
                 after = before

@@ -67,6 +67,46 @@ class HandoffTests(unittest.TestCase):
         self.assertEqual(self.source.stat().st_mtime_ns, info.st_mtime_ns)
         self.assertTrue(all(json.loads(c[2])['operation'] == 'inspect' for c in self.runner.calls if c[2]))
 
+    def test_competing_dynamic_definition_and_incomplete_provenance_block(self):
+        decoy = self.paths.profiles/'decoy.json'
+        for kind in ('duplicate', 'symlink', 'malformed', 'nested', 'oversized'):
+            with self.subTest(kind=kind):
+                if kind == 'duplicate':
+                    decoy.write_text(json.dumps({'Profiles':[self.rows[0]]}))
+                elif kind == 'symlink':
+                    decoy.symlink_to(self.source)
+                elif kind == 'malformed':
+                    decoy.write_text('{')
+                elif kind == 'nested':
+                    decoy.mkdir()
+                    (decoy/'hidden.json').write_text(json.dumps({'Profiles':[self.rows[0]]}))
+                else:
+                    decoy.write_bytes(b' ' * 1048577)
+                try:
+                    before = self.fixture.snapshot()
+                    self.assertEqual(self.preview().status, 'conflict')
+                    self.assertEqual(self.fixture.snapshot(), before)
+                finally:
+                    if decoy.is_dir():
+                        (decoy/'hidden.json').unlink(); decoy.rmdir()
+                    else:
+                        decoy.unlink()
+
+    def test_source_provenance_is_bound_into_witness(self):
+        decoy = self.paths.profiles/'unrelated.json'
+        decoy.write_text(json.dumps({'Profiles':[{'Guid':'unrelated'}]}))
+        preview = self.preview()
+        self.assertEqual(preview.status, 'ready')
+        decoy.write_bytes(decoy.read_bytes()+b' ')
+        self.assertNotEqual(self.preview().fingerprint, preview.fingerprint)
+
+    def test_source_visibility_accepts_only_native_boolean_forms(self):
+        for value in (True, 1, False, 0, 2, '1', None, 1.0):
+            with self.subTest(value=value, type=type(value)):
+                self.rows[0]['Show Status Bar'] = value
+                self.write_source()
+                self.assertEqual(self.preview().status, 'ready' if value is True or type(value) is int and value == 1 else 'conflict')
+
     def test_untrusted_manual_panel_does_not_preview(self):
         cases = ['foreign-field','foreign-row','duplicate-path','command','directory','parent','live-command',
             'reordered','other-panel','source-bar','default','source-session','unknown-provenance',

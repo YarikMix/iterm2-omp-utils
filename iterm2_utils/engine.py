@@ -323,7 +323,18 @@ def _set(r,value,runner,context, *, expected, restoring=False):
                 if any(g in json.dumps(document) for g in removed):
                     raise ValueError('Replacement retains deleted profile references')
                 retained = _project_guids(result)
-                replacements = [dict(guid=row['Guid'],bar={k:row[k] for k in iterm.BAR_KEYS})
+                receipt = state.load(context.paths.data/'receipt.json')
+                handoff_source = None
+                if isinstance(receipt, Receipt):
+                    for resource in receipt.resources:
+                        if (resource['kind'] == 'file' and 'shared:project-launcher' in resource['owners'] and
+                                resource['target'] == str((context.paths.config/'iterm2-utils-project-launcher.json').resolve())):
+                            catalogue = json.loads(base64.b64decode(resource['installed']['value'], validate=True))
+                            handoff_source = catalogue.get('handoff', {}).get('source')
+                migrated = ('shared:project-launcher' in r['owners'] and
+                            'project-launcher' in r['owners'] and handoff_source == path.name)
+                replacements = [dict(guid=row['Guid'], bar=iterm.source_bar(row) if migrated else
+                                     {k:row[k] for k in iterm.BAR_KEYS})
                     for row in json.loads(raw)['Profiles'] if row['Guid'] in retained]
             iterm.ensure_unreferenced(removed,old_guids,context,runner,replaced_bars=replacements)
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else loc['mode']
