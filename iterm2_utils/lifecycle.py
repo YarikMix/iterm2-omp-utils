@@ -90,39 +90,7 @@ def install(context, selection, runner, *, dry_run=False):
                                      else working.selection.resume_key),
                          notify_errors=(selection.notify_errors if feature=='notifications'
                                         else working.selection.notify_errors))
-        from .features.project_launcher import prepare
-        prepared_context = prepare(context, chosen, runner)
-        prepared = plan(prepared_context, chosen, runner=runner)
-        prepared.changes.edits = [edit for edit in prepared.changes.edits
-            if edit.owner in {feature, 'omp:'+feature} or
-            feature in prepared.changes.consumers.get(edit.owner, ())]
-        affected_shared = {edit.owner for edit in prepared.changes.edits if edit.owner.startswith('shared:')}
-        for resource in working.resources:
-            if set(resource['owners']) & {feature, 'omp:'+feature}:
-                affected_shared.update(owner for owner in resource['owners'] if owner.startswith('shared:'))
-        retained = {owner: set() for owner in affected_shared}
-        for resource in working.resources:
-            for owner in affected_shared & set(resource['owners']):
-                retained[owner].update(consumer.removeprefix('omp:') for consumer in resource['owners']
-                    if consumer.removeprefix('omp:') in working.selection.features)
-        related = {feature, 'selection'}
-        for edit in prepared.changes.edits:
-            related.update(prepared.changes.consumers.get(edit.owner, ()))
-        for consumers in retained.values():
-            related.update(consumers)
-        prepared.changes.findings = [f for f in prepared.changes.findings if f.feature in related]
-        emitted = {edit.owner for edit in prepared.changes.edits}
-        for owner, consumers in retained.items():
-            if consumers and (owner not in emitted or not consumers <= prepared.changes.consumers.get(owner, frozenset())):
-                prepared.changes.findings.append(Finding(feature, 'omp', 'recomposition_unavailable', 'conflict',
-                    'A shared recomposition omitted a committed consumer; previous ownership is preserved.'))
-        unchanged = all(edit.before == edit.after for edit in prepared.changes.edits)
-        prepared.changes.ui = [step for step in prepared.changes.ui if step.feature == feature
-            and not (unchanged and feature in working.selection.features
-                     and step not in working.pending_ui)]
-        for step in working.pending_ui:
-            if step not in prepared.changes.ui:
-                prepared.changes.ui.append(step)
+        prepared_context, prepared = prepare_install_checkpoint(context, chosen, working, feature, runner)
         if any(f.state in BLOCKING for f in prepared.changes.findings):
             findings.extend(prepared.changes.findings)
             continue
@@ -174,34 +142,9 @@ def uninstall(context, owners, runner, *, dry_run=False):
         return _migration(context, receipt)
     if receipt is None:
         return _problem(context)
-    context = replace(context, omp_profile=receipt.selection.omp_profile)
     if not owners or owners - FEATURES:
         return _problem(context, receipt, 'invalid_selection', 'Choose supported features explicitly.')
-    selection = replace(receipt.selection, features=receipt.selection.features-owners,
-                        shortcuts=frozenset() if 'shortcuts' in owners else receipt.selection.shortcuts,
-                        resume_key=None if 'shortcuts' in owners else receipt.selection.resume_key,
-                        notify_errors=False if 'notifications' in owners else receipt.selection.notify_errors)
-    remove_owners = owners | frozenset('omp:'+feature for feature in owners)
-    affected_shared = {owner for resource in receipt.resources
-        if set(resource['owners']) & remove_owners
-        for owner in resource['owners'] if owner.startswith('shared:')}
-    from .features.project_launcher import prepare
-    prepared_context = prepare(context, selection, runner)
-    prepared = plan(prepared_context, selection, runner=runner) if selection.features else Plan(selection, ChangeSet([], [], []), 'uninstall')
-    prepared.changes.edits = [edit for edit in prepared.changes.edits if edit.owner in affected_shared]
-    retained = {owner: set() for owner in affected_shared}
-    for resource in receipt.resources:
-        for owner in affected_shared & set(resource['owners']):
-            retained[owner].update(o.removeprefix('omp:') for o in resource['owners']
-                                   if o.removeprefix('omp:') in selection.features)
-    related = set().union(*retained.values()) if retained else set()
-    prepared.changes.findings = [f for f in prepared.changes.findings if f.feature in related]
-    emitted = {edit.owner for edit in prepared.changes.edits}
-    for owner, consumers in retained.items():
-        if consumers and owner not in emitted:
-            prepared.changes.findings.append(Finding(sorted(consumers)[0], 'omp', 'recomposition_unavailable',
-                'conflict', 'A retained shared resource could not be rebuilt; previous ownership is preserved.'))
-    prepared.changes.ui = [step for step in receipt.pending_ui if step.feature not in owners]
+    prepared_context, prepared, remove_owners = prepare_uninstall_checkpoint(context, receipt, owners, runner)
     if dry_run:
         return Outcome(receipt, prepared.changes.findings + [
             Finding(feature, 'omp', 'uninstall_preview', 'ready', 'Only unchanged owned values will be removed.')
@@ -291,3 +234,73 @@ def doctor(context, receipt, runner):
             findings.append(Finding('mcp', 'omp', 'registration_unavailable', 'unavailable',
                                     'Selected MCP server entry could not be verified.'))
     return findings
+
+
+def prepare_install_checkpoint(context, chosen, working, feature, runner):
+    """Build the same single-feature checkpoint for CLI and approved edits."""
+    from .features.project_launcher import prepare
+    prepared_context = prepare(context, chosen, runner)
+    prepared = plan(prepared_context, chosen, runner=runner)
+    prepared.changes.edits = [edit for edit in prepared.changes.edits
+        if edit.owner in {feature, 'omp:'+feature} or
+        feature in prepared.changes.consumers.get(edit.owner, ())]
+    affected_shared = {edit.owner for edit in prepared.changes.edits if edit.owner.startswith('shared:')}
+    for resource in working.resources:
+        if set(resource['owners']) & {feature, 'omp:'+feature}:
+            affected_shared.update(owner for owner in resource['owners'] if owner.startswith('shared:'))
+    retained = {owner: set() for owner in affected_shared}
+    for resource in working.resources:
+        for owner in affected_shared & set(resource['owners']):
+            retained[owner].update(consumer.removeprefix('omp:') for consumer in resource['owners']
+                if consumer.removeprefix('omp:') in working.selection.features)
+    related = {feature, 'selection'}
+    for edit in prepared.changes.edits:
+        related.update(prepared.changes.consumers.get(edit.owner, ()))
+    for consumers in retained.values():
+        related.update(consumers)
+    prepared.changes.findings = [f for f in prepared.changes.findings if f.feature in related]
+    emitted = {edit.owner for edit in prepared.changes.edits}
+    for owner, consumers in retained.items():
+        if consumers and (owner not in emitted or not consumers <= prepared.changes.consumers.get(owner, frozenset())):
+            prepared.changes.findings.append(Finding(feature, 'omp', 'recomposition_unavailable', 'conflict',
+                'A shared recomposition omitted a committed consumer; previous ownership is preserved.'))
+    unchanged = all(edit.before == edit.after for edit in prepared.changes.edits)
+    prepared.changes.ui = [step for step in prepared.changes.ui if step.feature == feature
+        and not (unchanged and feature in working.selection.features and step not in working.pending_ui)]
+    for step in working.pending_ui:
+        if step not in prepared.changes.ui:
+            prepared.changes.ui.append(step)
+    return prepared_context, prepared
+
+
+def prepare_uninstall_checkpoint(context, receipt, owners, runner):
+    """Prepare removal without recovery or writes."""
+    context = replace(context, omp_profile=receipt.selection.omp_profile)
+    if not owners or owners - FEATURES:
+        raise ValueError('Choose supported features explicitly')
+    selection = replace(receipt.selection, features=receipt.selection.features-owners,
+                        shortcuts=frozenset() if 'shortcuts' in owners else receipt.selection.shortcuts,
+                        resume_key=None if 'shortcuts' in owners else receipt.selection.resume_key,
+                        notify_errors=False if 'notifications' in owners else receipt.selection.notify_errors)
+    remove_owners = owners | frozenset('omp:'+feature for feature in owners)
+    affected_shared = {owner for resource in receipt.resources
+        if set(resource['owners']) & remove_owners
+        for owner in resource['owners'] if owner.startswith('shared:')}
+    from .features.project_launcher import prepare
+    prepared_context = prepare(context, selection, runner)
+    prepared = plan(prepared_context, selection, runner=runner) if selection.features else Plan(selection, ChangeSet([], [], []), 'uninstall')
+    prepared.changes.edits = [edit for edit in prepared.changes.edits if edit.owner in affected_shared]
+    retained = {owner: set() for owner in affected_shared}
+    for resource in receipt.resources:
+        for owner in affected_shared & set(resource['owners']):
+            retained[owner].update(o.removeprefix('omp:') for o in resource['owners']
+                                   if o.removeprefix('omp:') in selection.features)
+    related = set().union(*retained.values()) if retained else set()
+    prepared.changes.findings = [f for f in prepared.changes.findings if f.feature in related]
+    emitted = {edit.owner for edit in prepared.changes.edits}
+    for owner, consumers in retained.items():
+        if consumers and owner not in emitted:
+            prepared.changes.findings.append(Finding(sorted(consumers)[0], 'omp', 'recomposition_unavailable',
+                'conflict', 'A retained shared resource could not be rebuilt; previous ownership is preserved.'))
+    prepared.changes.ui = [step for step in receipt.pending_ui if step.feature not in owners]
+    return prepared_context, prepared, remove_owners
