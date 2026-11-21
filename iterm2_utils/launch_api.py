@@ -1,5 +1,6 @@
 """One SDK create, supervised across synchronous SDK import and authorization."""
 import asyncio
+from collections.abc import Callable
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import dataclass
 import json
@@ -49,27 +50,41 @@ async def _operate(request, emit):
         matches = [p for p in profiles if p.name == request['profile']]
         if len(matches) != 1 or matches[0].guid != request['profile_guid']:
             return 'blocked'
-        window = app.get_window_by_id(request['window_id'])
-        if window is None or window.window_id != request['window_id']:
-            return 'blocked'
         basis,parent=request.get('window_basis',('explicit',''))
-        if basis=='parent':
-            matches=[w.window_id for w in app.terminal_windows for t in w.tabs for s in t.sessions
-                     if s.session_id.lower()==parent.lower()]
-            if matches != [request['window_id']]:return 'blocked'
-        elif basis=='sole':
-            if [w.window_id for w in app.terminal_windows] != [request['window_id']]:return 'blocked'
-        elif basis!='explicit':
-            return 'blocked'
+        new_window=basis=='new'
+        if new_window:
+            if parent or request['window_id']!='':
+                return 'blocked'
+        else:
+            window = app.get_window_by_id(request['window_id'])
+            if window is None or window.window_id != request['window_id']:
+                return 'blocked'
+            if basis=='parent':
+                matches=[w.window_id for w in app.terminal_windows for t in w.tabs for s in t.sessions
+                         if s.session_id.lower()==parent.lower()]
+                if matches != [request['window_id']]:return 'blocked'
+            elif basis=='sole':
+                if [w.window_id for w in app.terminal_windows] != [request['window_id']]:return 'blocked'
+            elif basis!='explicit':
+                return 'blocked'
         deadline = time.monotonic() + _CREATE_SECONDS
         # Publish uncertainty before the one possible mutation; cancellation is no rollback.
-        emit({'phase': 'create', 'window_id': _identifier(window.window_id), 'deadline': deadline})
+        emit({'phase': 'create', 'window_id': None if new_window else _identifier(window.window_id), 'deadline': deadline})
         remaining = deadline-time.monotonic()
         if remaining <= 0:
             return 'blocked'
         sent = True
         async with asyncio.timeout(remaining):
-            tab = await window.async_create_tab(profile=request['profile'], command=request['command'], select=True)
+            if new_window:
+                window = await iterm2.Window.async_create(connection, profile=request['profile'], command=request['command'])
+                if window is None:
+                    return 'unknown'
+                emit({'window_id': _identifier(window.window_id)})
+                if len(window.tabs) != 1:
+                    return 'unknown'
+                tab = window.tabs[0]
+            else:
+                tab = await window.async_create_tab(profile=request['profile'], command=request['command'], select=True)
             emit({'tab_id': _identifier(tab.tab_id)})
             sessions = tab.all_sessions
             if len(sessions) != 1:
@@ -96,12 +111,14 @@ def _result(status, window_id=None, tab_id=None, session_id=None, deadline=None)
 
 
 async def create_tab(window_id: str, profile: str, profile_guid: str, command: str, *,
-                     window_basis=('explicit','')) -> LaunchCreation:
+                     window_basis=('explicit',''),
+                     on_window_progress: Callable[[dict[str, str]], None] | None = None) -> LaunchCreation:
     """Bound SDK auth in a same-Python helper; no retries or terminal cleanup."""
     child = None
     status = 'blocked'
     completed = False
     known_window = tab_id = session_id = deadline = None
+    new_window = window_basis == ('new','')
     try:
         async with asyncio.timeout(_PREFLIGHT_SECONDS):
             child = await asyncio.create_subprocess_exec(
@@ -134,19 +151,19 @@ async def create_tab(window_id: str, profile: str, profile_guid: str, command: s
             if frame.get('phase') != 'create':
                 raise ValueError('Invalid helper phase')
             creation_deadline = frame.get('deadline')
-            if (set(frame) != {'phase', 'window_id', 'deadline'} or frame['window_id'] != window_id or
+            if (set(frame) != {'phase', 'window_id', 'deadline'} or frame['window_id'] != (None if new_window else window_id) or
                     isinstance(creation_deadline, bool) or not isinstance(creation_deadline, (float, int)) or
                     not math.isfinite(creation_deadline) or
                     not time.monotonic() < creation_deadline <= time.monotonic()+_CREATE_SECONDS):
                 raise ValueError('Invalid creation frame')
-            known_window = window_id
+            known_window = None if new_window else window_id
             deadline = creation_deadline
             status = 'unknown'
             child.stdin.write(b'create\n')
             await child.stdin.drain()
             child.stdin.close()
 
-        for field in ('tab_id', 'session_id', 'result'):
+        for field in (('window_id', 'tab_id', 'session_id', 'result') if new_window else ('tab_id', 'session_id', 'result')):
             frame = await read(deadline-time.monotonic())
             if frame == {'result': 'unknown'}:
                 completed = True
@@ -158,10 +175,17 @@ async def create_tab(window_id: str, profile: str, profile_guid: str, command: s
                 completed = True
             elif set(frame) != {field}:
                 raise ValueError('Invalid helper identifier')
-            elif field == 'tab_id':
-                tab_id = _identifier(frame[field])
             else:
-                session_id = _identifier(frame[field])
+                value = _identifier(frame[field])
+                if field == 'window_id':
+                    known_window = value
+                    status = 'created_unverified'
+                elif field == 'tab_id':
+                    tab_id = value
+                else:
+                    session_id = value
+                if new_window and on_window_progress is not None:
+                    on_window_progress({field: value})
     except (Exception, asyncio.CancelledError):
         # Exceptions may contain SDK settings or command text; expose fixed findings only.
         pass

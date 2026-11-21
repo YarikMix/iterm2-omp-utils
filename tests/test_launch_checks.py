@@ -179,3 +179,37 @@ class LaunchChecksTests(unittest.TestCase):
                     inspection,findings=inspect_launch(SimpleNamespace(),request,SimpleNamespace())
                 self.assertEqual(findings,[])
                 self.assertEqual(inspection.window_basis,basis)
+
+    def test_new_window_does_not_select_existing_target(self):
+        from types import SimpleNamespace
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve()
+            artifact=__import__('iterm2_utils.launch',fromlist=['prepare_handoff']).prepare_handoff(root,'task')
+            self.addCleanup(__import__('shutil').rmtree,artifact.path.parent)
+            for mode in ('shell','handoff'):
+                request=LaunchRequest('','Shell',root,None if mode=='shell' else OmpProfile('work',root/'agent'),
+                                      mode,handoff=artifact.path if mode=='handoff' else None,new_window=True)
+                for windows in ([],['old','other']):
+                    terminal=SimpleNamespace(select_window=lambda *a:self.fail('must not select an existing window'),
+                        windows=lambda:windows,profiles=lambda:[dict(name='Shell',guid='G')],
+                        profile=lambda *a:dict(name='Shell',guid='G',command=''))
+                    identity=(root/'omp',[],'',{},request.omp_profile)
+                    runner=SimpleNamespace(run=lambda *a,**kw:SimpleNamespace(returncode=0,stdout='--cwd --profile --config'))
+                    with self.subTest(mode=mode,windows=windows),patch.dict(os.environ,{'ITERM_SESSION_ID':'old:PARENT'}), \
+                            patch('iterm2_utils.launch_checks.platform.system',return_value='Darwin'), \
+                            patch('iterm2_utils.launch_checks._iterm',return_value=(root,[])), \
+                            patch('iterm2_utils.launch_checks.shutil.which',return_value='/bin/zsh'), \
+                            patch('iterm2_utils.launch_checks.Terminal',return_value=terminal), \
+                            patch('iterm2_utils.launch_checks._shell_identity',return_value=identity), \
+                            patch('iterm2_utils.launch_checks.executable_prefixes',return_value=((str(root/'omp'),),)):
+                        inspection,findings=inspect_launch(SimpleNamespace(),request,runner)
+                    self.assertEqual(findings,[])
+                    self.assertEqual((inspection.window_id,inspection.window_basis),('',('new','')))
+            request=LaunchRequest('','Shell',root,None,'shell',new_window=True)
+            for changes in (dict(window_id='W'),dict(mode='new'),dict(mode='resume'),
+                            dict(new_window=1),dict(new_window='true'),dict(new_window=None)):
+                with self.subTest(changes=changes),self.assertRaises(ValueError):
+                    validate_request(replace(request,**changes))
+            with patch('iterm2_utils.launch.read_handoff',side_effect=AssertionError('validation must precede handoff')):
+                with self.assertRaises(ValueError):
+                    validate_request(replace(request,mode='handoff',window_id='W',handoff=root/'missing'))

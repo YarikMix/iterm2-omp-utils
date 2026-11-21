@@ -26,6 +26,7 @@ class LaunchRequest:
     handoff: Path | None = None
     resume: ResumeTarget | None = None
     allow_duplicate: bool = False
+    new_window: bool = False
 
 
 @dataclass(frozen=True)
@@ -49,7 +50,9 @@ class LaunchInspection:
 
 
 def validate_request(request):
-    if (type(request.allow_duplicate) is not bool or request.allow_duplicate and request.mode!='resume' or
+    if (type(request.new_window) is not bool or
+            request.new_window and (request.window_id != '' or request.mode not in {'shell','handoff'}) or
+            type(request.allow_duplicate) is not bool or request.allow_duplicate and request.mode!='resume' or
             request.mode not in {'shell','new','handoff','resume'} or not isinstance(request.window_id,str) or
             not isinstance(request.profile,str) or not request.profile.strip() or
             any(ord(c)<32 or ord(c)==127 for c in request.window_id+request.profile)):
@@ -162,9 +165,12 @@ def inspect_launch(paths: Paths, request: LaunchRequest, runner: Runner) -> tupl
         if not app or not zsh or not Path(zsh).is_absolute():raise ValueError('launch_dependency')
         it2=app/'Contents/Resources/utilities/it2'
         terminal=Terminal(it2,runner)
-        window=terminal.select_window(request.window_id,dict(os.environ))
-        parents=[value.rsplit(':',1)[-1] for key in ('ITERM_SESSION_ID','TERM_SESSION_ID') if (value:=os.environ.get(key))]
-        basis=('explicit','') if request.window_id else ('parent',parents[0]) if parents else ('sole','')
+        if request.new_window:
+            window,basis='',('new','')
+        else:
+            window=terminal.select_window(request.window_id,dict(os.environ))
+            parents=[value.rsplit(':',1)[-1] for key in ('ITERM_SESSION_ID','TERM_SESSION_ID') if (value:=os.environ.get(key))]
+            basis=('explicit','') if request.window_id else ('parent',parents[0]) if parents else ('sole','')
         profiles=terminal.profiles()
         matches=[p for p in profiles if p.get('name') == request.profile]
         if len(matches)!=1 or not isinstance(matches[0].get('guid'),str) or not matches[0]['guid']:

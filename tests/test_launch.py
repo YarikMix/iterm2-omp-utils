@@ -744,3 +744,42 @@ class LaunchTests(unittest.TestCase):
             transport.observe=observed
             code,out=self.run_launch(root,request,inspection,state,transport,create)
             self.assertEqual((code,state['creates']),(2,0))
+
+    def test_new_window_proof_binds_to_created_window(self):
+        for wrong_window in (False,True):
+            with self.subTest(shell=True,wrong_window=wrong_window),TemporaryDirectory() as tmp:
+                root=Path(tmp).resolve()
+                request,inspection,state,transport,create=self.abbreviated_fixture(root,'shell')
+                request=replace(request,window_id='',new_window=True)
+                inspection=replace(inspection,window_id='',window_basis=('new',''))
+                transport.panes=lambda self:[dict(terminal_id='S',tab_id='T',window_id='other' if wrong_window else 'W')]
+                code,out=self.run_launch(root,request,inspection,state,transport,create)
+                self.assertEqual((code,out['command']),(3,'unverified') if wrong_window else (0,'verified'))
+                self.assertEqual((out['window_id'],out['tab_id'],out['session_id']),('W','T','S'))
+                self.assertEqual(state['creates'],1)
+        for wrong_receipt_window in (False,True):
+            with self.subTest(handoff=True,wrong_window=wrong_receipt_window),TemporaryDirectory() as tmp:
+                root=Path(tmp).resolve()
+                request,inspection,binding,state,transport,create=self.fixture(root)
+                artifact=m.prepare_handoff(root,'task')
+                self.addCleanup(__import__('shutil').rmtree,artifact.path.parent)
+                request=replace(request,window_id='',new_window=True,mode='handoff',handoff=artifact.path)
+                inspection=replace(inspection,window_id='',window_basis=('new',''))
+                original=create
+                async def created(*args,**kwargs):
+                    self.assertEqual(kwargs['window_basis'],('new',''))
+                    result=await original(*args,**kwargs)
+                    artifact.ack_path.write_text(json.dumps(dict(request_id=artifact.request_id,thread_id='fresh',
+                        cwd=str(root),accepted_task='read',first_step='inspect')))
+                    artifact.ack_path.chmod(0o600)
+                    return result
+                observed=transport.observe
+                def observe(self,sid):
+                    raw=observed(self,sid)
+                    if wrong_receipt_window:raw['window_id']='other'
+                    return raw
+                transport.observe=observe
+                code,out=self.run_launch(root,request,inspection,state,transport,created)
+                self.assertEqual((code,out['command']),(0,'verified'))
+                self.assertEqual(out['ack'],'unconfirmed' if wrong_receipt_window else 'received')
+                self.assertEqual(state['creates'],1)

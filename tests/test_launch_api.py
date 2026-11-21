@@ -64,6 +64,16 @@ class Tab:
         return [SimpleNamespace(session_id='S-created')]
 class Window:
     window_id = 'W-explicit'
+    @staticmethod
+    async def async_create(connection, profile=None, command=None):
+        record('create_window', [profile, command])
+        if SCENARIO == 'window_none': return None
+        window = Window()
+        window.window_id = 'W-created'
+        if SCENARIO == 'invalid_window': window.window_id = 'bad\nid'
+        window.tabs = [] if SCENARIO == 'missing_tab' else [Tab()]
+        if SCENARIO == 'multiple_tabs': window.tabs = [Tab(), Tab()]
+        return window
     async def async_create_tab(self, profile=None, command=None, select=True):
         record('create', [self.window_id, profile, command, select])
         record('profile_command', Profile.command)
@@ -103,6 +113,78 @@ class LaunchAPITests(unittest.IsolatedAsyncioTestCase):
     def calls(self, kind):
         rows = [json.loads(line) for line in self.log.read_text().splitlines()] if self.log.exists() else []
         return [value for key, value in rows if key == kind]
+
+    async def test_new_window_sdk_grant_and_partial_evidence(self):
+        for scenario,status,ids,progress in (
+                ('ok','created_unverified',('W-created','T-created','S-created'),
+                 [{'window_id':'W-created'},{'tab_id':'T-created'},{'session_id':'S-created'}]),
+                ('guid_changed','blocked',(None,None,None),[]),
+                ('window_none','unknown',(None,None,None),[]),
+                ('invalid_window','unknown',(None,None,None),[]),
+                ('missing_tab','created_unverified',('W-created',None,None),[{'window_id':'W-created'}]),
+                ('multiple_tabs','created_unverified',('W-created',None,None),[{'window_id':'W-created'}]),
+                ('partial','created_unverified',('W-created','T-created',None),
+                 [{'window_id':'W-created'},{'tab_id':'T-created'}])):
+            with self.subTest(scenario=scenario):
+                self.log.unlink(missing_ok=True)
+                (self.root/'iterm2.py').write_text(SDK.replace('SCENARIO_VALUE',repr(scenario)))
+                accepted=[]
+                with patch.dict(os.environ,dict(HOME=str(self.root),PYTHONPATH=str(self.root),
+                        FAKE_SDK_LOG=str(self.log),PYTHONDONTWRITEBYTECODE='1')):
+                    result=await launch_api.create_tab('','Codex fixture','profile-one','CUSTOM_COMMAND',
+                        window_basis=('new',''),on_window_progress=accepted.append)
+                self.assertEqual(result.status,status)
+                self.assertEqual((result.window_id,result.tab_id,result.session_id),ids)
+                self.assertEqual(accepted,progress)
+                self.assertEqual(self.calls('create_window'),[] if scenario=='guid_changed' else
+                                 [['Codex fixture','CUSTOM_COMMAND']])
+                self.assertEqual(self.calls('create'),[])
+                self.assertEqual(self.calls('lookup'),[])
+        real_spawn=asyncio.create_subprocess_exec
+        for suffix,ids,progress in (
+                ("print('{broken',flush=True)",('W-created',None,None),[{'window_id':'W-created'}]),
+                ("print(json.dumps({'tab_id':'T-created'}),flush=True); print('{broken',flush=True)",
+                 ('W-created','T-created',None),[{'window_id':'W-created'},{'tab_id':'T-created'}]),
+                ("print(json.dumps({'tab_id':'bad\\nid'}),flush=True)",
+                 ('W-created',None,None),[{'window_id':'W-created'}]),
+                ("print(json.dumps({'result':'blocked'}),flush=True)",
+                 ('W-created',None,None),[{'window_id':'W-created'}])):
+            script=("import json,sys,time\nsys.stdin.readline()\n"
+                "for phase in ('connect','app','profiles'): print(json.dumps({'phase':phase}),flush=True)\n"
+                "print(json.dumps({'phase':'create','window_id':None,'deadline':time.monotonic()+30}),flush=True)\n"
+                "assert sys.stdin.readline()=='create\\n'\n"
+                "print(json.dumps({'window_id':'W-created'}),flush=True)\n"+suffix)
+            async def spawn(*args,**kwargs):
+                return await real_spawn(sys.executable,'-c',script,**kwargs)
+            accepted=[]
+            with patch.object(launch_api.asyncio,'create_subprocess_exec',side_effect=spawn):
+                result=await launch_api.create_tab('','Codex fixture','profile-one','CUSTOM_COMMAND',
+                    window_basis=('new',''),on_window_progress=accepted.append)
+            self.assertEqual(result.status,'created_unverified')
+            self.assertEqual((result.window_id,result.tab_id,result.session_id),ids)
+            self.assertEqual(accepted,progress)
+        (self.root/'iterm2.py').write_text(SDK.replace('SCENARIO_VALUE',repr('ok')))
+        environment=dict(os.environ,HOME=str(self.root),PYTHONPATH=str(self.root),
+                         FAKE_SDK_LOG=str(self.log),PYTHONDONTWRITEBYTECODE='1')
+        self.log.unlink(missing_ok=True)
+        child=await real_spawn(sys.executable,'-m','iterm2_utils.launch_api',
+            stdin=asyncio.subprocess.PIPE,stdout=asyncio.subprocess.PIPE,stderr=asyncio.subprocess.DEVNULL,env=environment)
+        try:
+            child.stdin.write(json.dumps(dict(window_id='',window_basis=['new',''],profile='Codex fixture',
+                profile_guid='profile-one',command='CUSTOM_COMMAND')).encode()+b'\n')
+            await child.stdin.drain()
+            async with asyncio.timeout(2):
+                frames=[json.loads(await child.stdout.readline()) for _ in range(4)]
+                self.assertIsNone(frames[-1]['window_id'])
+                self.assertEqual(self.calls('create_window'),[])
+                child.stdin.close()
+                self.assertEqual(json.loads(await child.stdout.readline()),{'result':'blocked'})
+                await child.wait()
+            self.assertEqual(self.calls('create_window'),[])
+        finally:
+            if child.returncode is None:
+                child.kill()
+                await child.wait()
 
     async def test_custom_command_overrides_profile_at_creation(self):
         result = await self.run_sdk()

@@ -255,13 +255,14 @@ def launch(request: LaunchRequest, paths, runner):
     if creation.status=='blocked':return 2,output
     terminal.deadline=creation.deadline
     verified_binding=None
-    complete=(creation.window_id==inspection.window_id and creation.tab_id and creation.session_id and creation.deadline)
+    expected_window=creation.window_id if request.new_window else inspection.window_id
+    complete=(creation.window_id and creation.window_id==expected_window and creation.tab_id and creation.session_id and creation.deadline)
     while complete and time.monotonic()<creation.deadline:
         try:
             panes=terminal.panes()
             matches=[p for p in panes if p['tab_id']==creation.tab_id]
             profile=terminal.profile(request.profile)
-            exact=(matches==[dict(terminal_id=creation.session_id,tab_id=creation.tab_id,window_id=inspection.window_id)] and
+            exact=(matches==[dict(terminal_id=creation.session_id,tab_id=creation.tab_id,window_id=expected_window)] and
                    profile.get('name')==request.profile and profile.get('guid')==inspection.profile_guid and
                    terminal.variable(creation.session_id,'session.profileName')==request.profile)
             line=terminal.variable(creation.session_id,'session.commandLine')
@@ -310,5 +311,5 @@ def launch(request: LaunchRequest, paths, runner):
                 except (OSError,ValueError,TypeError,KeyError,TimeoutError,subprocess.SubprocessError):pass
                 time.sleep(min(.2,max(0,terminal.deadline-time.monotonic())))
     if output['command']=='verified':return 0,output
-    output['status']='created_unverified' if creation.tab_id or creation.session_id else 'unknown'
+    output['status']='created_unverified' if creation.tab_id or creation.session_id or request.new_window and creation.window_id else 'unknown'
     return 3,output
