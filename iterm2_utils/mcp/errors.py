@@ -1,0 +1,99 @@
+# Adapted from mcp-server-iterm2 v0.1.1; Copyright (c) 2026 Rob Trame (MIT).
+"""Exception types and tool-error formatting."""
+
+
+class MCPIterm2Error(Exception):
+    """Base for all expected errors surfaced to MCP tool callers."""
+
+
+class ITermNotRunning(MCPIterm2Error):
+    """iTerm2 process not running at server startup."""
+
+
+class AuthDenied(MCPIterm2Error):
+    """User declined the cookie authorization prompt for this script."""
+
+
+class APINotEnabled(MCPIterm2Error):
+    """iTerm2's Python API is disabled in preferences."""
+
+
+class Disconnected(MCPIterm2Error):
+    """Connection to iTerm2 is unavailable; no command was replayed."""
+
+
+class SubprocessTimeout(MCPIterm2Error):
+    """A child osascript invocation exceeded its time budget."""
+
+    def __init__(self, what: str, seconds: float) -> None:
+        super().__init__(what)
+        self.what = what
+        self.seconds = seconds
+
+
+class InvalidArgument(MCPIterm2Error):
+    """A tool argument failed validation at the boundary (length, range, prefix, etc.)."""
+
+    def __init__(self, message: str) -> None:
+        super().__init__(message)
+        self.message = message
+
+
+class NoCurrentSession(MCPIterm2Error):
+    """No session_id provided and ITERM_SESSION_ID is not set."""
+
+
+class SessionNotFound(MCPIterm2Error):
+    """A session_id was provided but does not match a live session."""
+
+    def __init__(self, session_id: str) -> None:
+        super().__init__(session_id)
+        self.session_id = session_id
+
+
+class CursorInvalid(MCPIterm2Error, ValueError):
+    """The supplied cursor string could not be parsed or belongs to a different session."""
+
+
+class ScopeUnavailable(MCPIterm2Error):
+    """Tab or window scope was requested but the containing tab/window is unavailable."""
+
+    def __init__(self, scope: str) -> None:
+        super().__init__(scope)
+        self.scope = scope
+
+
+def to_error_text(err: BaseException) -> str:
+    """Render an exception as actionable text for an MCP tool error response."""
+    match err:
+        case ITermNotRunning():
+            return "iTerm2 is not running. Start iTerm2 and try again."
+        case AuthDenied():
+            return (
+                "iTerm2 denied API authorization for this script. "
+                "Re-approve in iTerm2 → Settings → General → Magic."
+            )
+        case APINotEnabled():
+            return (
+                "iTerm2's Python API is not enabled. "
+                "Enable it in iTerm2 → Settings → General → Magic → 'Enable Python API'."
+            )
+        case Disconnected():
+            return "iTerm2 unavailable. Try a new call."
+        case SubprocessTimeout() as e:
+            return f"osascript timed out after {e.seconds:.0f}s while {e.what}."
+        case NoCurrentSession():
+            return (
+                "No current session — pass session_id or run the MCP server "
+                "from inside an iTerm2 session."
+            )
+        case SessionNotFound() as e:
+            return "Requested session not found."
+        case CursorInvalid():
+            return "Invalid cursor. Pass null to start from scratch."
+        case ScopeUnavailable() as e:
+            return f"Cannot read variable: containing {e.scope} is unavailable for this session."
+        case InvalidArgument() as e:
+            return e.message
+        case _:
+            return "Internal error."

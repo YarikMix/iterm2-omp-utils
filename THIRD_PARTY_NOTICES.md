@@ -1,5 +1,14 @@
 # Third-party notices
 
+`iterm2_utils/mcp/` adapts the observe/annotation tools, session resolution,
+output cursors, error types and cookie request from Rob Trame's
+[`mcp-server-iterm2` v0.1.1](https://github.com/r6e/mcp-server-iterm2/tree/v0.1.1)
+(Copyright © 2026 Rob Trame, MIT). The original permission and copyright text is
+preserved in `vendor/mcp_server_iterm2/LICENSE`. Connection ownership and
+authorization/registration were replaced locally: lazy serialized generations,
+bounded teardown, no background reconnect or command replay, and sanitized errors.
+The optional `iterm2` and `mcp` SDKs are runtime dependencies, not vendored code.
+
 `vendor/shell_integration/iterm2_shell_integration.zsh` is the unmodified official
 iTerm2 zsh integration from gnachman/iTerm2, tag v3.7.6, Git blob
 `efb57443f879239795411bcf076f38b4d1008b0f`.
