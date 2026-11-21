@@ -248,6 +248,33 @@ class NativeSdkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.properties['Foreign'], {'preserve': True})
         self.assertEqual(self.closed, [True])
 
+    async def test_numeric_native_visibility_round_trips_through_cas_and_restore(self):
+        key = 'Show Status Bar'
+        self.properties[key] = 0
+
+        async def get_profile():
+            return SimpleNamespace(all_properties=copy.deepcopy(self.properties))
+
+        write = self.sdk.rpc.async_set_profile_properties_json
+
+        async def set_properties(*args, **kwargs):
+            await write(*args, **kwargs)
+            self.properties[key] = int(self.properties[key])
+
+        self.sessions = [SimpleNamespace(session_id='session-one', async_get_profile=get_profile)]
+        self.sdk.rpc.async_set_profile_properties_json = set_properties
+        initial = await self.operate(operation='read_bar', guid='parent-guid')
+        self.assertEqual(initial['status'], 'ok')
+        before = initial['value']
+        self.assertIs(before['value'][key], False)
+
+        for expected, value in ((before, AFTER), ({'exists': True, 'value': AFTER}, BEFORE)):
+            result = await self.operate(operation='write_bar', guid='parent-guid', value=value, expected=expected)
+            self.assertEqual(result['status'], 'ok')
+            self.assertIs(result['value']['value'][key], value[key])
+        self.assertEqual(len(self.writes), 2)
+        self.assertEqual(self.properties[key], 0)
+
     async def test_divergent_session_or_unknown_provenance_blocks_parent(self):
         for extra in ({'Guid': 'parent-guid', **AFTER}, {'Guid': 'unknown-guid', **BEFORE}):
             async def get_profile(): return SimpleNamespace(all_properties=extra)
@@ -321,10 +348,12 @@ class NativeSdkTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(result, {'status':'unknown'})
         self.assertEqual(len(self.writes), 1)
 
-    async def test_foreign_profile_bar_malformed_or_duplicate_names_fails_closed(self):
-        self.properties['Show Status Bar'] = 0
-        result = await self.operate(operation='inspect')
-        self.assertEqual(result, {'status':'conflict'})
+    async def test_invalid_native_visibility_fails_closed(self):
+        for invalid in (2, 1.0, '1', None):
+            with self.subTest(invalid=invalid):
+                self.properties['Show Status Bar'] = invalid
+                self.assertEqual(await self.operate(operation='inspect'), {'status':'conflict'})
+        self.assertEqual(self.writes, [])
 
     async def test_reference_scan_decodes_json_escaped_guids_in_hidden_fields(self):
         self.properties['hidden'] = '{"parameter":"parent\\u002dguid"}'

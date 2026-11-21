@@ -69,7 +69,12 @@ def _refs(properties, guids, names):
 
 
 def _bar(properties):
-    return validate_bar({key:properties[key] for key in BAR_KEYS})
+    value = {key: properties[key] for key in BAR_KEYS}
+    visible = value['Show Status Bar']
+    # iTerm2 can expose this boolean as a JSON integer. Keep receipts and CAS boolean.
+    if type(visible) is int and visible in (0, 1):
+        value['Show Status Bar'] = bool(visible)
+    return validate_bar(value)
 
 
 async def _inventory(sdk, connection, reference_guids=(), replaced_bars=()):
