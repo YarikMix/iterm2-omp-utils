@@ -1,5 +1,16 @@
 # One-tab omp launch
 
+When the owned `iterm2-observe` MCP is explicitly available, prefer `open_shell`
+for an authorized separate ordinary tab, or `launch_omp_task` for a separate omp
+handoff. Supply exactly one absolute `cwd` or installed project selector and an
+explicit window when known. Never retry an unknown/create-unverified outcome.
+Tool acknowledgement is receipt, not task completion. Terminal/project results
+are visible to the selected model provider. Exact history resume, exact tab close,
+setup and optional dependency installation remain separate CLI/skill operations.
+The MCP does not send arbitrary commands/keys to existing terminals. Installed
+MCP needs no source checkout or enabled shell feature; the selected interpreter
+and authorized API remain prerequisites. Live `/exit` prompt acceptance is separate.
+
 `python3 -m iterm2_utils launch-omp --mode MODE --profile NAME --cwd ABS`
 requires `MODE` to be `shell`, `new`, `handoff` or `resume`. Handoff requires
 `--handoff ABS`; resume requires both `--resume-file ABS_JSONL` and `--resume-id ID`.

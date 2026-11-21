@@ -52,10 +52,8 @@ def validate(selection: Selection, context: Context) -> list[Finding]:
             dependencies.add('omp')
         if feature in {'status','notifications'} or feature=='shortcuts' and selection.shortcuts-{'ctrl-q'}:
             dependencies.add('bun')
-        if feature in {'appearance','restore','project-launcher'}:
+        if feature in {'appearance','restore','project-launcher','mcp'}:
             dependencies.add('python3')
-        if feature=='mcp':
-            dependencies.add('uvx')
         missing = sorted(dependencies-context.executables.keys())
         if missing:
             add(feature,'missing_binary','missing_dependency','Required executables: '+', '.join(missing))
@@ -65,11 +63,15 @@ def validate(selection: Selection, context: Context) -> list[Finding]:
             continue
         if 'python3' in dependencies:
             version = re.fullmatch(r'(\d+)\.(\d+)(?:\.\d+)?',context.versions.get('python3',''))
-            if not version or tuple(map(int,version.groups())) < (3,11):
-                add(feature,'python_version','missing_dependency','Select Python 3.11+ explicitly.')
+            minimum = (3,12) if feature == 'mcp' else (3,11)
+            if not version or tuple(map(int,version.groups())) < minimum:
+                add(feature,'python_version','missing_dependency','Select Python '+'.'.join(map(str,minimum))+'+ explicitly.')
                 continue
             if 'python:iterm2' not in context.capabilities:
                 add(feature,'python_sdk','missing_dependency','The selected Python must import the iTerm2 SDK.')
+                continue
+            if feature == 'mcp' and 'python:mcp' not in context.capabilities:
+                add(feature,'python_mcp','missing_dependency','Select existing Python 3.12+ with mcp>=1.12,<2 and iterm2; no packages are installed automatically.')
                 continue
         capability = 'omp:resume' if feature=='restore' else None
         if capability and capability not in context.capabilities:

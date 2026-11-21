@@ -64,11 +64,21 @@ class Runner:
             if inventory.get('nextCursor') or not isinstance(tools,list):
                 raise ValueError('Incomplete MCP tool inventory')
             names = [tool['name'] for tool in tools]
-            from .config.mcp import TOOLS
-            if len(names) != 13 or set(names) != TOOLS:
+            from .config.mcp import PUBLIC_TOOLS
+            if len(names) != len(PUBLIC_TOOLS) or set(names) != PUBLIC_TOOLS:
                 return {'tools': names, 'sessions':False}
-            send({'id':3,'method':'tools/call','params':{'name':'list_sessions','arguments':{}}})
-            result = response(3)
+            send({'id':3,'method':'tools/call','params':{'name':'list_projects','arguments':{}}})
+            catalogue = response(3)
+            data = catalogue.get('structuredContent')
+            if data is None:
+                texts = [item['text'] for item in catalogue.get('content',[]) if item.get('type') == 'text']
+                if len(texts) != 1: raise ValueError('MCP catalogue result unavailable')
+                data = json.loads(texts[0])
+            if (catalogue.get('isError',False) or not isinstance(data,dict) or
+                    data.get('status') not in {'ok','not_configured'} or not isinstance(data.get('projects'),list)):
+                raise ValueError('MCP catalogue unavailable')
+            send({'id':4,'method':'tools/call','params':{'name':'list_sessions','arguments':{}}})
+            result = response(4)
             data=result.get('structuredContent')
             if data is None:
                 texts=[item['text'] for item in result.get('content',[]) if item.get('type')=='text']

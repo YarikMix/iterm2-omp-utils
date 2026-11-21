@@ -51,6 +51,10 @@ class LifecycleFixture(NativeFixture):
         return {str(p.relative_to(self.home)):p.read_bytes() for p in self.home.rglob('*') if p.is_file()}
 
     def install(self,*features,**kwargs):
+        if 'mcp' in features:
+            # Simulated selected optional-SDK interpreter; no host imports/install.
+            self.context.versions['python3']='3.12.0'
+            self.context.capabilities |= {'python:mcp'}
         return lifecycle.install(self.context,self.selection(*features,**kwargs),self.runner)
 
 
@@ -166,7 +170,7 @@ class LifecycleTests(LifecycleFixture):
 
     def test_unavailable_existing_feature_does_not_block_independent_update(self):
         self.assertSuccess(self.install('shell','mcp'))
-        self.context.executables.pop('uvx')
+        self.context.executables.pop('python3')
         result = lifecycle.update(self.context,self.runner)
         self.assertIn('shell',[f.feature for f in result.findings if f.code=='feature_checkpoint'])
         self.assertEqual(result.receipt.selection.features,{'shell','mcp'})

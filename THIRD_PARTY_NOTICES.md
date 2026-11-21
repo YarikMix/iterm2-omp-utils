@@ -1,5 +1,21 @@
 # Third-party notices
 
+`iterm2_utils/mcp/` adapts the observe/annotation tools, session resolution,
+output cursors, error types and cookie request from Rob Trame's
+[`mcp-server-iterm2` v0.1.1](https://github.com/r6e/mcp-server-iterm2/tree/v0.1.1)
+(Copyright © 2026 Rob Trame, MIT). The original permission and copyright text is
+preserved in `vendor/mcp_server_iterm2/LICENSE`. Connection ownership and
+authorization/registration were replaced locally: lazy serialized generations,
+bounded teardown, no background reconnect or command replay, and sanitized errors.
+The optional `iterm2` and `mcp` SDKs are runtime dependencies, not vendored code.
+The public allowlist ships the adapted `iterm2_utils/mcp/` Python sources,
+`runtime/iterm2_mcp_entry.py`, `runtime/omp_iterm2_projects.ts`, and the original
+MIT license above. The same license and this notice ship inside immutable
+installed MCP releases. `sources.lock.json` records the v0.1.1 upstream license
+URL, tag and SHA-256; locally changed ownership/worker code is not represented
+as unmodified upstream source. MCP SDK dependencies are probed, never downloaded
+or bundled by the installer.
+
 `vendor/shell_integration/iterm2_shell_integration.zsh` is the unmodified official
 iTerm2 zsh integration from gnachman/iTerm2, tag v3.7.6, Git blob
 `efb57443f879239795411bcf076f38b4d1008b0f`.

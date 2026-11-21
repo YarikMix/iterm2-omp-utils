@@ -60,8 +60,11 @@ directly until the current host refreshes discovery; no real deployment implied.
 - Native status/notifications: inspect receiver/capability and effective config
   separately. A version string/API-ready does not prove OSC delivery or banners;
   unsupported evidence remains pending, no hooks/daemon fallback.
-- MCP: preserve other `mcpServers`/root fields. Changed collision conflicts;
-  uvx/server Python >=3.12 and API authorization are separate prerequisites.
+- MCP: preserve other `mcpServers`/root fields. Changed/foreign/disabled collision
+  conflicts. Select ready Python >=3.12 with mcp>=1.12,<2 and iterm2; no uvx fetch.
+  Ownership loss blocks next call and closes observe; do not force/retry edits.
+  Legacy uvx needs explicit preview/uninstall/reinstall, not update or re-enable.
+  Old running third-party servers need separate authorized operator cleanup.
 - Restore: exact file/ID/cwd/profile, continuation/history and launch command
   evidence are separate. Missing history never falls back to a fresh dialog.
 - Shortcuts: resume needs explicit noncolliding key; preserve Ctrl+Q native.

@@ -175,6 +175,9 @@ class ExportTests(unittest.TestCase):
             'vendor/yaml/LICENSE', 'vendor/yaml/package.json', 'vendor/yaml/dist/index.js',
             'tests/native_features_support.py', 'tests/test_omp_identity.ts',
             'tests/test_native_status_migration.py', 'docs/omp-launch.md', 'docs/omp-identity.md'}
+        required |= {'runtime/iterm2_mcp_entry.py', 'runtime/omp_iterm2_projects.ts',
+                     'iterm2_utils/mcp/server.py', 'iterm2_utils/mcp/project_worker.py',
+                     'iterm2_utils/project_edits.py', 'vendor/mcp_server_iterm2/LICENSE'}
         self.assertTrue(required <= set(check_export.EXPORT_FILES))
         retired = ('runtime/codex', 'runtime/hook.py', 'runtime/native_status.py',
                    'runtime/events.py', 'runtime/notifier.py', 'runtime/focus.py',
@@ -298,6 +301,77 @@ class ExportTests(unittest.TestCase):
                 path.write_bytes(tar.extractfile(member).read())
                 path.chmod(member.mode)
         return destination/('iterm2-utils-'+build_release.VERSION)
+
+    def installed_mcp_smoke(self):
+        """Used by the mandatory optional-SDK suite, never skipped there."""
+        from iterm2_utils.config.mcp import PUBLIC_TOOLS
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve(); repo=self.fixture(root)
+            extracted=self.extract(build_release.build(repo,root/'dist'),root/'extract')
+            shutil.rmtree(repo)
+            home=root/'home'; home.mkdir()
+            script=r'''
+import json, os, pathlib, plistlib, sys
+from unittest.mock import patch
+from iterm2_utils import lifecycle
+from iterm2_utils.commands import Runner
+from iterm2_utils.discovery import resolve_paths, discover
+from iterm2_utils.models import OmpProfile, Selection
+home=pathlib.Path.home(); source=pathlib.Path.cwd()
+app=home/'iTerm.app'; (app/'Contents/MacOS').mkdir(parents=True)
+(app/'Contents/Info.plist').write_bytes(plistlib.dumps({'CFBundleIdentifier':'com.googlecode.iterm2','CFBundleExecutable':'iTerm2'}))
+(app/'Contents/MacOS/iTerm2').write_text('fixture'); (app/'Contents/MacOS/iTerm2').chmod(0o700)
+os.environ.update(ITERM2_APP=str(app),ITERM2_UTILS_PYTHON=sys.executable)
+profile=OmpProfile('work',home/'agent'); selected=Selection(frozenset({'mcp'}),frozenset(),'Default',profile)
+runner=Runner()
+with patch('iterm2_utils.discovery.platform.system',return_value='Darwin'):
+    context=discover(resolve_paths(),runner,features=selected.features,omp_profile=profile)
+assert 'python:mcp' in context.capabilities, context.capabilities
+result=lifecycle.install(context,selected,runner)
+assert not [f for f in result.findings if f.state in lifecycle.BLOCKING],result.findings
+value=json.loads((profile.agent_dir/'mcp.json').read_text())['mcpServers']['iterm2-observe']
+(home/'registration.json').write_text(json.dumps(value))
+assert not (context.paths.data/'current').exists()
+'''
+            env=self.isolated_env(home)
+            child=subprocess.run([sys.executable,'-c',script],cwd=extracted,env=env,
+                                 capture_output=True,text=True,timeout=30)
+            self.assertEqual(child.returncode,0,child.stdout+child.stderr)
+            registration=json.loads((home/'registration.json').read_text())
+            entry=Path(registration['args'][1]); release=entry.parent.parent
+            self.assertEqual((release/'vendor/mcp_server_iterm2/LICENSE').read_bytes(),
+                             (ROOT/'vendor/mcp_server_iterm2/LICENSE').read_bytes())
+            self.assertIn('r6e/mcp-server-iterm2',(release/'THIRD_PARTY_NOTICES.md').read_text())
+            shutil.rmtree(extracted); shutil.rmtree(root/'dist')
+            import select
+            child=subprocess.Popen([registration['command'],*registration['args']],cwd=home,
+                                   env=env,stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
+            def exchange(frame):
+                child.stdin.write(json.dumps(frame)+'\n');child.stdin.flush()
+                if 'id' not in frame:return None
+                self.assertTrue(select.select([child.stdout],[],[],15)[0],'Installed server response missing')
+                value=json.loads(child.stdout.readline());self.assertEqual(value.get('id'),frame['id'])
+                self.assertNotIn('error',value);return value['result']
+            try:
+                exchange(dict(jsonrpc='2.0',id=1,method='initialize',params=dict(protocolVersion='2024-11-05',
+                         capabilities={},clientInfo=dict(name='package-fixture',version='1'))))
+                exchange(dict(jsonrpc='2.0',method='notifications/initialized'))
+                inventory=exchange(dict(jsonrpc='2.0',id=2,method='tools/list'))
+                self.assertEqual({t['name'] for t in inventory['tools']}, PUBLIC_TOOLS)
+                result=exchange(dict(jsonrpc='2.0',id=3,method='tools/call',params=dict(name='list_projects',arguments={})))
+                self.assertFalse(result.get('isError',False),result)
+                self.assertEqual(json.loads(result['content'][0]['text']),{'status':'not_configured','projects':[]})
+                # Opt-out while this real installed server is still loaded.
+                (home/'agent/mcp.json').write_text('{"mcpServers":{}}')
+                result=exchange(dict(jsonrpc='2.0',id=4,method='tools/call',
+                    params=dict(name='list_projects',arguments={})))
+                self.assertTrue(result.get('isError',False),result)
+                child.stdin.close();child.stdin=None
+                stdout,stderr=child.communicate(timeout=15)
+                self.assertEqual((child.returncode,stdout,stderr),(0,'',''))
+            finally:
+                if child.poll() is None:child.kill()
+                child.communicate()
 
     def isolated_env(self, home):
         traps = home/'forbidden-bin'

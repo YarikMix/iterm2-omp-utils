@@ -101,6 +101,8 @@ class AgentWorkflowTests(WorkflowFixture):
         self.assertEqual(path.read_bytes(),original)
 
     def test_mcp_reconcile_requires_actual_probe_and_keeps_denied_access_pending(self):
+        self.context.versions['python3']='3.12.0'
+        self.context.capabilities |= {'python:mcp'}
         result = self.setup_cli(['install','--features','mcp'])
         self.assertIn('mcp',result['report']['pending'])
         before = self.snapshot()

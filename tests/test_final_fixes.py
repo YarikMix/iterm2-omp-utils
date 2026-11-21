@@ -19,6 +19,8 @@ class FinalFixTests(LifecycleFixture):
         self.assertEqual(self.snapshot(), before)
 
     def test_doctor_reports_changed_pointer_setting_and_server_readonly(self):
+        self.context.versions['python3'] = '3.12.8'
+        self.context.capabilities |= {'python:mcp'}
         self.assertSuccess(self.install('status', 'shell', 'mcp'))
         (self.profile.agent_dir/'config.yml').write_text('terminal: {programStatus: false}\n')
         current = self.context.paths.data/'current'

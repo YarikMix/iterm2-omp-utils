@@ -23,6 +23,8 @@ class SelectionTests(NativeFixture):
         self.assertTrue(any(f.feature=='shell' and f.state=='ready' for f in findings))
 
     def test_mcp_is_native_profile_scoped_and_foreign_neighbours_survive(self):
+        self.context.versions['python3'] = '3.12.8'
+        self.context.capabilities |= {'python:mcp'}
         from iterm2_utils import lifecycle
         import json
         path = self.profile.agent_dir/'mcp.json'
@@ -31,8 +33,12 @@ class SelectionTests(NativeFixture):
         self.assertSuccess(result)
         self.assertEqual(json.loads(path.read_text())['foreign'],7)
         self.assertEqual(json.loads(path.read_text())['mcpServers']['foreign'],{'command':'keep'})
-        self.assertEqual([r['locator']['pointer'] for r in result.receipt.resources],
-                         [['mcpServers','iterm2-observe']])
+        pointers = [r['locator']['pointer'] for r in result.receipt.resources if r['kind'] == 'json']
+        self.assertEqual(pointers, [['mcpServers','iterm2-observe']])
+        files = [r for r in result.receipt.resources if r['kind'] == 'file']
+        self.assertTrue(any(r['target'].endswith('/runtime/iterm2_mcp_entry.py') for r in files))
+        self.assertTrue(any(r['target'].endswith('/extensions/iterm2-utils-projects.ts') for r in files))
+        self.assertTrue(all(r['owners'] == ['mcp'] for r in result.receipt.resources))
 
     def test_shell_has_no_omp_bun_or_python_prerequisite(self):
         self.context.executables = {k:v for k,v in self.context.executables.items() if k in {'iterm2','zsh'}}
@@ -71,6 +77,8 @@ class SelectionTests(NativeFixture):
         self.assertFalse([f for f in changes.findings if f.state=='conflict'])
 
     def test_foreign_mcp_collision_blocks_only_mcp(self):
+        self.context.versions['python3'] = '3.12.8'
+        self.context.capabilities |= {'python:mcp'}
         from iterm2_utils import lifecycle
         path = self.profile.agent_dir/'mcp.json'
         path.write_text('{"mcpServers":{"iterm2-observe":{"command":"foreign"}}}')
@@ -82,14 +90,24 @@ class SelectionTests(NativeFixture):
 
     def test_identical_foreign_mcp_entry_is_not_adopted(self):
         import json
-        from iterm2_utils import lifecycle
-        from iterm2_utils.config.mcp import definition
+        from iterm2_utils import lifecycle, engine
+        from iterm2_utils.features import mcp
+        from unittest.mock import patch
+        self.context.versions['python3'] = '3.12.8'
+        self.context.capabilities |= {'python:mcp'}
         path = self.profile.agent_dir/'mcp.json'
-        path.write_text(json.dumps({'mcpServers':{'iterm2-observe':definition()},'foreign':7}))
+        changes = mcp.build(self.context, self.selection('mcp'))
+        registration = next(edit for edit in changes.edits if edit.path == path)
+        value = json.loads(registration.after)['mcpServers']['iterm2-observe']
+        path.write_text(json.dumps({'mcpServers':{'iterm2-observe':value},'foreign':7}))
         before = path.read_bytes()
-        result = lifecycle.install(self.context,self.selection('mcp'),self.runner)
-        self.assertSuccess(result)
+        with patch.object(engine, '_set', side_effect=AssertionError('Foreign entry must not write')) as write:
+            result = lifecycle.install(self.context,self.selection('mcp'),self.runner)
+        self.assertTrue(any(f.feature == 'mcp' and f.state == 'conflict' for f in result.findings))
+        write.assert_not_called()
         self.assertEqual(result.receipt.resources,[])
+        self.assertFalse((self.context.paths.data/'receipt.json').exists())
+        self.assertFalse((self.context.paths.data/'mcp/releases').exists())
         self.assertEqual(path.read_bytes(),before)
 
 

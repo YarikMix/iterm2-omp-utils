@@ -2,6 +2,15 @@
   "version": 1,
   "sources": [
     {
+      "path": "vendor/mcp_server_iterm2/LICENSE",
+      "url": "https://raw.githubusercontent.com/r6e/mcp-server-iterm2/v0.1.1/LICENSE",
+      "ref": "v0.1.1",
+      "sha256": "d648e04d26479ddf46f4c790f94e1c41c51ad1ee08cd38fff8fd0ce7cce1307b",
+      "license": "MIT",
+      "attribution_file": "THIRD_PARTY_NOTICES.md",
+      "license_file": "vendor/mcp_server_iterm2/LICENSE"
+    },
+    {
       "path": "vendor/shell_integration/iterm2_shell_integration.zsh",
       "url": "https://raw.githubusercontent.com/gnachman/iTerm2/v3.7.6/Resources/shell_integration/iterm2_shell_integration.zsh",
       "ref": "v3.7.6",

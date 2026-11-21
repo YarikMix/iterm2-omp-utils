@@ -282,7 +282,7 @@ documentation commit. No native migration CI, model-behavior or live run is clai
 | Codex | --no-daemon and strict explicit UUID; 0.163.0 hook enum has exactly 12 events and no StopFailure/Notification/PostToolUseFailure | Fake CLI/hooks/payloads; installed live agent and automatic API-error source unverified/unsupported respectively |
 | Claude Code | Native cc-status integration checkpoint; Alt+Enter sourced for 2.1.308 | Fake CLI/hooks; native integration and live agent unverified |
 | Python | Installer and selected hook/restore runtime 3.11+; MCP server requires 3.12+ | Native migration local fixtures: 3.13.7. Historical beta macOS fixtures passed on 3.11 and 3.x (resolved to 3.14.8); no new CI run |
-| MCP | mcp-server-iterm2==0.1.1, mcp<2, invoked through uvx | Fixture initialize/list_sessions/read-only allowlist; live server/TCC unverified |
+| MCP | Owned isolated stdio payload; selected Python >=3.12, mcp>=1.12,<2 and official iterm2; no auto-install | Fixture ownership/revocation and real optional-SDK stdio/package checks; live API/TCC/UI acceptance separate and unverified |
 | Notifications | terminal-notifier, it2, osascript; exact tab UUID targeting; explicit foreign-handler coexistence | Fixture delivery/focus only; macOS banners/click behavior unverified |
 | Restore | Bundled Codex restore port, fzf dependency | Fixture lifecycle/transcript selection only; real dialogs unverified |
 

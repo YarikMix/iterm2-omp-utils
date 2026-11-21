@@ -6,7 +6,7 @@
 | `status` | omp native `terminal.programStatus: true`, OSC 7501, no second writer | omp, Bun for native YAML; receiver evidence, live acceptance |
 | `notifications` | Native completion-on/error-off; errors only by explicit opt-in | omp, Bun for native YAML; OSC 9 receiver evidence |
 | `restore` | Native picker / exact-file resume, never latest/fork fallback | omp with `--resume`; identity/history acceptance separately |
-| `mcp` | One owned `mcpServers.iterm2-observe` in the selected omp `mcp.json` | uvx; server Python >=3.12; authorized iTerm2 API |
+| `mcp` | One owned `mcpServers.iterm2-observe` plus native TUI projects adapter in the selected omp profile | Existing selected Python >=3.12 with mcp>=1.12,<2 and iterm2; authorized API |
 | `shell` | Official zsh command marks/navigation, no agent wrapper | zsh and iTerm2 only |
 | `shortcuts` | Selected RU paste and Alt+Enter newline; native resume binding | Parent profile; Bun for selected native binding edits (not Ctrl+Q preservation) |
 | `project-launcher` | Project buttons create shell tabs, never implicitly start omp | Private JSON, supported native schema, Python >=3.11 with SDK/API |
@@ -41,9 +41,17 @@ Selected newline/paste normalizations preserve inherited native alternatives and
 add only the required Ctrl+J/Ctrl+V action binding. Cross-action collisions block
 the shortcut instead of delivering a different native action.
 
-MCP pins `uvx --with 'mcp<2' mcp-server-iterm2==0.1.1`. uvx may fetch its separate
-Python >=3.12 runtime. Preserve other servers/root fields and foreign identical
-entries without adoption; mismatched collisions block that feature only.
+MCP uses the selected absolute Python with `-I` and immutable owned entry, never
+uvx or package downloads. CLI without MCP remains stdlib Python 3.11+. Ordinary
+doctor/plan only probe local capability. `doctor --live` explicitly checks
+read-only catalogue/observe readiness, not UI/editor/prompt acceptance.
+Preserve foreign/root fields; identical foreign entries are not authority.
+To replace an old owned uvx definition: mcp-only uninstall preview, explicit
+authorized uninstall, choose ready dependencies, then new plan/dry-run/install.
+Update never auto-migrates; disabled registrations remain opt-outs. Rollback
+removes only new registration/adapter and keeps immutable releases, panel and
+unrelated features. Previously accepted work is not cancelled, and old running
+third-party processes require separately authorized operator cleanup.
 
 Native status/notification/keyboard/restore checkpoints remain pending after
 storage writes. API connectivity is not effective omp config, native OSC

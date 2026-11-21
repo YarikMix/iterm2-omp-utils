@@ -143,7 +143,8 @@ def _compile(edit):
     old, new = edit.before, edit.after
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else edit.mode
     locator = {'mode':mode}
-    if edit.owner=='shared:runtime' or edit.path.name in {'iterm2-utils.json','iterm2-utils-project-launcher.json'}:
+    if (edit.owner=='shared:runtime' or edit.owner=='mcp' and edit.path.name != 'mcp.json' or
+            edit.path.name in {'iterm2-utils.json','iterm2-utils-project-launcher.json'}):
         return [_resource('file',path,locator,_encode(old),_encode(new),edit.owner)]
     if edit.path.suffix in {'.json','.toml'} and new is not None:
         kind = edit.path.suffix[1:]
@@ -429,6 +430,7 @@ def _transaction(changes,result,context,runner, *, intent_receipt=None, restorin
     intent = copy.deepcopy(intent_receipt) if intent_receipt is not None else _empty(result.selection)
     intent.resources = []
     findings = []
+    writes_started = False
     try:
         changes = sorted(changes,key=lambda r: _deletes_projects(r,context))
         for r in changes:
@@ -440,6 +442,7 @@ def _transaction(changes,result,context,runner, *, intent_receipt=None, restorin
             # Recheck after durable intent/backup, immediately before mutation.
             if not _same(_read(r,runner,context),r['before']):
                 raise ValueError('Concurrent change')
+            writes_started = True
             _set(r,r['installed'],runner,context,expected=r['before'],restoring=_identity(r) in restoring)
             if not _same(_read(r,runner,context),r['installed']):
                 raise ValueError('Write verification failed')
@@ -463,12 +466,14 @@ def _transaction(changes,result,context,runner, *, intent_receipt=None, restorin
             state.save_recovery(journal/'intent.json',intent)
         else:
             shutil.rmtree(journal)
+            if writes_started:
+                findings.append(_finding('transaction_rolled_back','Attempted writes were inversely verified.'))
         return False,findings
 
 
 
 
-def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozenset(), expected_receipt=...) -> Outcome:
+def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozenset(), expected_receipt=..., prewrite_check=None) -> Outcome:
     if isinstance(plan.selection, legacy_state.LegacySelection):
         historical = legacy_state.LegacyReceipt('1',plan.selection,[],[])
         return Outcome(historical,[_finding('migration_required','Historical selections cannot install current resources.')])
@@ -493,6 +498,8 @@ def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozens
         if not remove_owners and not plan.changes.edits and not plan.changes.ui and not any(f.state == 'ready' for f in findings):
             return Outcome(empty,findings+[_finding('no_implemented_features','No selected feature has an implemented installer.','selection','unavailable')])
         with _lock(context):
+            if prewrite_check is not None:
+                prewrite_check()
             recovery = _recover(context,runner)
             if recovery:
                 return Outcome(empty,findings+recovery)
@@ -510,7 +517,9 @@ def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozens
                        for finding in legacy_blockers(previous, feature, context)]
             if blocked:
                 return Outcome(previous, findings+blocked)
-            resources = copy.deepcopy(previous.resources)
+            from .features.mcp import superseded_payload_resources
+            retired = superseded_payload_resources(previous, compiled, context)
+            resources = [copy.deepcopy(r) for r in previous.resources if _identity(r) not in retired]
             # A regenerated builder may describe an implemented no-op. Reuse only
             # addresses already owned by this exact feature/shared marker, never
             # infer ownership from other unchanged values in the same file.
@@ -576,8 +585,10 @@ def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozens
                         retained.append(resource)
                         findings.append(_finding('uninstall_changed','User-changed value was preserved; ownership remains unresolved.',resource['owners'][0]))
                     else:
-                        changes.append(dict(resource,before=resource['installed'],installed=resource['before']))
-                        restoring.add(_identity(resource))
+                        from .features.mcp import retain_release_resource
+                        if not retain_release_resource(resource, context):
+                            changes.append(dict(resource,before=resource['installed'],installed=resource['before']))
+                            restoring.add(_identity(resource))
                 resources = retained
             selection = plan.selection
             if remove_owners:
@@ -629,7 +640,9 @@ def revert(receipt: Receipt, context: Context, runner: Runner, owners: frozenset
                     remaining.append(r)
                     findings.append(_finding('uninstall_changed','User-changed value was preserved; ownership remains unresolved.',r['owners'][0]))
                     continue
-                changes.append(dict(r,before=r['installed'],installed=r['before']))
+                from .features.mcp import retain_release_resource
+                if not retain_release_resource(r, context):
+                    changes.append(dict(r,before=r['installed'],installed=r['before']))
             result = Receipt(state.VERSION,receipt.selection,remaining,receipt.pending_ui,copy.deepcopy(receipt.legacy_cleanup))
             ok,failed = _transaction(changes,result,context,runner,restoring={_identity(r) for r in changes})
             return Outcome(result if ok else receipt,findings+failed)

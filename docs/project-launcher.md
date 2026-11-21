@@ -8,6 +8,16 @@ Status Bar iTerm2. Кнопка открывает **новую активную
 [iterm2-projects](https://github.com/YarikMix/iterm2-omp-utils/tree/main/skills/iterm2-projects).
 [Статический вымышленный пример](examples/project-launcher.html).
 
+Если owned MCP явно доступен, `list_projects` возвращает только ordered
+`id/name/path`; эти пути видны model provider. Для интерактивной правки используйте
+только native omp TUI tool `iterm2_project_edit`: свежий local preview и confirm
+обязательны. Preview не публикуется; remote/headless UI блокирует правку.
+Approval не token и не разрешение на другую операцию: stale receipt/config/panel
+или отзыв MCP под lock сохраняют данные. Move меняет путь кнопки, не файлы.
+Если native tool недоступен, не обходите его подтверждение прямыми записями.
+Отдельная явно авторизованная CLI/setup процедура остаётся доступна; rollback
+только `mcp` не снимает панель и не закрывает вкладки.
+
 Нужны macOS, zsh, iTerm2 с поддерживаемой native схемой Status Bar и выбранный существующий Python **3.11+** с
 официальным модулем `iterm2`. Выберите его через `ITERM2_UTILS_PYTHON`, если
 обычный Python не подходит; SDK должен импортироваться именно этим Python.

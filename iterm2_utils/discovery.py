@@ -59,7 +59,7 @@ def _iterm(paths):
 
 
 def discover(paths: Paths, runner: Runner, *, features: frozenset[str] = frozenset(),
-             omp_profile: OmpProfile | None = None) -> Context:
+             omp_profile: OmpProfile | None = None, python: Path | None = None) -> Context:
     """Probe selected dependencies, preserving supplied profile authority.
 
     Standalone discovery resolves ambient storage once when no selection was
@@ -73,12 +73,10 @@ def discover(paths: Paths, runner: Runner, *, features: frozenset[str] = frozens
         names.add('omp')
     if features & {'status','notifications','shortcuts'}:
         names.add('bun')
-    if features & {'clipboard','shortcuts','appearance','restore','project-launcher'}:
+    if features & {'clipboard','shortcuts','appearance','restore','project-launcher','mcp'}:
         names.add('python3')
-    if 'mcp' in features:
-        names.add('uvx')
     for name in sorted(names):
-        found = (os.environ.get('ITERM2_UTILS_PYTHON') or shutil.which(name)) if name=='python3' else shutil.which(name)
+        found = (python if python is not None else os.environ.get('ITERM2_UTILS_PYTHON') or shutil.which(name)) if name=='python3' else shutil.which(name)
         if not found or not Path(found).is_absolute():
             continue
         binary = Path(found).absolute()
@@ -93,6 +91,14 @@ def discover(paths: Paths, runner: Runner, *, features: frozenset[str] = frozens
         if name=='python3':
             if _probe(runner,binary,['-c','import iterm2; print("iterm2-sdk-ready")']).strip()=='iterm2-sdk-ready':
                 capabilities.add('python:iterm2')
+            if 'mcp' in features:
+                script = ('import sys,importlib.metadata as m; import iterm2; '
+                          'from mcp.server.fastmcp import FastMCP; '
+                          'v=tuple(map(int,m.version("mcp").split(".")[:2])); '
+                          'assert sys.version_info >= (3,12) and (1,12) <= v < (2,0); '
+                          'print("mcp-ready")')
+                if _probe(runner,binary,['-I','-c',script]).strip() == 'mcp-ready':
+                    capabilities.add('python:mcp')
     app,info = _iterm(paths)
     if app:
         executables['iterm2'] = app

@@ -21,6 +21,8 @@ class PendingUiTests(NativeFixture):
         self.assertEqual(result.receipt.pending_ui,first.receipt.pending_ui)
 
     def test_failed_mcp_connection_is_not_retried_or_marked_ready(self):
+        self.context.versions['python3'] = '3.12.8'
+        self.context.capabilities |= {'python:mcp'}
         installed = lifecycle.install(self.context,self.selection('mcp'),self.runner)
         self.assertSuccess(installed)
         with patch.object(self.runner,'mcp_probe',side_effect=TimeoutError) as probe:

@@ -73,8 +73,38 @@ Appearance впервые требует `--appearance-config ABS_JSON`, launche
 Недостающая capability блокирует свою функцию, не обычный shell. Native
 OSC/banner/keyboard/effective settings нельзя считать проверенными по версии,
 успешной записи или API connectivity. Нет fallback на hooks/daemon. MCP optional:
-`uvx --with 'mcp<2' mcp-server-iterm2==0.1.1`, серверный Python >=3.12 отдельно.
+выбранный существующий `ITERM2_UTILS_PYTHON` **3.12+** должен уже содержать
+`mcp>=1.12,<2` и официальный `iterm2`. CLI 3.11+ без MCP не требует этих пакетов.
+Plan/doctor только проверяют imports/version; ничего не скачивают и не выдают доступ.
 Другие MCP servers и настройки/model/credentials/approval mode сохраняются.
+
+### Owned MCP и явная замена
+
+Opt-in `--features mcp` устанавливает единственный `iterm2-observe`:
+абсолютный Python, `-I`, versioned entry в `data/mcp/releases/<content-hash>`,
+`timeout: 300000`, `enabled: true`, плюс профильный local projects extension.
+Shell feature не требуется; installed runtime не зависит от checkout.
+Сохраняются 13 observe/annotation tools; добавлены `list_projects`, `open_shell`,
+`launch_omp_task`. Интерактивная правка — только `iterm2_project_edit` в native
+omp TUI с новым локальным подтверждением; не MCP commit/approval token.
+Вывод терминала и project `id/name/path` видны выбранному model provider.
+Не читайте и не публикуйте секреты; локальный edit preview не уходит в MCP.
+
+Старый owned `uvx` **не переключается через update**. Сначала preview:
+`python3 -m iterm2_utils uninstall --features mcp --dry-run --json`;
+после явного разрешения снимите только `mcp`, выберите готовый Python и
+выполните plan → install dry-run → install для `mcp` в том же omp profile.
+Foreign/изменённую/disabled регистрацию не присваивайте и не включайте.
+`enabled:false` — операторский opt-out, не вход для автоматической установки.
+Rollback снимает новую регистрацию и extension, сохраняет панель/другие features,
+не возвращает старый executable. Immutable releases остаются для in-flight workers.
+Перед каждым новым tool call проверяется актуальная регистрация/receipt/profile;
+отзыв закрывает уже открытый observe socket, edit перепроверяется под lock.
+Уже принятые действия не отменяются. Старые **запущенные** сторонние MCP не умеют
+этот отзыв: их остановка — отдельное разрешённое операторское действие.
+Не останавливайте их и не объявляйте переключёнными автоматически.
+`doctor --live` проверяет read-only catalogue/observe readiness, не UI/editor
+acceptance, prompt после `/exit` или клики панели.
 Неизвестный OSC receiver остаётся `pending_ui`: выбранные native настройки можно
 подготовить, но это не подтверждает доставку. `it2 --help` не является контрактом
 рекламы OSC и не запускается для такой проверки.
