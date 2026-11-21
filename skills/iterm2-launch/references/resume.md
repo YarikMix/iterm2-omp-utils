@@ -23,6 +23,12 @@ SDK addresses/user variables and exact kernel PID birth. Matching live dialog
 returns `already_open`/0 and current window/tab/terminal IDs, zero creates.
 Incomplete live identity blocks duplicates. Stale/reused PID records prove
 nothing. Only explicit human duplicate authorization permits `--allow-duplicate`.
+An independently verified idle shell left after omp exits is not a live dialog.
+A stale variable is excluded only with strict same-pane schema, stable shell
+and TTY evidence, absence from both censuses, nonmatching recorded birth and no
+live binding conflict. Malformed, changing or busy evidence still blocks.
+Do not clear variables or remove records. A later exact resume may create once;
+the original idle prompt is not repurposed. Existing tabs are not retrofitted.
 
 After command proof, confirm actual main-TUI identity and history. Native
 continuations can change files/IDs within the same dialog: validate the chain
@@ -31,6 +37,9 @@ profile/cwd and actual file. A fork or arbitrary different ID is not continuatio
 The registry updates to the actual file, not the requested filename forever.
 Without this evidence: «команда resume запущена, восстановление истории не
 подтверждено». Source history alone proves selection, not restoration.
+An exit after completed command proof preserves `launched` but cannot supply
+missing identity/history. Foreground child image/birth/TTY proof is required
+even for full-path argv; SDK root-shell or wrapper text cannot substitute.
 No typing, `/status`, Enter, exit, automatic retry or fresh fallback.
 
 ## Structural JSON fixtures

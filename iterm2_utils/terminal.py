@@ -8,7 +8,7 @@ import re
 import subprocess
 import sys
 import time
-from runtime.terminal_identity import process_start, foreground_process, process_image, process_executable_path
+from runtime.terminal_identity import process_start, foreground_process, process_image, process_executable_path, valid_identity_record
 from .omp_sessions import read_bindings
 
 
@@ -152,7 +152,22 @@ class Terminal:
         try:
             sample = self.sdk_observe(pane['terminal_id'])
             if (not isinstance(sample,dict) or any(sample.get(k) != v for k,v in pane.items())
-                    or 'identity' not in sample or sample['identity'] is not None):
+                    or 'identity' not in sample):
+                return False
+            stale=None
+            if sample['identity'] is not None:
+                if not isinstance(sample['identity'],str):
+                    return False
+                stale=json.loads(sample['identity'])
+                if not valid_identity_record(stale) or stale['terminal_id']!=pane['terminal_id']:
+                    return False
+                stale_birth=self.process_start(stale['pid'])
+            def stale_dead():
+                return (self.process_start(stale['pid'])==stale_birth and stale_birth!=stale['process_start'] and
+                        not any(binding.terminal_id==pane['terminal_id'] and
+                                self.process_start(binding.pid)==binding.process_start
+                                for binding in self.bindings()))
+            if stale is not None and not stale_dead():
                 return False
             root,pid,tty = sample.get('pid'),sample.get('job_pid'),sample.get('tty')
             if (type(root) is not int or not 0 < root <= 0x7fffffff or
@@ -192,6 +207,8 @@ class Terminal:
                 if previous_rows is not None and rows != previous_rows:
                     return False
                 previous_rows = rows
+                if stale is not None and (stale['pid'] in rows or not stale_dead()):
+                    return False
                 if pid not in rows or root not in rows or root != pid and rows[pid][0] != root:
                     return False
                 holders = text(['/usr/sbin/lsof','-nP','-t','+w','--',tty]).splitlines()
@@ -224,6 +241,8 @@ class Terminal:
                     return False
                 if root != pid and self.process_executable_path(root) != '/usr/bin/login':
                     return False
+                if stale is not None and not stale_dead():
+                    return False
             return self.deadline is None or time.monotonic() < self.deadline
         except (OSError,ValueError,KeyError,TypeError,AttributeError,TimeoutError,subprocess.SubprocessError):
             return False
@@ -240,9 +259,9 @@ async def _observe(terminal):
             return None
         window,tab,session = matches[0]
         identity = await session.async_get_variable('user.iterm2_utils_omp')
-        pid = await session.async_get_variable('session.pid') if identity is None else None
-        job_pid = await session.async_get_variable('session.jobPid') if identity is None else None
-        tty = await session.async_get_variable('tty') if identity is None else None
+        pid = await session.async_get_variable('session.pid')
+        job_pid = await session.async_get_variable('session.jobPid')
+        tty = await session.async_get_variable('tty')
         return dict(terminal_id=session.session_id, tab_id=tab.tab_id, window_id=window.window_id,
                     identity=identity, pid=pid, job_pid=job_pid, tty=tty)
     finally:

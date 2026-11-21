@@ -119,9 +119,13 @@ def build_command(request, inspection, argv):
                            str(request.omp_profile.agent_dir),str(identity.interpreter or '')])+' || exit 1; '
         # -ilc does not read a prompt command; arm the installed observer explicitly.
         guard+='if (( $+functions[_iterm2_utils_appearance_arm] )); then _iterm2_utils_appearance_arm; fi; '
-        invocation=[str(inspection.zsh),'-ilc',guard+'exec '+shlex.join([
+        child=shlex.join([
             '/usr/bin/env','OMP_PROFILE='+ (request.omp_profile.name or 'default'),
-            'PI_CODING_AGENT_DIR='+str(request.omp_profile.agent_dir),*argv])]
+            'PI_CODING_AGENT_DIR='+str(request.omp_profile.agent_dir),*argv])
+        returned=('if (( $+functions[_iterm2_utils_appearance_precmd] )); then '
+                  '_iterm2_utils_appearance_precmd synchronous || :; fi; ')
+        invocation=[str(inspection.zsh),'-ilc',guard+'if '+child+'; then :; fi; '+returned+'cd -- '+
+                    shlex.quote(str(request.cwd))+' 2>/dev/null || :; exec '+shlex.join([str(inspection.zsh),'-i'])]
     return shlex.join(['/bin/sh','-c','cd -- '+shlex.quote(str(request.cwd))+' && exec '+shlex.join(invocation)])
 
 
@@ -178,8 +182,8 @@ def _command_matches(line,allowed):
 
 
 def _abbreviated_command_matches(terminal, sid, line, allowed):
-    candidates=[argv for argv in allowed
-                if _command_matches(line,[[Path(argv[0]).name,*argv[1:]]])]
+    candidates=[argv for argv in allowed if _command_matches(line,[argv]) or
+                _command_matches(line,[[Path(argv[0]).name,*argv[1:]]])]
     if not candidates:return False
     pid,tty=terminal.job_pid(sid),terminal.variable(sid,'tty')
     birth=terminal.process_start(pid)
@@ -269,8 +273,14 @@ def launch(request: LaunchRequest, paths, runner):
                 identity=inspection.identity
                 allowed=[[*prefix,*argv[1:]] for prefix in identity.prefixes]
                 job_ok=job in {Path(prefix[0]).name for prefix in identity.prefixes}
-            command_ok=job_ok and (_command_matches(line,allowed) or
-                exact and _abbreviated_command_matches(terminal,creation.session_id,line,allowed))
+            if request.mode=='shell':
+                command_ok=job_ok and (_command_matches(line,allowed) or
+                    exact and _abbreviated_command_matches(terminal,creation.session_id,line,allowed))
+            else:
+                command_ok=exact and job_ok and _abbreviated_command_matches(terminal,creation.session_id,line,allowed)
+                if command_ok:
+                    command_ok=(terminal.panes()==panes and
+                                terminal.variable(creation.session_id,'session.jobName')==job)
             if exact and command_ok and time.monotonic()<creation.deadline:
                 output.update(status='launched',command='verified')
                 if request.mode=='shell':return 0,output

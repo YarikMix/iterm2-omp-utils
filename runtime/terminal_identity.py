@@ -120,14 +120,33 @@ async def observe_own_terminal(pid: int, tty: str, environment: dict[str, str], 
         await connection.websocket.close()
 
 
+def valid_identity_record(raw: object) -> bool:
+    """Validate the same strict schema for private records and SDK stale values."""
+    from pathlib import Path
+    fields = {'schema', 'terminal_id', 'tab_id', 'window_id', 'session_file',
+              'session_id', 'cwd', 'profile', 'pid', 'process_start', 'generation'}
+    try:
+        if type(raw) is not dict or set(raw) != fields or type(raw['schema']) is not int or raw['schema'] != 1:
+            return False
+        profile = raw['profile']
+        return (type(profile) is dict and set(profile) == {'name', 'agent_dir'}
+                and Path(profile['agent_dir']).is_absolute()
+                and (profile['name'] is None or isinstance(profile['name'],str))
+                and terminal_id(raw['terminal_id']) == raw['terminal_id']
+                and type(raw['pid']) is int and raw['pid'] > 0
+                and all(isinstance(raw[key],str) and raw[key] for key in ('session_id','process_start','generation','cwd'))
+                and all(raw[key] is None or isinstance(raw[key],str) for key in ('tab_id','window_id','session_file'))
+                and Path(raw['cwd']).is_absolute()
+                and (raw['session_file'] is None or Path(raw['session_file']).is_absolute()))
+    except (ValueError,KeyError,TypeError):
+        return False
+
+
 def read_identity_records(registry):
     """Shared private schema reader, usable from an installed standalone runtime."""
     import json
     import os
-    from pathlib import Path
     import stat
-    fields = {'schema', 'terminal_id', 'tab_id', 'window_id', 'session_file',
-              'session_id', 'cwd', 'profile', 'pid', 'process_start', 'generation'}
     result = []
     try:
         info = registry.lstat()
@@ -142,20 +161,7 @@ def read_identity_records(registry):
                             or info.st_size > 65536 or info.st_uid != os.getuid()):
                         continue
                     raw = json.loads(source.read(65537))
-                if type(raw) is not dict or set(raw) != fields or type(raw['schema']) is not int or raw['schema'] != 1:
-                    continue
-                profile = raw['profile']
-                if (type(profile) is not dict or set(profile) != {'name', 'agent_dir'}
-                        or not Path(profile['agent_dir']).is_absolute()
-                        or profile['name'] is not None and not isinstance(profile['name'], str)):
-                    continue
-                if terminal_id(raw['terminal_id']) != raw['terminal_id'] or type(raw['pid']) is not int or raw['pid'] <= 0:
-                    continue
-                if any(not isinstance(raw[key], str) or not raw[key] for key in ('session_id', 'process_start', 'generation', 'cwd')):
-                    continue
-                if any(raw[key] is not None and not isinstance(raw[key], str) for key in ('tab_id', 'window_id', 'session_file')):
-                    continue
-                if not Path(raw['cwd']).is_absolute() or raw['session_file'] is not None and not Path(raw['session_file']).is_absolute():
+                if not valid_identity_record(raw):
                     continue
                 result.append(raw)
             except (ValueError, OSError, KeyError, TypeError):

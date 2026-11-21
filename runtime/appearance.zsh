@@ -54,8 +54,8 @@ function _iterm2_utils_appearance {
     typeset -g +x _iterm2_utils_appearance_owner=$sysparams[pid]
     typeset -g +x _iterm2_utils_appearance_pid=$child
     typeset -g +x _iterm2_utils_appearance_fd=$clean_fd
-    if [[ $phase == shell ]]; then
-      # A fresh child shell must not race this shell's pending assignment/reset.
+    if [[ $phase == shell || $asynchronous == synchronous ]]; then
+      # A shell replacement must finish its return writer before losing this fd.
       sysread -i "$fd" discard 2>/dev/null && result=0 || result=$?
       (( result == 5 )) || return 0
     fi
@@ -109,7 +109,7 @@ function _iterm2_utils_appearance_precmd {
   emulate -L zsh
   if [[ ${_iterm2_utils_appearance_hook_owner-} == $sysparams[pid] &&
         ${_iterm2_utils_appearance_launch_id-} == "$sysparams[pid]-"* ]]; then
-    _iterm2_utils_appearance return "$(builtin pwd -P)"
+    _iterm2_utils_appearance return "$(builtin pwd -P)" "${1-}"
     unset _iterm2_utils_appearance_launch_id
   fi
   return $result

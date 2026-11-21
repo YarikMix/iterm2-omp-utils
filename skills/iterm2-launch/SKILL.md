@@ -118,6 +118,13 @@ persistent settings/history unchanged. Literal supported wrapper options survive
 opaque wrappers block. Preserve model, endpoint, credentials and approvals.
 Version strings are informational, required capabilities are not. Do not add
 continue/restore/session-dir/approval flags or weaken protections.
+New/handoff/resume leave the same PTY at an interactive zsh prompt in the launch
+cwd after omp exits, including nonzero exit. Per-call overrides stay on omp;
+login-only scripts are not rerun. Existing tabs and profile settings are not
+retrofitted. Explicit shell exit/close-tab still closes normally.
+Command proof requires the foreground child's exact supported argv and repeated
+independent image/birth/TTY evidence, not wrapper text or equality to root PID.
+If live SDK child evidence is unavailable, report uncertainty, never weaken proof.
 
 ## Report actual evidence
 
@@ -136,6 +143,9 @@ settings, transcripts or screens. Creation/command proof share 30 seconds; ack
 has a separate 120-second bound. Never retry, resend, close/restart a user tab,
 kill a process or press Enter after uncertainty. Missing history never falls
 back to fresh. Duplicates require explicit human authorization, not convenience.
+`launched` records completed command observation, not perpetual liveness.
+A later exit does not revoke it or verify missing identity/history. Automated
+PTY checks alone are not live iTerm2 acceptance.
 
 Appearance is separate: exact shell TTY and main-TUI identity/foreground proof
 are required; inherited IDs or read-only access do not authorize recoloring.

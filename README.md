@@ -118,6 +118,12 @@ Exact resume требует header ID/file/cwd и provenance выбранног�
 missing/changed history не превращается в fresh. [Resume/continuation](skills/iterm2-launch/references/resume.md).
 
 SDK создаёт одну вкладку с полной командой при создании, без terminal typing.
+Новые new/handoff/resume запускают omp foreground-процессом: после `/exit` или
+ошибки остаётся интерактивная zsh в той же вкладке и исходном cwd, без overrides
+конкретного запуска. Настройки профиля и уже открытые вкладки не меняются.
+`launched` подтверждает наблюдавшийся запуск, не вечную жизнь процесса; identity
+и history после его выхода могут остаться unverified. Live-проверка требует
+отдельного разрешения; PTY-тест не подтверждает поведение настоящего iTerm2.
 Create+command proof до 30 секунд; handoff ack отдельно до 120. `blocked`/2 — до
 создания; `created_unverified` или `unknown`/3 сохраняют известные IDs; `launched`/0
 доказывает точную команду/вкладку/профиль, не выполнение задачи. `already_open`/0

@@ -23,6 +23,17 @@ a placeholder profile. Explicit/recorded selections passed to feature discovery
 remain authoritative through its `omp_profile` keyword; only standalone discovery
 without a supplied selection resolves ambient profile variables.
 
+New/handoff/resume keep the original PTY shell-owned: guarded login zsh runs
+one foreground omp child, tolerating its nonzero exit even with ERR_EXIT, then
+execs interactive non-login zsh in the launch cwd. If that path was renamed or
+removed, a failed cwd re-entry retains the bootstrap's working directory rather
+than preventing the prompt. Login-only startup is not repeated; per-call agent
+overrides stay on the child. The optional appearance return hook cancels/reaps
+the launch observer and completes its bounded return writer before shell
+replacement; missing or failing return hooks do not prevent the prompt.
+No persistent settings or already-running tabs change; explicit shell exit and
+close-tab remain ordinary.
+
 omp preflight inspects (never executes) the login-shell function/alias. A single
 `command omp [literal options] "$@"` passthrough is accepted; literal profile,
 model, provider, thinking and config options and zero to two literal `--no-daemon`
@@ -42,14 +53,15 @@ before exec. CLI PATH cannot substitute another Bun. Native binary headers are
 inspected as bounded bytes, not decoded as UTF-8. Exact literal-space-joined or
 safely tokenized shell-quoted complete argv observations are accepted; extra
 arguments, wrong paths and malformed quoted alternatives are refused, never evaluated.
-When iTerm2 abbreviates only argv[0] to its basename, every remaining argument
-must still match an approved argv exactly (including the absolute script for
-an interpreter prefix). This alternative also requires the created session's
+Both complete full-path and abbreviated argv require the foreground job's
 positive integer `session.jobPid`, exact `tty`, live kernel process birth,
-foreground ownership of that TTY and canonical executable image to agree.
-Repeated command/PID/TTY observations bracket repeated kernel samples; changed,
-missing or departed jobs remain unverified. No PATH lookup, name-only proof or
-process-group search substitutes for that evidence. Full-path proof is unchanged.
+foreground TTY ownership and canonical executable image. The job need not be
+the SDK root shell PID. Abbreviation changes only argv[0]; all other arguments
+must match, including the absolute script for an interpreter prefix.
+Repeated command/PID/TTY checks bracket kernel samples and recheck the pane;
+missing, changed or departed evidence cannot verify a wrapper or launch.
+Shell-mode proof is unchanged. Live SDK evidence remains separately unconfirmed;
+if it exposes wrapper text rather than child evidence, do not relax proof.
 Public selected source was inspected at the installed `@oh-my-pi/pi-coding-agent/dist/cli.js`: Bun
 shebang, literal profile passthrough generator and repeated config parser. Version
 is informational, not pinned. Required CLI flags are checked per operation.
@@ -101,6 +113,11 @@ and scoped rechecks reject restart/reparent/exec changes. Protected login's unav
 birth is not required or invented; the job still requires birth-qualified kernel proof.
 The raw path helper grants no liveness authority and existing image callers retain
 their birth-qualified contract. Malformed, missing or encoded-null identity stays unknown.
+A non-null stale identity can exclude an idle shell only after the shared strict
+record validator accepts its same-terminal record, its PID is absent from both
+stable TTY censuses, its old birth no longer matches, and no plausible live
+same-pane binding conflicts. Changed samples block. Nothing clears SDK variables
+or deletes registry records; busy or malformed cases remain conservative.
 Two bounded process/TTY samples reject other stopped/traced or foreign-UID processes,
 other concrete TTY holders and unavailable/diagnostic output. Same-UID prompt workers
 without TTY access are allowed; scoped `/dev/tty` holders additionally require stable
@@ -124,6 +141,8 @@ No raw argv, prompt, terminal screen, settings or private subprocess exceptions
 are serialized. The returned session_id is the terminal ID, not omp dialog ID.
 Plain text output includes all four proof states and known addresses just as
 JSON does; command success retains its independent exit semantics.
+Completed command proof survives a later child exit; absent post-exit identity
+does not establish history or a dialog. `launched` is not perpetual liveness.
 Identity transport uses the contract in omp-identity.md, never a registry echo.
 
 External reads are at most 10 seconds. Standard resume duplicate preflight has a

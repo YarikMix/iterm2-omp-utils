@@ -76,6 +76,30 @@ class TerminalTests(unittest.TestCase):
         terminal.foreground_process=lambda *a:True
         return terminal,pane,state,calls
 
+    def test_idle_shell_excludes_only_proven_dead_stale_identity(self):
+        sid='AAAAAAAA-BBBB-CCCC-DDDD-EEEEEEEEEEEE'
+        for fault in ('none','reused','live','malformed','wrong-pane','changed','busy','missing','census','conflict'):
+            with self.subTest(fault=fault):
+                terminal,pane,state,calls=self.shell_fixture()
+                pane['terminal_id']=sid;state['sample']['terminal_id']=sid
+                record=dict(schema=1,terminal_id=sid,tab_id='T',window_id='W',
+                    session_file='/saved.jsonl',session_id='dialog',cwd='/project',
+                    profile=dict(name=None,agent_dir='/agent'),pid=999,process_start='old',generation='g')
+                if fault=='wrong-pane':record['terminal_id']='11111111-2222-3333-4444-555555555555'
+                state['sample']['identity']='{}' if fault=='malformed' else json.dumps(record)
+                terminal.bindings=lambda:[SimpleNamespace(terminal_id=sid,pid=888,process_start='birth')] if fault=='conflict' else []
+                terminal.process_start=lambda pid:('old' if fault=='live' else 'reused' if fault=='reused' else None) if pid==999 else 'birth'
+                if fault=='busy':state['image']='/bin/bun'
+                if fault=='missing':state['sample']['pid']=None
+                if fault=='census':state['ps']+=f'999 123 {os.getuid()} S\n'
+                if fault=='changed':
+                    original=terminal.process_image
+                    def image(pid):
+                        state['sample']['identity']=None
+                        return original(pid)
+                    terminal.process_image=image
+                self.assertEqual(terminal.ordinary_shell(pane,Path('/bin/zsh')),fault in {'none','reused'})
+
     def test_literal_null_is_benign_but_not_identity_proof(self):
         terminal=self.terminal()
         for identity in (None,'null','{bad',False,[],{}):
