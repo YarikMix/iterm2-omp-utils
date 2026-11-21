@@ -47,10 +47,13 @@ class LaunchTests(unittest.TestCase):
                 (root/'appearance.py').write_text(
                     'import os,sys,signal,time\nfrom pathlib import Path\n'
                     'root=Path(__file__).parent\nargs=sys.argv[1:]\nphase=args[args.index("--phase")+1]\n'
-                    '(root/(phase+".pid")).write_text(str(os.getpid()))\n'
                     'def finish(*unused):\n time.sleep(.08)\n (root/(phase+".ended")).touch()\n sys.exit(0)\n'
                     'signal.signal(signal.SIGTERM,finish)\n'
                     'if phase=="launch":\n'
+                    ' if "--ready-fd" not in args: sys.exit(0)\n'
+                    ' pending=root/"launch.pid.tmp"\n'
+                    ' pending.write_text(str(os.getpid()))\n'
+                    ' pending.replace(root/"launch.pid")\n'
                     ' os.write(int(args[args.index("--ready-fd")+1]),b"ready\\n")\n'
                     ' while True: signal.pause()\n'
                     'finish()\n')
@@ -109,8 +112,9 @@ class LaunchTests(unittest.TestCase):
                     break
                 else:self.fail('PTY child did not reap after SIGKILL')
                 os.close(fd)
-                # RED must not leak the deliberately indefinite boundary helper.
-                for helper in root.glob('*.pid'):
+                # Only the explicit launch observer may wait indefinitely.
+                helper=root/'launch.pid'
+                if helper.exists() and not (root/'launch.ended').exists():
                     try:os.kill(int(helper.read_text()),signal.SIGTERM)
                     except ProcessLookupError:pass
 
