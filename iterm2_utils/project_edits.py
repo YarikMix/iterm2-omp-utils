@@ -68,11 +68,16 @@ def _safe_bytes(path):
         return raw
 
 
-def _owned(paths, profile):
+def _owned_receipt(paths, profile):
     receipt_raw = _safe_bytes(paths.data/'receipt.json')
     receipt = state.load(paths.data/'receipt.json')
     if not isinstance(receipt, Receipt) or receipt.selection.omp_profile != profile:
         raise ValueError('Ownership profile mismatch')
+    return receipt_raw, receipt
+
+
+def _owned(paths, profile, *, receipt_state=None):
+    receipt_raw, receipt = _owned_receipt(paths, profile) if receipt_state is None else receipt_state
     if launcher.FEATURE not in receipt.selection.features:
         return None
     raw = {}
@@ -98,9 +103,10 @@ def list_owned_projects(paths: Paths, profile: OmpProfile) -> ProjectCatalogue:
     try:
         if not (paths.data/'receipt.json').exists():
             return ProjectCatalogue('not_configured')
-        owned = _owned(paths, profile)
+        receipt_state = _owned_receipt(paths, profile)
+        owned = _owned(paths, profile, receipt_state=receipt_state)
         if owned is None:
-            return ProjectCatalogue('not_configured')
+            return ProjectCatalogue('not_configured', parent_profile=receipt_state[1].selection.parent_profile)
         receipt, _, projects, _ = owned
         return ProjectCatalogue('ok', projects, receipt.selection.parent_profile)
     except (OSError, ValueError, TypeError, KeyError):
