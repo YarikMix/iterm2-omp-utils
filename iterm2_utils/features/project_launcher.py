@@ -4,7 +4,7 @@ import copy
 import json
 import unicodedata
 import uuid
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from .. import state
 from ..config import iterm
@@ -14,6 +14,14 @@ FEATURE = 'project-launcher'
 OWNER = 'shared:project-launcher'
 FILENAME = 'iterm2-utils-project-launcher.json'
 
+
+@dataclass(frozen=True)
+class _Candidate:
+    """Ephemeral candidate; missing paths are allowed only on exact owned rows."""
+    raw: bytes
+
+    def read_bytes(self):
+        return self.raw
 
 def _text(value):
     if (type(value) is not str or not value.strip() or len(value) > 256 or
@@ -83,7 +91,16 @@ def _load(context):
     source = context.project_launcher_config
     if source is None and not config_owned:
         raise ValueError('Explicit initial configuration required')
-    config = _config((source if source is not None else config_path).read_bytes())
+    raw = (source if source is not None else config_path).read_bytes()
+    config = _config(raw, historical=isinstance(source, _Candidate))
+    if isinstance(source, _Candidate):
+        if not config_owned:
+            raise ValueError('Candidate requires confirmed installed configuration')
+        previous = _config(config_path.read_bytes(), historical=True)['projects']
+        from pathlib import Path
+        for project in config['projects']:
+            if not Path(project['path']).is_dir() and project not in previous:
+                raise ValueError('New project directory unavailable')
     return config, receipt
 
 
