@@ -18,6 +18,9 @@ payload's receipt records in the replacement transaction, retaining immutable
 runtime bytes and original registration/adapter inverses. Doctor again reports
 readable registration drift as `registration_changed`.
 
+The native project editor registers its strict operation union with the schema
+builder exposed by omp 19.1.0, without changing validation or confirmation.
+
 Added explicit `close-tab --window ID --tab ID --session ID`: one native tab-only
 SDK close without force/retry, guarded by exact unique single-visible-session
 target inventory. `closed` requires native OK and fresh complete absence of both
