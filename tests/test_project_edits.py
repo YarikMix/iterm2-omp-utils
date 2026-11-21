@@ -23,6 +23,38 @@ class ProjectEditTests(LauncherFixture):
     def apply(self, preview, authorize=lambda: None):
         return edits.apply_project_edit(self.context, self.runner, preview, authorize=authorize)
 
+
+    def test_handoff_owned_catalogue_preserves_imported_guid_through_edit(self):
+        from iterm2_utils.features import project_launcher as launcher
+        self.handed_off()
+        self.assertEqual(edits.list_owned_projects(self.context.paths, self.profile).status, 'ok')
+        self.assertEqual(self.apply(self.preview('rename', project='project-a', name='Renamed')).status, 'applied')
+        moved = self.folder.with_name('moved'); self.folder.rename(moved)
+        self.assertEqual(self.apply(self.preview('move', project='project-a', path=str(moved))).status, 'applied')
+        folder = self.folder.with_name('third'); folder.mkdir()
+        preview = self.preview('add', name='Third', path=str(folder))
+        self.assertEqual(self.apply(preview).status, 'applied')
+        rows = json.loads(self.dynamic.read_bytes())['Profiles']
+        self.assertEqual([r['Guid'] for r in rows[:2]], ['manual-a', 'manual-b'])
+        self.assertEqual(rows[0]['Name'], 'Renamed')
+        self.assertEqual(rows[0]['Working Directory'], str(moved.resolve()))
+        self.assertEqual(rows[-1]['Guid'], launcher.guid(preview.after[-1].id))
+        actions = self.native['profiles'][0]['bar']['Status Bar Layout']['components'][1:]
+        self.assertEqual([c['configuration']['knobs']['action']['title'] for c in actions],
+                         ['Renamed', 'Проект B', 'Third'])
+        self.assertEqual(edits.list_owned_projects(self.context.paths, self.profile).projects, preview.after)
+
+    def test_handoff_last_remove_requires_explicit_uninstall(self):
+        self.handed_off()
+        self.assertEqual(self.apply(self.preview('remove', project='project-a')).status, 'applied')
+        before, native = self.snapshot(), copy.deepcopy(self.native)
+        preview = self.preview('remove', project='project-b')
+        self.assertEqual(preview.status, 'blocked')
+        self.assertFalse(preview.removes_launcher)
+        self.assertIn('explicit uninstall', preview.message)
+        self.assertEqual(self.snapshot(), before)
+        self.assertEqual(self.native, native)
+
     def test_catalogue_ids_and_noop_are_owned(self):
         self.assertEqual(edits.list_owned_projects(self.context.paths, self.profile).status, 'not_configured')
         self.installed()

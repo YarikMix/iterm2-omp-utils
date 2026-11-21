@@ -143,7 +143,7 @@ def _compile(edit):
     old, new = edit.before, edit.after
     mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else edit.mode
     locator = {'mode':mode}
-    if (edit.owner=='shared:runtime' or edit.owner=='mcp' and edit.path.name != 'mcp.json' or
+    if (edit.owner=='shared:project-launcher' or edit.owner=='shared:runtime' or edit.owner=='mcp' and edit.path.name != 'mcp.json' or
             edit.path.name in {'iterm2-utils.json','iterm2-utils-project-launcher.json'}):
         return [_resource('file',path,locator,_encode(old),_encode(new),edit.owner)]
     if edit.path.suffix in {'.json','.toml'} and new is not None:
@@ -313,8 +313,7 @@ def _set(r,value,runner,context, *, expected, restoring=False):
     else:
         patcher = jsonfile.patch if kind=='json' else tomlfile.patch
         result = patcher(raw or (b'{}' if kind=='json' else b''),tuple(loc['pointer']),value['value'],remove=not value['exists'])
-    if kind == 'file' and path in {(context.paths.profiles/name).resolve()
-            for name in ('iterm2-utils.json','iterm2-utils-project-launcher.json')}:
+    if _project_file(r, context):
         old_guids = _project_guids(raw)
         removed = old_guids - _project_guids(result)
         if removed:
@@ -342,10 +341,22 @@ def _project_guids(raw):
         raise ValueError('Duplicate owned project GUID')
     return guids
 
+def _project_file(resource, context):
+    if resource['kind'] != 'file':
+        return False
+    path = Path(resource['target'])
+    profiles = context.paths.profiles.resolve()
+    if path in {profiles/name for name in ('iterm2-utils.json', 'iterm2-utils-project-launcher.json')}:
+        return True
+    # Noncanonical sources are addressed only by exact whole-file ownership.
+    return ('shared:project-launcher' in resource['owners'] and
+            'project-launcher' in resource['owners'] and path.parent == profiles and
+            path.suffix == '.json' and not path.is_symlink() and path.resolve() == path)
+
+
 
 def _deletes_projects(r, context):
-    if r['kind'] != 'file' or r['target'] not in {str((context.paths.profiles/name).resolve())
-            for name in ('iterm2-utils.json','iterm2-utils-project-launcher.json')}:
+    if not _project_file(r, context):
         return False
     def decode(value):
         return base64.b64decode(value['value'],validate=True) if value['exists'] else None
