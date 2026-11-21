@@ -25,10 +25,14 @@ without a supplied selection resolves ambient profile variables.
 
 New/handoff/resume keep the original PTY shell-owned: guarded login zsh runs
 one foreground omp child, tolerating its nonzero exit even with ERR_EXIT, then
-execs interactive non-login zsh in the launch cwd. Login-only startup is not
-repeated; per-call agent overrides stay on the child. Existing appearance
-initialization/hooks handle the prompt return. No persistent settings or
-already-running tabs change; explicit shell exit and close-tab remain ordinary.
+execs interactive non-login zsh in the launch cwd. If that path was renamed or
+removed, a failed cwd re-entry retains the bootstrap's working directory rather
+than preventing the prompt. Login-only startup is not repeated; per-call agent
+overrides stay on the child. The optional appearance return hook cancels/reaps
+the launch observer and completes its bounded return writer before shell
+replacement; missing or failing return hooks do not prevent the prompt.
+No persistent settings or already-running tabs change; explicit shell exit and
+close-tab remain ordinary.
 
 omp preflight inspects (never executes) the login-shell function/alias. A single
 `command omp [literal options] "$@"` passthrough is accepted; literal profile,

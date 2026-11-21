@@ -122,8 +122,10 @@ def build_command(request, inspection, argv):
         child=shlex.join([
             '/usr/bin/env','OMP_PROFILE='+ (request.omp_profile.name or 'default'),
             'PI_CODING_AGENT_DIR='+str(request.omp_profile.agent_dir),*argv])
-        invocation=[str(inspection.zsh),'-ilc',guard+'if '+child+'; then :; fi; cd -- '+
-                    shlex.quote(str(request.cwd))+' && exec '+shlex.join([str(inspection.zsh),'-i'])]
+        returned=('if (( $+functions[_iterm2_utils_appearance_precmd] )); then '
+                  '_iterm2_utils_appearance_precmd synchronous || :; fi; ')
+        invocation=[str(inspection.zsh),'-ilc',guard+'if '+child+'; then :; fi; '+returned+'cd -- '+
+                    shlex.quote(str(request.cwd))+' 2>/dev/null || :; exec '+shlex.join([str(inspection.zsh),'-i'])]
     return shlex.join(['/bin/sh','-c','cd -- '+shlex.quote(str(request.cwd))+' && exec '+shlex.join(invocation)])
 
 

@@ -22,6 +22,98 @@ from iterm2_utils.terminal import Terminal
 
 
 class LaunchTests(unittest.TestCase):
+    def test_omp_exit_reaps_appearance_observer_before_prompt(self):
+        for failing_hook in (False,True):
+            with self.subTest(failing_hook=failing_hook):
+                self._check_omp_exit_edge(appearance=True,failing_hook=failing_hook)
+
+    def test_omp_exit_keeps_prompt_after_launch_directory_rename(self):
+        self._check_omp_exit_edge(rename=True)
+
+    def _check_omp_exit_edge(self, *, appearance=False, rename=False, failing_hook=False):
+        with TemporaryDirectory() as tmp:
+            root=Path(tmp).resolve(); cwd=root/"cwd ' quoted";cwd.mkdir()
+            renamed=root/'renamed'
+            binary=root/'bin';binary.mkdir();omp=binary/'omp'
+            omp.write_text('#!'+sys.executable+'\nimport os\n'+
+                ('os.rename('+repr(str(cwd))+','+repr(str(renamed))+')\n' if rename else '')+
+                'raise SystemExit(23)\n')
+            omp.chmod(0o700)
+            (root/'.zshenv').write_text('unsetopt GLOBAL_RCS\n')
+            startup='export PATH='+shlex.quote(str(binary))+':/usr/bin:/bin\nsetopt ERR_EXIT\nPROMPT="READY> "\n'
+            if appearance:
+                # Real shell cancellation/fd ownership; only the external SDK boundary is fake.
+                (root/'appearance.zsh').write_text((Path(m.__file__).resolve().parents[1]/'runtime/appearance.zsh').read_text())
+                (root/'appearance.py').write_text(
+                    'import os,sys,signal,time\nfrom pathlib import Path\n'
+                    'root=Path(__file__).parent\nargs=sys.argv[1:]\nphase=args[args.index("--phase")+1]\n'
+                    '(root/(phase+".pid")).write_text(str(os.getpid()))\n'
+                    'def finish(*unused):\n time.sleep(.08)\n (root/(phase+".ended")).touch()\n sys.exit(0)\n'
+                    'signal.signal(signal.SIGTERM,finish)\n'
+                    'if phase=="launch":\n'
+                    ' os.write(int(args[args.index("--ready-fd")+1]),b"ready\\n")\n'
+                    ' while True: signal.pause()\n'
+                    'finish()\n')
+                startup+=('if [[ -e '+shlex.quote(str(root/'launch.pid'))+' ]]; then\n'
+                          '[[ -e '+shlex.quote(str(root/'launch.ended'))+' && -e '+shlex.quote(str(root/'return.ended'))+
+                          ' ]] && : > '+shlex.quote(str(root/'transition.clean'))+' || :\nfi\n')
+                startup+='source '+shlex.quote(str(root/'appearance.zsh'))+'\nchpwd_functions=()\n'
+                if failing_hook:
+                    startup+='if [[ -o login ]]; then\nfunctions[_fixture_return]=$functions[_iterm2_utils_appearance_precmd]\nfunction _iterm2_utils_appearance_precmd { _fixture_return "$@"; return 17; }\nfi\n'
+            (root/'.zshrc').write_text(startup)
+            request=LaunchRequest('W','Omp',cwd,OmpProfile('work',root/'.omp/profiles/work/agent'),'new')
+            inspection=LaunchInspection(root/'it2',Path('/bin/zsh'),'G','W',LaunchIdentity(omp,(),((str(omp),),),''))
+            command=m.build_command(request,inspection,[str(omp)])
+            environment=dict(HOME=str(root),ZDOTDIR=str(root),PATH='/usr/bin:/bin',TERM='xterm')
+            if appearance:
+                environment.update(TERM_PROGRAM='iTerm.app',ITERM2_UTILS_PYTHON=sys.executable,
+                                   ITERM2_UTILS_APPEARANCE_CONFIG=str(root/'rules.json'))
+            pid,fd=pty.fork()
+            if pid==0:os.execve('/bin/sh',shlex.split(command),environment)
+            output=b''
+            def until(marker):
+                nonlocal output
+                deadline=time.monotonic()+5
+                while marker not in output and time.monotonic()<deadline:
+                    if select.select([fd],[],[],max(0,deadline-time.monotonic()))[0]:
+                        try:chunk=os.read(fd,65536)
+                        except OSError:break
+                        if not chunk:break
+                        output+=chunk
+                self.assertIn(marker,output,output.decode(errors='replace'))
+            try:
+                until(b'READY> ')
+                if appearance:
+                    self.assertTrue((root/'launch.pid').exists(),'appearance was not armed')
+                    self.assertTrue((root/'launch.ended').exists(),'old identity-absent observer survived transition')
+                    self.assertTrue((root/'return.ended').exists(),'return observer was left asynchronous')
+                    self.assertTrue((root/'transition.clean').exists(),'observer cleanup did not precede new shell initialization')
+                output=b''
+                os.write(fd,b"print -r -- EDGE_$((6*7)); /bin/pwd\n")
+                until(b'EDGE_42')
+                until(str(renamed if rename else cwd).encode())
+            finally:
+                try:os.write(fd,b'exit\n')
+                except OSError:pass
+                for force in (False,True):
+                    if force:
+                        try:os.kill(pid,signal.SIGKILL)
+                        except ProcessLookupError:pass
+                    deadline=time.monotonic()+2
+                    while time.monotonic()<deadline:
+                        if select.select([fd],[],[],.02)[0]:
+                            try:os.read(fd,65536)
+                            except OSError:pass
+                        if os.waitpid(pid,os.WNOHANG)[0]:break
+                    else:continue
+                    break
+                else:self.fail('PTY child did not reap after SIGKILL')
+                os.close(fd)
+                # RED must not leak the deliberately indefinite boundary helper.
+                for helper in root.glob('*.pid'):
+                    try:os.kill(int(helper.read_text()),signal.SIGTERM)
+                    except ProcessLookupError:pass
+
     def test_omp_exit_returns_to_same_interactive_pty(self):
         for status in (0,23):
             with self.subTest(status=status),TemporaryDirectory() as tmp:
