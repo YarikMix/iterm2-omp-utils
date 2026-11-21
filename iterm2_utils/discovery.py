@@ -59,7 +59,7 @@ def _iterm(paths):
 
 
 def discover(paths: Paths, runner: Runner, *, features: frozenset[str] = frozenset(),
-             omp_profile: OmpProfile | None = None) -> Context:
+             omp_profile: OmpProfile | None = None, python: Path | None = None) -> Context:
     """Probe selected dependencies, preserving supplied profile authority.
 
     Standalone discovery resolves ambient storage once when no selection was
@@ -76,7 +76,7 @@ def discover(paths: Paths, runner: Runner, *, features: frozenset[str] = frozens
     if features & {'clipboard','shortcuts','appearance','restore','project-launcher','mcp'}:
         names.add('python3')
     for name in sorted(names):
-        found = (os.environ.get('ITERM2_UTILS_PYTHON') or shutil.which(name)) if name=='python3' else shutil.which(name)
+        found = (python if python is not None else os.environ.get('ITERM2_UTILS_PYTHON') or shutil.which(name)) if name=='python3' else shutil.which(name)
         if not found or not Path(found).is_absolute():
             continue
         binary = Path(found).absolute()

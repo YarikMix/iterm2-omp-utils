@@ -11,6 +11,13 @@ project panel, unrelated features or user processes. Legacy uvx requires explici
 preview/removal/reinstall; update never silently migrates it. Offline/package
 checks do not establish live iTerm2, native dialog or shell-after-exit acceptance.
 
+MCP failure cleanup now shields the watcher join as well as socket disposal from
+repeated cancellation. Installed project edits probe their bound Python before
+deriving dependency capabilities. Authorized upgrades retire only the superseded
+payload's receipt records in the replacement transaction, retaining immutable
+runtime bytes and original registration/adapter inverses. Doctor again reports
+readable registration drift as `registration_changed`.
+
 Added explicit `close-tab --window ID --tab ID --session ID`: one native tab-only
 SDK close without force/retry, guarded by exact unique single-visible-session
 target inventory. `closed` requires native OK and fresh complete absence of both

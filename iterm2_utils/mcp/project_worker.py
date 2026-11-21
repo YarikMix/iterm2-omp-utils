@@ -71,8 +71,8 @@ def main(binding: McpBinding, *, authorize: Callable[[], None]) -> int:
             paths = bound_paths(binding)
             receipt = state.load(binding.receipt_path)
             runner = Runner()
-            context = discover(paths, runner, features=receipt.selection.features, omp_profile=binding.profile)
-            context.executables['python3'] = binding.python
+            context = discover(paths, runner, features=receipt.selection.features,
+                               omp_profile=binding.profile, python=binding.python)
             preview = prepare_project_edit(context, runner, change)
             status = preview.status
             if status == 'ready':

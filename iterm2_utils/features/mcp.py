@@ -80,6 +80,40 @@ def retain_release_resource(resource, context):
         # Damaged payloads lose retention, not the ability to revoke their entry.
         return False
 
+def superseded_payload_resources(receipt, compiled, context):
+    """Retire only the prior authorized payload, in its replacement checkpoint."""
+    from .. import engine
+    from ..config import mcp
+    target = str((receipt.selection.omp_profile.agent_dir/'mcp.json').resolve())
+    replacement = next((r for r in compiled if r['kind'] == 'json' and
+        r['target'] == target and r['owners'] == ['mcp'] and
+        r['locator']['pointer'] == ['mcpServers', mcp.NAME] and
+        r['before']['exists'] and r['installed']['exists'] and
+        not engine._same(r['before'], r['installed'])), None)
+    if replacement is None:
+        return set()
+    old = mcp.installed_binding(context)
+    value = replacement['installed']['value']
+    args = value.get('args', [])
+    if len(args) != 6:
+        return set()
+    new = McpBinding(old.profile, Path(args[1]).parent.parent, old.receipt_path, Path(value['command']))
+    if (new.install_root == old.install_root or
+            new.install_root.parent.resolve() != (context.paths.data/'mcp/releases').resolve() or
+            not re.fullmatch('[0-9a-f]{64}', new.install_root.name) or
+            value != definition(new) or replacement['before']['value'] != definition(old)):
+        return set()
+    mcp.authorize_binding(old)
+    targets = {str((old.install_root/name).resolve()) for name in payload_names(old.install_root)}
+    retired = set()
+    for resource in receipt.resources:
+        if resource['kind'] == 'file' and resource['owners'] == ['mcp'] and resource['target'] in targets:
+            if not engine._same(engine._read(resource, None, context), resource['installed']):
+                raise ValueError('Prior owned payload changed')
+            retired.add(engine._identity(resource))
+    return retired
+
+
 
 def extension_content(binding):
     install = {'python':str(binding.python), 'entry':str(binding.install_root/'runtime/iterm2_mcp_entry.py'),

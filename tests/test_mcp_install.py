@@ -292,3 +292,73 @@ class InstallTests(unittest.TestCase):
                         self.assertFalse((fixture.paths.data/'journal').exists())
                     finally:
                         fixture.doCleanups()
+
+    def test_repeated_upgrades_retire_only_prior_authorized_payload_records(self):
+        import shutil
+        from iterm2_utils.features.mcp import payload_names
+        from iterm2_utils.models import FileEdit
+        from iterm2_utils.project_edits import read_receipt, RECEIPT_LIMIT
+        self.install()
+        old = self.binding()
+        names = payload_names(ROOT)
+        immutable = {name:(old.install_root/name).read_bytes() for name in names}
+        foreign = old.install_root/'foreign.txt'; foreign.write_bytes(b'foreign bytes')
+        unrelated = self.home/'unrelated'; unrelated.write_bytes(b'original')
+        arbitrary = self.paths.data/'mcp/releases'/'not-a-release'/'owned.txt'
+        extra = engine.apply(Plan(self.selection, ChangeSet([
+            FileEdit(unrelated, b'original', b'owned', 0o600, 'shell'),
+            FileEdit(arbitrary, None, b'not payload authority', 0o600, 'mcp')], [], []), ''),
+            self.context, self.runner)
+        self.assertFalse(extra.findings)
+        preserved = [r for r in extra.receipt.resources if r['target'] in {str(unrelated.resolve()), str(arbitrary.resolve())}]
+        inverses = {r['target']:r['before'] for r in extra.receipt.resources
+                    if r['target'] in {str((self.profile.agent_dir/'mcp.json').resolve()),
+                                      str((self.profile.agent_dir/'extensions/iterm2-utils-projects.ts').resolve())}}
+        repo = self.home/'source'
+        for name in names:
+            path = repo/name; path.parent.mkdir(parents=True, exist_ok=True); shutil.copyfile(ROOT/name, path)
+        context = replace(self.context, paths=replace(self.paths, repo=repo))
+        entry = repo/'runtime/iterm2_mcp_entry.py'
+        entry.write_bytes(entry.read_bytes()+b'\n# failed upgrade\n')
+        original_set = engine._set
+        def fail_registration(resource, *args, **kwargs):
+            if resource['kind'] == 'json' and Path(resource['target']).name == 'mcp.json':
+                raise ValueError('known upgrade failure')
+            return original_set(resource, *args, **kwargs)
+        before = old.receipt_path.read_bytes()
+        with patch.object(engine, '_set', side_effect=fail_registration):
+            failed = lifecycle.update(context, self.runner)
+        self.assertTrue(any(f.state == 'conflict' for f in failed.findings))
+        self.assertEqual(old.receipt_path.read_bytes(), before)
+        mcp.authorize_binding(old)
+        sizes = [len(before)]
+        counts = []
+        for number in range(14):
+            entry.write_bytes(entry.read_bytes()+f'\n# upgrade {number}\n'.encode())
+            result = lifecycle.update(context, self.runner)
+            self.assertFalse([f for f in result.findings if f.state in lifecycle.BLOCKING], result.findings)
+            fresh = self.binding()
+            raw, receipt = read_receipt(fresh.receipt_path)
+            sizes.append(len(raw))
+            base = (self.paths.data/'mcp/releases').resolve()
+            payload = [r for r in receipt.resources if r['kind'] == 'file' and
+                       Path(r['target']).parent != arbitrary.parent.resolve() and
+                       Path(r['target']).is_relative_to(base)]
+            roots = {Path(r['target']).relative_to(base).parts[0] for r in payload}
+            counts.append(len(roots))
+            self.assertEqual(roots, {fresh.install_root.name}, 'superseded payload ownership accumulated')
+            self.assertEqual(len(payload), len(names))
+            self.assertLess(len(raw), RECEIPT_LIMIT)
+            mcp.authorize_binding(fresh)
+            with self.assertRaises(ValueError): mcp.authorize_binding(old)
+            self.assertEqual([r for r in receipt.resources if r['target'] in {str(unrelated.resolve()), str(arbitrary.resolve())}], preserved)
+            self.assertEqual({r['target']:r['before'] for r in receipt.resources if r['target'] in inverses}, inverses)
+        self.assertEqual({name:(old.install_root/name).read_bytes() for name in names}, immutable)
+        self.assertEqual(foreign.read_bytes(), b'foreign bytes')
+        print(f'upgrade evidence: old/new release records=1/{counts}; receipt sizes={sizes}', flush=True)
+        removed = lifecycle.uninstall(context, frozenset({'mcp'}), self.runner)
+        self.assertFalse(removed.findings, removed.findings)
+        self.assertEqual(unrelated.read_bytes(), b'owned')
+        self.assertEqual(foreign.read_bytes(), b'foreign bytes')
+        self.assertTrue((fresh.install_root/'runtime/iterm2_mcp_entry.py').is_file())
+        with self.assertRaises(ValueError): mcp.authorize_binding(fresh)

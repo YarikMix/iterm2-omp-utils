@@ -36,7 +36,10 @@ class ObserveConnection:
         self._poisoned = False
         self._cleanup_task = None
 
-    async def _cleanup(self):
+    async def _cleanup(self, watcher=None):
+        if watcher is not None:
+            watcher.cancel()
+            await asyncio.gather(watcher, return_exceptions=True)
         transport = self._transport
         self._app = None
         if transport is None:
@@ -56,9 +59,9 @@ class ObserveConnection:
         if self._transport is transport:
             self._transport = None
 
-    async def _finish_cleanup(self):
+    async def _finish_cleanup(self, watcher=None):
         if self._cleanup_task is None:
-            self._cleanup_task = asyncio.create_task(self._cleanup())
+            self._cleanup_task = asyncio.create_task(self._cleanup(watcher))
         cleanup = self._cleanup_task
         cancelled = False
         # Keep the lease lock through every cancellation until bounded cleanup
@@ -109,11 +112,8 @@ class ObserveConnection:
                     self._app = await asyncio.wait_for(self._transport.build_app(), self._timeout)
                 yield ObserveSession(self._app, self._transport.connection)
             except BaseException as exc:
-                if watcher is not None:
-                    watcher.cancel()
-                    await asyncio.gather(watcher, return_exceptions=True)
-                    watcher = None
-                await self._finish_cleanup()
+                failed_watcher, watcher = watcher, None
+                await self._finish_cleanup(failed_watcher)
                 if isinstance(exc, asyncio.CancelledError) and not lost:
                     raise
                 if isinstance(exc, MCPIterm2Error):
@@ -122,10 +122,16 @@ class ObserveConnection:
                     raise
                 raise Disconnected() from None
             finally:
-                if watcher is not None:
-                    watcher.cancel()
-                    await asyncio.gather(watcher, return_exceptions=True)
-                self._holder = None
+                try:
+                    if watcher is not None:
+                        watcher.cancel()
+                        try:
+                            await asyncio.gather(watcher, return_exceptions=True)
+                        except asyncio.CancelledError:
+                            await self._finish_cleanup(watcher)
+                            raise
+                finally:
+                    self._holder = None
 
     async def aclose(self):
         """EOF/shutdown: cancel the active lease, close, and forbid new calls."""

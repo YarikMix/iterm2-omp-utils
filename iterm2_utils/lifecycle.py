@@ -232,7 +232,17 @@ def doctor(context, receipt, runner):
     if 'mcp' in receipt.selection.features:
         from .config import mcp
         try:
-            mcp.authorize_binding(mcp.installed_binding(context))
+            target = str((receipt.selection.omp_profile.agent_dir/'mcp.json').resolve())
+            owned = [r for r in receipt.resources if r['kind'] == 'json' and
+                     r['target'] == target and r['locator']['pointer'] == ['mcpServers', mcp.NAME] and
+                     r['owners'] == ['mcp']]
+            if len(owned) != 1:
+                raise ValueError('Registration ownership unavailable')
+            if not engine._same(mcp.read_server(context.omp_profile), owned[0]['installed']):
+                findings.append(Finding('mcp', 'omp', 'registration_changed', 'conflict',
+                                        'Selected MCP server entry differs from its owned registration.'))
+            else:
+                mcp.authorize_binding(mcp.installed_binding(context))
         except (ValueError, OSError, RuntimeError):
             findings.append(Finding('mcp', 'omp', 'registration_unavailable', 'unavailable',
                                     'Selected MCP server entry could not be verified.'))

@@ -222,6 +222,48 @@ class LifecycleTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(failed, following, opened, return_exceptions=True)
             await owner.aclose()
 
+    async def test_cancel_during_app_then_watcher_join_finishes_cleanup(self):
+        events = []
+        old, new = Transport(events), Transport(events)
+        constructing, joining, release_join = asyncio.Event(), asyncio.Event(), asyncio.Event()
+        async def build_app():
+            constructing.set()
+            await asyncio.Event().wait()
+        old.build_app = build_app
+        transports = iter([old, new])
+        owner = ObserveConnection(transport_factory=lambda: next(transports))
+        gather = asyncio.gather
+        first_join = True
+        async def join(*tasks, **kwargs):
+            nonlocal first_join
+            if first_join and len(tasks) == 1 and tasks[0].get_coro().__name__ == 'watch':
+                first_join = False
+                joining.set()
+                await release_join.wait()
+            return await gather(*tasks, **kwargs)
+        async def call():
+            async with owner.lease():
+                self.fail('cancelled App must not escape')
+        try:
+            with patch('iterm2_utils.mcp.connection.asyncio.gather', side_effect=join):
+                task = asyncio.create_task(call())
+                await constructing.wait()
+                task.cancel()
+                await joining.wait()
+                task.cancel()
+                await asyncio.sleep(0)
+                release_join.set()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+            self.assertTrue(old.closed, 'watcher join cancellation skipped transport cleanup')
+            self.assertTrue(old.reader.done())
+            async with owner.lease() as session:
+                self.assertIs(session.connection, new.connection)
+            self.assertEqual(events, ['open', 'close', 'open'])
+        finally:
+            release_join.set()
+            await owner.aclose()
+
 
 CONTRACTS = {
     'list_sessions': (), 'get_session_info': (('session_id', None),),

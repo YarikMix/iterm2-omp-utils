@@ -517,7 +517,9 @@ def apply(plan: Plan, context: Context, runner: Runner, *, remove_owners=frozens
                        for finding in legacy_blockers(previous, feature, context)]
             if blocked:
                 return Outcome(previous, findings+blocked)
-            resources = copy.deepcopy(previous.resources)
+            from .features.mcp import superseded_payload_resources
+            retired = superseded_payload_resources(previous, compiled, context)
+            resources = [copy.deepcopy(r) for r in previous.resources if _identity(r) not in retired]
             # A regenerated builder may describe an implemented no-op. Reuse only
             # addresses already owned by this exact feature/shared marker, never
             # infer ownership from other unchanged values in the same file.

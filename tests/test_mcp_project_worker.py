@@ -2,6 +2,9 @@
 import importlib
 import io
 import json
+import os
+import plistlib
+import subprocess
 from unittest.mock import patch
 
 from iterm2_utils import engine
@@ -10,11 +13,16 @@ from tests.test_project_edits import ProjectEditTests
 
 
 class ProjectWorkerTests(ProjectEditTests):
-    def worker(self, frames, authorize=lambda: None, at_preview=None):
+    def worker(self, frames, authorize=lambda: None, at_preview=None, *, real_discovery=False, binding=None):
         self.assertIsNotNone(importlib.util.find_spec('iterm2_utils.mcp.project_worker'), 'Private gated edit worker is not implemented')
         worker = importlib.import_module('iterm2_utils.mcp.project_worker')
-        binding = McpBinding(self.profile, self.context.paths.repo,
-                             self.context.paths.data/'receipt.json', self.context.executables['python3'])
+        if real_discovery:
+            spec = importlib.util.spec_from_file_location(worker.__name__,
+                binding.install_root/'iterm2_utils/mcp/project_worker.py')
+            worker = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(worker)
+        binding = binding or McpBinding(self.profile, self.context.paths.repo,
+                                       self.context.paths.data/'receipt.json', self.context.executables['python3'])
         output = io.StringIO()
         class Output:
             def write(inner, value):
@@ -24,7 +32,7 @@ class ProjectWorkerTests(ProjectEditTests):
             def flush(inner): pass
         source = io.TextIOWrapper(io.BytesIO(frames))
         with patch.object(worker, 'bound_paths', return_value=self.context.paths), \
-             patch.object(worker, 'discover', return_value=self.context), \
+             patch.object(worker, 'discover', wraps=worker.discover, **({} if real_discovery else {'return_value':self.context})), \
              patch.object(worker, 'Runner', return_value=self.runner), \
              patch('sys.stdin', source), patch('sys.stdout', Output()):
             code = worker.main(binding, authorize=authorize)
@@ -120,6 +128,45 @@ class ProjectWorkerTests(ProjectEditTests):
             _, frames = self.worker(oversized)
         self.assertEqual(frames[-1], {'result': {'status': 'applied'}})
         self.assertEqual(json.loads(self.dynamic.read_bytes())['Profiles'][0]['Name'], 'Changed')
+
+    def test_installed_worker_probes_bound_python_not_unusable_ambient(self):
+        from iterm2_utils.config import mcp
+        self.context.versions['python3'] = '3.12.8'
+        self.context.capabilities |= {'python:mcp'}
+        bound = self.home/'selected python/python3'
+        bound.parent.mkdir()
+        bound.write_text('#!/bin/sh\ncase "$*" in\n--version) echo "Python 3.12.8";;\n*FastMCP*) echo mcp-ready;;\n*) echo iterm2-sdk-ready;;\nesac\n')
+        bound.chmod(0o700)
+        ambient = self.home/'ambient/python3'
+        ambient.parent.mkdir()
+        ambient.write_text('#!/bin/sh\nif [ "$1" = --version ]; then echo "Python 3.11.9"; else exit 1; fi\n')
+        ambient.chmod(0o700)
+        self.context.executables['python3'] = bound
+        self.installed('mcp')
+        binding = mcp.installed_binding(self.context)
+        probes = []
+        def run(argv, **kwargs):
+            probes.append(argv)
+            if argv[:2] == ['defaults', 'export']:
+                return subprocess.CompletedProcess(argv, 0,
+                    plistlib.dumps({'New Bookmarks':list(self.context.profiles.values())}).decode(), '')
+            if str(argv[0]) not in {str(bound), str(ambient), '/bin/false'}:
+                raise AssertionError(f'Nonfixture subprocess: {argv[0]}')
+            return subprocess.run(argv, text=True, capture_output=True, **kwargs)
+        def which(name):
+            return str(ambient) if name == 'python3' else '/bin/false'
+        with patch.dict(os.environ, {}, clear=False), \
+             patch('iterm2_utils.discovery.shutil.which', side_effect=which), \
+             patch('iterm2_utils.discovery._iterm', return_value=(self.home/'iTerm.app', {})), \
+             patch('iterm2_utils.discovery.platform.system', return_value='Darwin'), \
+             patch.object(self.runner, 'run', side_effect=run):
+            os.environ.pop('ITERM2_UTILS_PYTHON', None)
+            _, frames = self.worker(self.prepare_frame()+b'{"type":"commit"}\n',
+                authorize=lambda:mcp.authorize_binding(binding), real_discovery=True, binding=binding)
+        self.assertEqual(frames[-1], {'result': {'status': 'applied'}})
+        self.assertEqual(json.loads(self.dynamic.read_bytes())['Profiles'][0]['Name'], 'Changed')
+        self.assertTrue(any(str(argv[0]) == str(bound) and argv[1:] == ['--version'] for argv in probes))
+        self.assertFalse(any(str(argv[0]) == str(ambient) for argv in probes), 'No ambient interpreter fallback')
 
 
 for _name in dir(ProjectEditTests):
