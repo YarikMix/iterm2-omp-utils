@@ -379,7 +379,8 @@ def leaf(sid):
     return SimpleNamespace(session=proto(unique_identifier=sid), WhichOneof=lambda name:'session')
 def tab(tid, sid):
     return proto(tab_id=tid, root=proto(links=[leaf(sid)]),
-                 minimized_sessions=[], active_session_id=sid)
+                 minimized_sessions=[], floating_panes=[], floating_panes_hidden=False,
+                 active_session_id=sid)
 def snapshot(after):
     target = tab('T', 'S')
     other = tab('OTHER', 'OTHER-S')
@@ -388,12 +389,21 @@ def snapshot(after):
     other.minimized_sessions = [proto(unique_identifier='MINIMIZED')]
     windows = [proto(window_id='W', tabs=[target, other])]
     buried = [proto(unique_identifier='BURIED')]
+    if SCENARIO in ('floating_target', 'hidden_floating_target'):
+        target.floating_panes=[proto(session=proto(unique_identifier='TARGET-FLOAT'))]
+        target.floating_panes_hidden=SCENARIO == 'hidden_floating_target'
+    if SCENARIO == 'neighboring_active_float':
+        other.floating_panes=[proto(session=proto(unique_identifier='OTHER-FLOAT'))]
+        other.active_session_id='OTHER-FLOAT'
     if after:
         windows[0].tabs = [other]
         if SCENARIO == 'retained_tab': windows[0].tabs.append(tab('T', 'REUSED'))
         if SCENARIO == 'moved_session': other.root.links.append(leaf('S'))
         if SCENARIO == 'buried_session': buried.append(proto(unique_identifier='S'))
         if SCENARIO == 'minimized_session': other.minimized_sessions.append(proto(unique_identifier='S'))
+        if SCENARIO == 'floating_session':
+            other.floating_panes=[proto(session=proto(unique_identifier='S'))]
+        if SCENARIO == 'post_missing_floating': del other.floating_panes
         if SCENARIO == 'post_empty': windows=[]; buried=[]
     else:
         if SCENARIO == 'moved_window': windows[0].window_id='MOVED'
@@ -411,6 +421,12 @@ def snapshot(after):
         if SCENARIO == 'bad_active': other.active_session_id='MISSING'
         if SCENARIO == 'bad_link': other.root.links[0].WhichOneof=lambda name:None
         if SCENARIO == 'bad_hidden': buried[0].unique_identifier=''
+        if SCENARIO == 'missing_floating': del other.floating_panes
+        if SCENARIO == 'unreadable_floating': other.floating_panes=None
+        if SCENARIO == 'missing_float_session':
+            other.floating_panes=[proto(unique_identifier='MALFORMED-FLOAT')]
+        if SCENARIO == 'duplicate_float_session':
+            other.floating_panes=[proto(session=proto(unique_identifier='S'))]
     if SCENARIO == ('post_incomplete' if after else 'pre_incomplete'): return proto()
     return proto(list_sessions_response=proto(windows=windows,buried_sessions=buried))
 class Socket:
@@ -474,6 +490,39 @@ class CloseTabTests(unittest.IsolatedAsyncioTestCase):
                 self.assertEqual(self.calls('inventory'),[False,True])
                 self.assertEqual(self.calls('disconnect'),[None])
                 self.assertNotIn('PRIVATE',repr(result))
+
+    async def test_floating_companions_prevent_exact_close(self):
+        for scenario in ('floating_target','hidden_floating_target'):
+            with self.subTest(scenario=scenario):
+                self.log.unlink(missing_ok=True)
+                result=await self.run_sdk(scenario)
+                self.assertEqual(result.status,'blocked')
+                self.assertEqual(self.calls('close_tab'),[])
+
+    async def test_neighboring_active_float_does_not_block_exact_close(self):
+        result=await self.run_sdk('neighboring_active_float')
+        self.assertEqual(result.status,'closed')
+        self.assertEqual(self.calls('close_tab'),[
+            dict(sessions=None,tabs=['T'],windows=None,force=False)])
+        self.assertEqual(self.calls('inventory'),[False,True])
+
+    async def test_floating_session_survival_or_incomplete_postflight_is_unknown(self):
+        for scenario in ('floating_session','post_missing_floating'):
+            with self.subTest(scenario=scenario):
+                self.log.unlink(missing_ok=True)
+                result=await self.run_sdk(scenario)
+                self.assertEqual(result.status,'unknown')
+                self.assertEqual(len(self.calls('close_tab')),1)
+                self.assertEqual((result.window_id,result.tab_id,result.session_id),('W','T','S'))
+
+    async def test_invalid_floating_coverage_never_sends_close(self):
+        for scenario in ('missing_floating','unreadable_floating',
+                         'missing_float_session','duplicate_float_session'):
+            with self.subTest(scenario=scenario):
+                self.log.unlink(missing_ok=True)
+                result=await self.run_sdk(scenario)
+                self.assertEqual(result.status,'blocked')
+                self.assertEqual(self.calls('close_tab'),[])
 
     async def test_invalid_exact_target_or_incomplete_snapshot_never_closes(self):
         for scenario in ('moved_window','reused_tab','split_target','hidden_target','buried_target',

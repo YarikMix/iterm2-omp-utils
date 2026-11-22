@@ -197,7 +197,7 @@ class TabClosure:
 
 
 def _close_inventory(response):
-    """Account for every visible, minimized and buried native session identity."""
+    """Account for every tiled, floating, minimized and buried session identity."""
     if not response.HasField('list_sessions_response'):
         raise ValueError('Missing SDK envelope')
     snapshot = response.list_sessions_response
@@ -239,11 +239,12 @@ def _close_inventory(response):
             visible = []
             visit(tab.root, visible)
             minimized = [session(summary) for summary in tab.minimized_sessions]
-            if tab.active_session_id not in visible:
+            floating = [session(pane.session) for pane in tab.floating_panes]
+            if tab.active_session_id not in visible and tab.active_session_id not in floating:
                 raise ValueError('Incomplete active session')
             mux = (tab.HasField('tmux_connection_id') or
                    tab.HasField('tmux_window_id') and tab.tmux_window_id != '-1')
-            tabs[tid] = (wid, visible, minimized, mux)
+            tabs[tid] = (wid, visible, minimized, floating, mux)
     for summary in snapshot.buried_sessions:
         session(summary)
     return tabs, sessions
@@ -267,7 +268,7 @@ async def _close_operate(request, emit):
         emit({'phase': 'inventory'})
         async with asyncio.timeout(_PREFLIGHT_SECONDS):
             tabs, _ = _close_inventory(await iterm2.rpc.async_list_sessions(connection))
-        if tabs.get(tid) != (wid, [sid], [], False):
+        if tabs.get(tid) != (wid, [sid], [], [], False):
             return 'blocked'
         emit({'phase': 'close'})
         async with asyncio.timeout(_CREATE_SECONDS):
