@@ -32,12 +32,15 @@ use GUI/another API, or type into any terminal.
 
 Select the authorized `(window_id, tab_id, session_id)` from a fresh complete
 read-only native `iterm2.rpc.async_list_sessions` snapshot, including split-tree,
-minimized and buried sessions. If the user supplied exact IDs, keep them exact.
+minimized, buried and visible/hidden floating sessions. If the user supplied exact IDs, keep them exact.
 Ambiguous intent requires clarification, not focus/title/recency or a guessed
 target. The session ID is the **terminal** ID, not the omp conversation ID.
-Require one visible session and no minimized panels in the target tab. Unrelated
-splits/hidden sessions are accounted for, never closed. Warn that the selected
-tab and its running work will be closed, then invoke once for that authorization:
+Require one tiled session, no minimized or floating panels and no tmux attachment
+in the target tab. Hidden floats count too; incomplete or unreadable floating
+coverage blocks before close. Unrelated splits/minimized/floating sessions are
+accounted for, never closed; an active float in another valid tab does not block
+an eligible target. Warn that the selected tab and its running work will be
+closed, then invoke once for that authorization:
 
 ```sh
 "$launch_python" -m iterm2_utils close-tab --window WINDOW_ID --tab TAB_ID --session TERMINAL_ID --json
@@ -52,7 +55,9 @@ job if a host tool wait ends; never start a second invocation.
 
 Report returned IDs and status in either plain or JSON output:
 `closed`/0 requires native `OK` plus a fresh complete snapshot without **both**
-target tab ID and terminal ID, including minimized/buried sessions.
+target tab ID and terminal ID, including minimized/buried and visible/hidden
+floating sessions. A surviving float or incomplete floating coverage after `OK`
+means `unknown`.
 `blocked`/2 means no request was sent or native `NOT_FOUND`/`USER_DECLINED` refused
 it; refusal is not a successful close. `unknown`/3 includes timeout, failed worker
 protocol, missing/non-OK results or retained/moved/buried target IDs after `OK`.

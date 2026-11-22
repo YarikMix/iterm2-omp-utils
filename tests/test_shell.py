@@ -51,6 +51,49 @@ class ShellTests(ShellFixture):
             result=subprocess.run(['/bin/zsh','-dfc',script],capture_output=True,text=True)
             self.assertEqual(result.returncode,0,result.stderr)
             self.assertEqual(result.stdout.strip(),expected)
+
+    def test_vendored_shell_marks_and_restores_right_prompts(self):
+        import subprocess
+        integration = self.context.paths.repo/'vendor/shell_integration/iterm2_shell_integration.zsh'
+        marked = '%{\x1b]133;P;k=r;aid=theme\x07%}theme-right%{\x1b]133;B;aid=theme\x07%}'
+        cases = (
+            ('both', 'primary-right', 'secondary-right', ''),
+            ('opt-out', 'primary-right', 'secondary-right', '1'),
+            ('already-marked', marked, marked, ''),
+            ('empty-secondary', 'primary-right', '', ''),
+        )
+        script = r'''
+it2() { :; }
+iterm2_hostname=fixture
+_iterm2_machine_id=0:
+RPROMPT=$2
+RPS2=$3
+ITERM2_SQUELCH_RPROMPT_MARK=$4
+source "$1" >/dev/null
+iterm2_precmd >/dev/null
+printf '%s\0' "$RPROMPT" "$RPS2" "$ITERM2_CURRENT_AID"
+iterm2_preexec >/dev/null
+printf '%s\0' "$RPROMPT" "$RPS2"
+'''
+        for name, primary, secondary, opt_out in cases:
+            with self.subTest(name=name):
+                result = subprocess.run(
+                    ['/bin/zsh', '-dfi', '-c', script, 'fixture', str(integration),
+                     primary, secondary, opt_out],
+                    cwd=self.home, capture_output=True, text=True, timeout=5,
+                    env={'HOME': str(self.home), 'ZDOTDIR': str(self.home),
+                         'PATH': '/usr/bin:/bin', 'USER': 'fixture',
+                         'TERM': 'xterm-256color', 'TERM_PROGRAM': 'iTerm.app'})
+                self.assertEqual(result.returncode, 0, result.stderr)
+                decorated_primary, decorated_secondary, aid, raw_primary, raw_secondary, end = result.stdout.split('\0')
+                self.assertRegex(aid, r'^\d+-1$')
+                for raw, decorated in ((primary, decorated_primary), (secondary, decorated_secondary)):
+                    expected = raw
+                    if raw and not opt_out and name != 'already-marked':
+                        expected = f'%{{\x1b]133;P;k=r;aid={aid}\x07%}}{raw}%{{\x1b]133;B;aid={aid}\x07%}}'
+                    self.assertEqual(decorated, expected)
+                self.assertEqual((raw_primary, raw_secondary, end), (primary, secondary, ''))
+
     def test_legacy_managed_wrapper_requires_migration(self):
         self.context.paths.zshrc.write_text('# >>> codex-no-daemon >>>\nfunction codex() { command codex "$@"; }\n# <<< codex-no-daemon <<<\n')
         self.assertEqual(build(self.context,self.selection(('status',))).edits,[])

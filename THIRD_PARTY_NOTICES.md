@@ -17,8 +17,8 @@ as unmodified upstream source. MCP SDK dependencies are probed, never downloaded
 or bundled by the installer.
 
 `vendor/shell_integration/iterm2_shell_integration.zsh` is the unmodified official
-iTerm2 zsh integration from gnachman/iTerm2, tag v3.7.6, Git blob
-`efb57443f879239795411bcf076f38b4d1008b0f`.
+iTerm2 zsh integration from gnachman/iTerm2, tag v3.7.9, Git blob
+`01c89fab3ce53dc65f80cfa1d6d78f1193837413`.
 Its original GPL-2.0-or-later license header is preserved verbatim. The accompanying
 `vendor/shell_integration/LICENSE` is the verbatim upstream GPL version 2 text.
 This vendored component remains under its own GPL license, separate from the

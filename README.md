@@ -167,7 +167,7 @@ Create+command proof до 30 секунд; handoff ack отдельно до 120
 ## Явное закрытие одной вкладки
 
 Только по отдельному запросу на закрытие выберите точный адрес из свежего полного
-native SDK inventory (включая split/minimized/buried) и предупредите о закрытии:
+native SDK inventory (включая split/minimized/buried и видимые/скрытые floating panes) и предупредите о закрытии:
 
 ```sh
 "$launch_python" -m iterm2_utils close-tab --window WINDOW_ID --tab TAB_ID --session TERMINAL_ID --json
@@ -175,13 +175,15 @@ native SDK inventory (включая split/minimized/buried) и предупре
 
 Все три ID обязательны; `session` — terminal ID, не ID диалога omp. Перед одним
 native tab-only RPC с `force=False` проверяются окно, уникальный tab ID и ровно
-одна видимая сессия без свёрнутых панелей в целевой вкладке. Перемещённая,
-повторно использованная или неоднозначная цель блокируется. Чужие вкладки,
-включая split/hidden, не закрываются и не пропускаются при учёте.
+одна tiled-сессия без свёрнутых или floating-панелей и без tmux в целевой вкладке.
+Скрытые floating panes тоже учитываются. Перемещённая, повторно использованная
+или неоднозначная цель и неполный inventory блокируются. Чужие вкладки,
+включая split/minimized/floating, не закрываются и не пропускаются при учёте;
+активный float в другой корректной вкладке не блокирует допустимую цель.
 Профили/настройки/omp/Bun/history не читаются, SDK не устанавливается автоматически.
 
 `closed`/0 — только native `OK` и новый полный снимок без целевых tab **и** terminal
-ID, включая minimized/buried. `blocked`/2 — запрос не отправлен либо native
+ID, включая minimized/buried и видимые/скрытые floating panes. `blocked`/2 — запрос не отправлен либо native
 `NOT_FOUND`/`USER_DECLINED`; это не успех. `unknown`/3 — timeout, неполный ответ,
 неисправный worker protocol или сохранившиеся/перемещённые IDs после `OK`.
 Plain и JSON сохраняют переданные IDs; raw ошибки SDK не публикуются.

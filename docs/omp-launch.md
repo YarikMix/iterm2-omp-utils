@@ -176,16 +176,20 @@ One bounded `launch_api.py --close` worker owns connection, native
 `iterm2.rpc.async_list_sessions` before/after and at most one
 `iterm2.rpc.async_close(connection, tabs=[tab_id], force=False)`. No session,
 window or process close is used. Raw `HasField` envelopes, split-tree `child`
-oneofs, window/tab IDs, active visible sessions and all `unique_identifier`
-summaries are validated. Duplicate or malformed identities/trees block before
-close. The target must match its exact window, one visible terminal ID and zero
-minimized sessions, and must not be a tmux target. Other valid split/minimized/
-buried sessions are fully accounted for without being closed. The conservative
-resume inventory parser and launch creation protocol are unchanged.
+oneofs, window/tab IDs, active tiled or floating sessions and all `unique_identifier`
+summaries are validated. Duplicate or malformed identities/trees and missing or
+unreadable floating-pane coverage block before close. The target must match its
+exact window, one tiled terminal ID and zero minimized or floating sessions, and
+must not be a tmux target. Visible and hidden floating panes count equally.
+Other valid split/minimized/floating/buried sessions are fully accounted for
+without being closed; an active float in another valid tab does not block an
+eligible target. The conservative resume inventory parser and launch creation
+protocol are unchanged.
 
 Native `OK` (0) alone is insufficient. `closed` / exit 0 requires a fresh complete
 snapshot with both target tab ID and terminal ID absent everywhere, including
-minimized/buried summaries. `blocked` / exit 2 means definitely no request sent
+minimized/buried summaries and visible or hidden floating panes. A surviving float
+or incomplete floating coverage after `OK` yields `unknown`. `blocked` / exit 2 means definitely no request sent
 or explicit `NOT_FOUND` (1) / `USER_DECLINED` (2). Missing/empty/extra/unknown
 native statuses, incomplete post-inventory or retained/moved/buried IDs after
 `OK` yield `unknown` / exit 3. Worker timeout or failed/malformed protocol always

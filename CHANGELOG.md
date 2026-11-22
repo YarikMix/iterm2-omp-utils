@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+Exact tab close now accounts for floating sessions, including hidden floats, before
+closing and when checking that the requested session is gone. The opt-in bundled
+zsh integration is refreshed to upstream iTerm2 v3.7.9 and marks both `RPROMPT` and
+`RPS2`, restoring their raw values before command execution.
+
 Authenticated MCP payloads with the exact pre-handoff inventory remain upgradeable
 and retainable on opt-out; new builds still require every current dependency.
 Launcher removal rejects changed source topology before inverse writes. The native
